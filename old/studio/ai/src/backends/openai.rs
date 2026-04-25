@@ -16,11 +16,12 @@ struct OpenAiStreamChunk {
     created: Option<u64>,
     #[allow(dead_code)]
     model: Option<String>,
-    choices: Vec<OpenAiStreamChoice>,
-    usage: Option<OpenAiUsage>,
-    // Present in modern OpenAI / Moonshot / Kimi chunks; ignored.
     #[allow(dead_code)]
     system_fingerprint: Option<String>,
+    choices: Vec<OpenAiStreamChoice>,
+    usage: Option<OpenAiUsage>,
+    #[allow(dead_code)]
+    timings: Option<JsonValue>,
 }
 
 #[derive(DeJson, Debug)]
@@ -29,10 +30,6 @@ struct OpenAiStreamChoice {
     index: Option<u32>,
     delta: Option<OpenAiDelta>,
     finish_reason: Option<String>,
-    // Some providers (Kimi) put usage inside the final choice rather than
-    // at the chunk root. Accept either location.
-    #[allow(dead_code)]
-    usage: Option<OpenAiUsage>,
 }
 
 #[derive(DeJson, Debug)]
@@ -40,11 +37,9 @@ struct OpenAiDelta {
     #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
-    tool_calls: Option<Vec<OpenAiToolCallDelta>>,
-    // Kimi K2.5 / DeepSeek R1 style "thinking" stream. We don't surface it
-    // to the UI, but we must accept the field so the chunk parses.
     #[allow(dead_code)]
     reasoning_content: Option<String>,
+    tool_calls: Option<Vec<OpenAiToolCallDelta>>,
 }
 
 #[derive(DeJson, Debug)]
@@ -69,33 +64,6 @@ struct OpenAiUsage {
     completion_tokens: Option<u32>,
     #[allow(dead_code)]
     total_tokens: Option<u32>,
-    // Extensions seen on Kimi / Moonshot / newer OpenAI responses.
-    #[allow(dead_code)]
-    cached_tokens: Option<u32>,
-    #[allow(dead_code)]
-    prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
-    #[allow(dead_code)]
-    completion_tokens_details: Option<OpenAiCompletionTokensDetails>,
-}
-
-#[derive(DeJson, Debug, Clone)]
-struct OpenAiPromptTokensDetails {
-    #[allow(dead_code)]
-    cached_tokens: Option<u32>,
-    #[allow(dead_code)]
-    audio_tokens: Option<u32>,
-}
-
-#[derive(DeJson, Debug, Clone)]
-struct OpenAiCompletionTokensDetails {
-    #[allow(dead_code)]
-    reasoning_tokens: Option<u32>,
-    #[allow(dead_code)]
-    audio_tokens: Option<u32>,
-    #[allow(dead_code)]
-    accepted_prediction_tokens: Option<u32>,
-    #[allow(dead_code)]
-    rejected_prediction_tokens: Option<u32>,
 }
 
 // === In-flight Request Tracking ===
@@ -109,11 +77,14 @@ struct ToolCallAccumulator {
 struct InFlightRequest {
     request_id: RequestId,
     accumulated_text: String,
+    reasoning_text: String,
     tool_calls: Vec<ToolCallAccumulator>,
     usage: Option<OpenAiUsage>,
     finish_reason: Option<String>,
-    /// Raw SSE bytes that haven't formed a complete `\n\n`-terminated event yet.
-    /// HTTP recv() boundaries don't align with SSE event boundaries, so we buffer.
+    /// SSE event-stream buffer. TCP/HTTP chunks arrive at arbitrary byte
+    /// boundaries, so a single `data: {...}\n\n` event may span multiple
+    /// `process_stream_data` calls. Accumulate here, process only complete
+    /// `\n\n`-terminated chunks, keep the trailing partial for the next call.
     sse_buffer: String,
 }
 
@@ -154,6 +125,7 @@ impl OpenAiBackend {
         request: &AiRequest,
         model: &str,
         reasoning_effort: &Option<String>,
+        thinking: &Option<String>,
     ) -> String {
         let mut json = String::new();
         json.push_str("{");
@@ -177,6 +149,26 @@ impl OpenAiBackend {
             json.push_str(&format!("\"reasoning_effort\":\"{}\",", effort));
         }
 
+        if let Some(mode) = thinking {
+            json.push_str(&format!("\"thinking\":{{\"type\":\"{}\"}},", mode));
+        }
+
+        if !request.tools.is_empty() {
+            json.push_str("\"tools\":[");
+            for (index, tool) in request.tools.iter().enumerate() {
+                if index > 0 {
+                    json.push(',');
+                }
+                json.push_str(&format!(
+                    "{{\"type\":\"function\",\"function\":{{\"name\":\"{}\",\"description\":\"{}\",\"parameters\":{}}}}}",
+                    Self::escape_json_string(&tool.name),
+                    Self::escape_json_string(&tool.description),
+                    tool.parameters
+                ));
+            }
+            json.push_str("],\"tool_choice\":\"auto\",");
+        }
+
         // Messages
         json.push_str("\"messages\":[");
         let mut first = true;
@@ -197,15 +189,26 @@ impl OpenAiBackend {
             first = false;
 
             let role = msg.role.as_str();
-            let content = msg.text();
+            let text_content = msg.text();
+            let tool_result_content = msg.content.iter().find_map(|block| {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    Some(content.as_str())
+                } else {
+                    None
+                }
+            });
+            let content = match msg.role {
+                MessageRole::Tool => tool_result_content.unwrap_or(""),
+                _ => text_content.as_str(),
+            };
 
             json.push_str("{");
             json.push_str(&format!("\"role\":\"{}\"", role));
 
-            if !content.is_empty() {
+            if !content.is_empty() || msg.role != MessageRole::Assistant {
                 json.push_str(&format!(
                     ",\"content\":\"{}\"",
-                    Self::escape_json_string(&content)
+                    Self::escape_json_string(content)
                 ));
             }
 
@@ -258,6 +261,7 @@ impl OpenAiBackend {
             model,
             base_url,
             reasoning_effort,
+            thinking,
         } = &self.config
         else {
             panic!("OpenAiBackend requires OpenAI config");
@@ -267,17 +271,28 @@ impl OpenAiBackend {
             .clone()
             .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
 
+        log!(
+            "OpenAI request: model={} base_url={} max_tokens={} thinking={:?} messages={}",
+            model,
+            url,
+            request.max_tokens,
+            thinking,
+            request.messages.len()
+        );
+
         let mut http = HttpRequest::new(url, HttpMethod::POST);
         http.set_is_streaming();
         http.set_header("Content-Type".to_string(), "application/json".to_string());
-        http.set_header("Authorization".to_string(), format!("Bearer {}", api_key));
+        if !api_key.trim().is_empty() {
+            http.set_header("Authorization".to_string(), format!("Bearer {}", api_key));
+        }
 
-        let body = Self::build_request_json(request, model, reasoning_effort);
+        let body = Self::build_request_json(request, model, reasoning_effort, thinking);
         http.set_string_body(body);
         http
     }
 
-    fn process_stream_data(&mut self, live_id: LiveId, data: &str) -> Vec<AiEvent> {
+    fn process_stream_data(&mut self, live_id: LiveId, data: &str, flush: bool) -> Vec<AiEvent> {
         let mut events = vec![];
 
         let Some(in_flight) = self.in_flight.get_mut(&live_id) else {
@@ -286,19 +301,28 @@ impl OpenAiBackend {
 
         let request_id = in_flight.request_id;
 
-        // HTTP recv boundaries don't align with SSE event boundaries. Accumulate
-        // into `sse_buffer`, consume every complete `\n\n`-terminated event, and
-        // leave the (possibly-partial) tail in the buffer for the next call.
+        // OpenAI uses "data: <json>\n\n" format with "data: [DONE]" at end.
+        // Append incoming bytes to the per-request SSE buffer, then slice off
+        // only the complete chunks (everything up to the last "\n\n") and
+        // keep the trailing partial for the next call. Without this, a JSON
+        // event split mid-string across TCP chunks fails to parse and spams
+        // the log with recoverable errors.
         in_flight.sse_buffer.push_str(data);
-        let last_boundary = in_flight.sse_buffer.rfind("\n\n");
-        let complete_end = match last_boundary {
-            Some(idx) => idx + 2,
-            None => return events, // no full event yet; wait for more bytes
+        let (complete, remainder) = match in_flight.sse_buffer.rfind("\n\n") {
+            Some(idx) => {
+                let cutoff = idx + 2;
+                (
+                    in_flight.sse_buffer[..cutoff].to_string(),
+                    in_flight.sse_buffer[cutoff..].to_string(),
+                )
+            }
+            None if flush && !in_flight.sse_buffer.trim().is_empty() => {
+                (in_flight.sse_buffer.clone(), String::new())
+            }
+            None => return events, // no complete event yet; wait for more bytes
         };
-        let complete = in_flight.sse_buffer[..complete_end].to_string();
-        in_flight.sse_buffer.drain(..complete_end);
+        in_flight.sse_buffer = remainder;
 
-        // OpenAI uses "data: <json>\n\n" format with "data: [DONE]" at end
         for chunk in complete.split("\n\n") {
             let chunk = chunk.trim();
             if chunk.is_empty() {
@@ -313,7 +337,10 @@ impl OpenAiBackend {
                 continue;
             }
 
-            match OpenAiStreamChunk::deserialize_json(json_data) {
+            // OpenAI-compatible local servers often add extra chunk fields such as
+            // `system_fingerprint`, `timings`, or `delta.reasoning_content`.
+            // Parse leniently so those extensions do not break streaming.
+            match OpenAiStreamChunk::deserialize_json_lenient(json_data) {
                 Ok(chunk) => {
                     if let Some(usage) = chunk.usage {
                         in_flight.usage = Some(usage);
@@ -322,15 +349,36 @@ impl OpenAiBackend {
                     for choice in &chunk.choices {
                         if let Some(finish) = &choice.finish_reason {
                             in_flight.finish_reason = Some(finish.clone());
+                            log!("OpenAI stream finish_reason={}", finish);
                         }
 
                         if let Some(delta) = &choice.delta {
                             // Handle text content
                             if let Some(text) = &delta.content {
+                                if !text.is_empty() {
+                                    log!(
+                                        "OpenAI stream content delta chars={}",
+                                        text.chars().count()
+                                    );
+                                }
                                 in_flight.accumulated_text.push_str(text);
                                 events.push(AiEvent::StreamDelta {
                                     request_id,
                                     delta: StreamDelta::TextDelta { text: text.clone() },
+                                });
+                            }
+
+                            if let Some(text) = &delta.reasoning_content {
+                                if !text.is_empty() {
+                                    log!(
+                                        "OpenAI stream reasoning delta chars={}",
+                                        text.chars().count()
+                                    );
+                                }
+                                in_flight.reasoning_text.push_str(text);
+                                events.push(AiEvent::StreamDelta {
+                                    request_id,
+                                    delta: StreamDelta::ThinkingDelta { text: text.clone() },
                                 });
                             }
 
@@ -404,6 +452,7 @@ impl AiBackend for OpenAiBackend {
             InFlightRequest {
                 request_id,
                 accumulated_text: String::new(),
+                reasoning_text: String::new(),
                 tool_calls: vec![],
                 usage: None,
                 finish_reason: None,
@@ -445,11 +494,19 @@ impl AiBackend for OpenAiBackend {
                 match response {
                     NetworkResponse::HttpStreamChunk { response: res, .. } => {
                         if let Some(data) = res.get_string_body() {
-                            ai_events.extend(self.process_stream_data(request_id, &data));
+                            ai_events.extend(self.process_stream_data(request_id, &data, false));
                         }
                     }
                     NetworkResponse::HttpStreamComplete { .. } => {
+                        ai_events.extend(self.process_stream_data(request_id, "", true));
                         if let Some(in_flight) = self.in_flight.remove(&request_id) {
+                            log!(
+                                "OpenAI stream complete: content_chars={} reasoning_chars={} finish_reason={:?} leftover_sse_chars={}",
+                                in_flight.accumulated_text.chars().count(),
+                                in_flight.reasoning_text.chars().count(),
+                                in_flight.finish_reason,
+                                in_flight.sse_buffer.chars().count()
+                            );
                             // Build content blocks
                             let mut content_blocks = vec![];
 
@@ -457,6 +514,12 @@ impl AiBackend for OpenAiBackend {
                                 content_blocks.push(ContentBlock::Text {
                                     text: in_flight.accumulated_text,
                                 });
+                            } else if !in_flight.reasoning_text.is_empty() {
+                                ai_events.push(AiEvent::Error {
+                                    request_id: in_flight.request_id,
+                                    error: "Model returned thinking but no final answer. Try again with MOONSHOT_THINKING=disabled or increase max_tokens.".to_string(),
+                                });
+                                continue;
                             }
 
                             for tc in in_flight.tool_calls {
@@ -524,5 +587,31 @@ impl AiBackend for OpenAiBackend {
 
     fn config(&self) -> &BackendConfig {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_json_includes_optional_thinking_mode() {
+        let request = AiRequest {
+            messages: vec![Message::user("ping")],
+            max_tokens: 32,
+            ..Default::default()
+        };
+
+        let backend = OpenAiBackend::new(BackendConfig::OpenAI {
+            api_key: "test-key".to_string(),
+            model: "kimi-k2.6".to_string(),
+            base_url: Some("https://api.moonshot.ai/v1/chat/completions".to_string()),
+            reasoning_effort: None,
+            thinking: Some("disabled".to_string()),
+        });
+
+        let body = String::from_utf8(backend.build_http_request(&request).body.unwrap()).unwrap();
+
+        assert!(body.contains("\"thinking\":{\"type\":\"disabled\"}"));
     }
 }
