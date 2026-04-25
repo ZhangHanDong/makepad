@@ -1,0 +1,89 @@
+let state = { t: 0 }
+
+fn bar(n) {
+    let s = ""
+    let i = 0
+    while i < n { s = s + "|"  i = i + 1 }
+    s
+}
+
+fn tick() {
+    state.t = state.t + 1
+    if state.t > 30 { state.t = 0 }
+
+    let t = state.t
+    if t > 20 { t = 20 }
+
+    let trad = t * 2
+    let shared = t
+
+    ui.trad_bar.set_text(bar(trad))
+    ui.shared_bar.set_text(bar(shared))
+    ui.trad_label.set_text("" + (trad * 32) + " MB")
+    ui.shared_label.set_text("" + (shared * 32) + " MB")
+
+    if state.t >= 22 {
+        ui.saving.set_text("~2x KV cache saved")
+    }
+    if state.t == 0 {
+        ui.saving.set_text("Comparing KV cache growth...")
+    }
+
+    let phase = state.t % 12
+    if phase < 3 {
+        ui.rope_step.set_text("Step 1: q attends to k(v) with RoPE rotation")
+        ui.rope_vis.set_text("q  -->  [k(v) rotated]")
+    } else if phase < 6 {
+        ui.rope_step.set_text("Step 2: attention output carries rotation")
+        ui.rope_vis.set_text("output  -->  [rotated]")
+    } else if phase < 9 {
+        ui.rope_step.set_text("Step 3: inverse RoPE cancels rotation")
+        ui.rope_vis.set_text("[rotated]  -->  inverse RoPE  -->  [clean]")
+    } else {
+        ui.rope_step.set_text("Result: output preserves relative position")
+        ui.rope_vis.set_text("[clean output]  -->  next layer")
+    }
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 32. right: 32. top: 24. bottom: 24.} spacing: 14
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 2 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "Shared K/V + Inverse RoPE" draw_text.color: #xeeeeff draw_text.text_style.font_size: 22}
+    }
+
+    // KV comparison
+    View{width: Fill height: Fit flow: Right spacing: 12
+        RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 16. right: 16. top: 14. bottom: 14.} flow: Down spacing: 6
+            View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+                Label{text: "Traditional" draw_text.color: #xff8888 draw_text.text_style.font_size: 12}
+                Filler{}
+                trad_label := Label{text: "0 MB" draw_text.color: #xaaaadd draw_text.text_style.font_size: 11}
+            }
+            Label{text: "q + k + v  per token" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            trad_bar := Label{text: "" draw_text.color: #xff8888 draw_text.text_style.font_size: 24}
+        }
+        RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 16. right: 16. top: 14. bottom: 14.} flow: Down spacing: 6
+            View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+                Label{text: "DeepSeek V4 Shared K/V" draw_text.color: #x66ffaa draw_text.text_style.font_size: 12}
+                Filler{}
+                shared_label := Label{text: "0 MB" draw_text.color: #xaaaadd draw_text.text_style.font_size: 11}
+            }
+            Label{text: "q + k(v)  per token" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            shared_bar := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 24}
+        }
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x1a2a1a draw_bg.radius: 8. padding: Inset{left: 20. right: 20. top: 12. bottom: 12.}
+        saving := Label{text: "Comparing KV cache growth..." draw_text.color: #x66ffaa draw_text.text_style.font_size: 13}
+    }
+
+    // Inverse RoPE flow
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 10
+        Label{text: "Why inverse RoPE?" draw_text.color: #xffcc66 draw_text.text_style.font_size: 13}
+        Label{text: "k(v) shares key+value, so value path also carries RoPE rotation. Inverse RoPE cancels the absolute rotation, preserving relative position." draw_text.color: #888899 draw_text.text_style.font_size: 10}
+        rope_step := Label{text: "Step 1: q attends to k(v) with RoPE rotation" draw_text.color: #xcc88ff draw_text.text_style.font_size: 13}
+        rope_vis := Label{text: "q  -->  [k(v) rotated]" draw_text.color: #xeeeeff draw_text.text_style.font_size: 20}
+    }
+}

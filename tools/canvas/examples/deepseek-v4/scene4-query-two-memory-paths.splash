@@ -1,0 +1,366 @@
+let state = { t: 0, q: 6 }
+
+fn tick() {
+    state.t = state.t + 1
+    if state.t > 40 { state.t = 0 }
+    let t = state.t
+    let pulse = t % 2
+
+    // Stage A (0..14): animate q -> k(v) sliding window  (upper)
+    // Stage B (15..22): animate q -> C visibility lines (middle)
+    // Stage C (23..30): animate Ca/Za -> C compression   (lower)
+    // Stage D (31..40): animate Cb/Zb -> C overlap       (lower)
+    let stage = 0
+    if t < 15 { stage = 0 }
+    else if t < 23 { stage = 1 }
+    else if t < 31 { stage = 2 }
+    else { stage = 3 }
+
+    // q rotates across q3, q7, q11 within Stage A only
+    if stage == 0 {
+        if t < 5 { state.q = 3 }
+        else if t < 10 { state.q = 7 }
+        else { state.q = 11 }
+    }
+    let q = state.q
+
+    let stage_label = ""
+    if stage == 0 { stage_label = "Stage A: q -> k(v) sliding window" }
+    else if stage == 1 { stage_label = "Stage B: q -> C compressed (causal top-k)" }
+    else if stage == 2 { stage_label = "Stage C: Ca/Za -> C current block compression" }
+    else { stage_label = "Stage D: Cb/Zb -> C overlap from previous block" }
+    ui.q_marker.set_text("q" + q + "   |   " + stage_label)
+
+    // Stage A+ bars: sliding window kv[0..q]. Animate (pulse) only in Stage 0.
+    let bar_a = if stage == 0 && pulse == 1 { "||" } else { "|" }
+    ui.lk0.set_text(if q >= 0 { bar_a } else { "" })
+    ui.lk1.set_text(if q >= 1 { bar_a } else { "" })
+    ui.lk2.set_text(if q >= 2 { bar_a } else { "" })
+    ui.lk3.set_text(if q >= 3 { bar_a } else { "" })
+    ui.lk4.set_text(if q >= 4 { bar_a } else { "" })
+    ui.lk5.set_text(if q >= 5 { bar_a } else { "" })
+    ui.lk6.set_text(if q >= 6 { bar_a } else { "" })
+    ui.lk7.set_text(if q >= 7 { bar_a } else { "" })
+    ui.lk8.set_text(if q >= 8 { bar_a } else { "" })
+    ui.lk9.set_text(if q >= 9 { bar_a } else { "" })
+    ui.lk10.set_text(if q >= 10 { bar_a } else { "" })
+    ui.lk11.set_text(if q >= 11 { bar_a } else { "" })
+    ui.lk12.set_text(if q >= 12 { bar_a } else { "" })
+
+    // q -> C compressed (yellow): q reaches Cj if q >= end(Cj)
+    // C0 covers 0..3 end=3, visible to q when q >= 3
+    // C1 covers 0..7 end=7, visible when q >= 7
+    // C2 covers 4..11 end=11, visible when q >= 11
+    // Cursor under current q (bright blue arrow)
+    let cur = if pulse == 0 { "^^" } else { "^" }
+    ui.qc0.set_text(if q == 0 { cur } else { "" })
+    ui.qc1.set_text(if q == 1 { cur } else { "" })
+    ui.qc2.set_text(if q == 2 { cur } else { "" })
+    ui.qc3.set_text(if q == 3 { cur } else { "" })
+    ui.qc4.set_text(if q == 4 { cur } else { "" })
+    ui.qc5.set_text(if q == 5 { cur } else { "" })
+    ui.qc6.set_text(if q == 6 { cur } else { "" })
+    ui.qc7.set_text(if q == 7 { cur } else { "" })
+    ui.qc8.set_text(if q == 8 { cur } else { "" })
+    ui.qc9.set_text(if q == 9 { cur } else { "" })
+    ui.qc10.set_text(if q == 10 { cur } else { "" })
+    ui.qc11.set_text(if q == 11 { cur } else { "" })
+    ui.qc12.set_text(if q == 12 { cur } else { "" })
+
+    // q -> C visibility (per vllm blog): q attends C_i iff q >= 4i+7
+    // C0 end = 7, C1 end = 11, C2 end = 15
+    let show_qc = stage >= 1
+    let ok_sym = if stage == 1 && pulse == 1 { "V" } else { "v" }
+    let bad_sym = if stage == 1 && pulse == 1 { "X" } else { "x" }
+    ui.lc0.set_text(if show_qc { if q >= 7 { ok_sym } else { bad_sym } } else { "" })
+    ui.lc0_s.set_text(if q >= 7 { "C0" } else { "--" })
+    ui.lc1.set_text(if show_qc { if q >= 11 { ok_sym } else { bad_sym } } else { "" })
+    ui.lc1_s.set_text(if q >= 11 { "C1" } else { "--" })
+    ui.lc2.set_text(if show_qc { if q >= 15 { ok_sym } else { bad_sym } } else { "" })
+    ui.lc2_s.set_text(if q >= 15 { "C2" } else { "--" })
+
+    // Stage C: Ca/Za -> C compression -- cycles C0/C1/C2 every 3 ticks
+    // Stage D: Cb/Zb -> C overlap -- cycles C1/C2 every 3 ticks
+    let ca_phase = 99  // inactive
+    if stage == 2 {
+        let sub = (t - 23) / 3
+        if sub == 0 { ca_phase = 0 }
+        else if sub == 1 { ca_phase = 1 }
+        else { ca_phase = 2 }
+    }
+    let cb_phase = 99
+    if stage == 3 {
+        let sub = (t - 31) / 3
+        if sub == 0 { cb_phase = 1 }
+        else if sub == 1 { cb_phase = 2 }
+        else { cb_phase = 2 }
+    }
+
+    // Ca lit when stage 2 active (current compression window)
+    let dim_a = if stage >= 2 { "." } else { "" }
+    let hot_a = if pulse == 1 { "^^" } else { "^" }
+    ui.la0.set_text(if ca_phase == 0 { hot_a } else { dim_a })
+    ui.la1.set_text(if ca_phase == 0 { hot_a } else { dim_a })
+    ui.la2.set_text(if ca_phase == 0 { hot_a } else { dim_a })
+    ui.la3.set_text(if ca_phase == 0 { hot_a } else { dim_a })
+    ui.la4.set_text(if ca_phase == 1 { hot_a } else { dim_a })
+    ui.la5.set_text(if ca_phase == 1 { hot_a } else { dim_a })
+    ui.la6.set_text(if ca_phase == 1 { hot_a } else { dim_a })
+    ui.la7.set_text(if ca_phase == 1 { hot_a } else { dim_a })
+    ui.la8.set_text(if ca_phase == 2 { hot_a } else { dim_a })
+    ui.la9.set_text(if ca_phase == 2 { hot_a } else { dim_a })
+    ui.la10.set_text(if ca_phase == 2 { hot_a } else { dim_a })
+    ui.la11.set_text(if ca_phase == 2 { hot_a } else { dim_a })
+    ui.la12.set_text("")
+
+    // Cb lit when stage 3 active (previous block overlap)
+    let dim_b = if stage >= 3 { "." } else { "" }
+    let hot_b = if pulse == 1 { "^^" } else { "^" }
+    ui.lb0.set_text(if cb_phase == 1 { hot_b } else { dim_b })
+    ui.lb1.set_text(if cb_phase == 1 { hot_b } else { dim_b })
+    ui.lb2.set_text(if cb_phase == 1 { hot_b } else { dim_b })
+    ui.lb3.set_text(if cb_phase == 1 { hot_b } else { dim_b })
+    ui.lb4.set_text(if cb_phase == 2 { hot_b } else { dim_b })
+    ui.lb5.set_text(if cb_phase == 2 { hot_b } else { dim_b })
+    ui.lb6.set_text(if cb_phase == 2 { hot_b } else { dim_b })
+    ui.lb7.set_text(if cb_phase == 2 { hot_b } else { dim_b })
+    ui.lb8.set_text("")
+    ui.lb9.set_text("")
+    ui.lb10.set_text("")
+    ui.lb11.set_text("")
+    ui.lb12.set_text("")
+
+    if q == 7 {
+        ui.narr.set_text("q7: sliding window kv0..kv7. Per vllm blog, q attends C_i iff q >= 4i+7. So q7 sees C0 (need q>=7); C1 needs q>=11, C2 needs q>=15 -> blocked.")
+    } else if q == 3 {
+        ui.narr.set_text("q3: sliding window kv0..kv3. Causal rule q >= 4i+7 -> all three compressed entries still block (need q>=7 for C0).")
+    } else {
+        ui.narr.set_text("q11: sliding window kv0..kv11. C0 (needs q>=7) and C1 (needs q>=11) now visible; C2 (needs q>=15) still blocked in this 13-token demo.")
+    }
+}
+
+let Cell = RoundedView {
+    width: 52
+    height: 32
+    align: Align{x: 0.5 y: 0.5}
+    draw_bg.radius: 6.
+}
+
+// Link column: thin cell with a single character indicator
+let LinkCol = View {
+    width: 52
+    height: 18
+    align: Align{x: 0.5 y: 0.5}
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 24. right: 24. top: 18. bottom: 18.} spacing: 8
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 4 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "C4A Attention Pattern with Connections" draw_text.color: #xeeeeff draw_text.text_style.font_size: 20}
+        Filler{}
+        q_marker := Label{text: "current query:  q6" draw_text.color: #x66aaff draw_text.text_style.font_size: 14}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x0d0d18 draw_bg.radius: 8. padding: Inset{left: 14. right: 14. top: 10. bottom: 10.} flow: Down spacing: 2
+
+        // --- k(v) row ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "k(v)" draw_text.color: #xffaa66 draw_text.text_style.font_size: 12}
+            Cell{draw_bg.color: #xc07040 Label{text: "0" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "1" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "2" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "3" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "4" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "5" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "6" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "7" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "8" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "9" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "10" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "11" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #xc07040 Label{text: "12" draw_text.color: #xfff}}
+        }
+
+        // --- Link k(v) <--> q (sliding window) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "sliding window" draw_text.color: #x664422 draw_text.text_style.font_size: 9}
+            LinkCol{lk0 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk1 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk2 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk3 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk4 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk5 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk6 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk7 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk8 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk9 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk10 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk11 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+            LinkCol{lk12 := Label{text: "" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}}
+        }
+
+        // --- q row ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "q" draw_text.color: #x66aaff draw_text.text_style.font_size: 12}
+            Cell{draw_bg.color: #x4080c0 Label{text: "0" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "1" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "2" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "3" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "4" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "5" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "6" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "7" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "8" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "9" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "10" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "11" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x4080c0 Label{text: "12" draw_text.color: #xfff}}
+        }
+
+        // --- Query cursor (which q is active) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "" draw_text.color: #x888899 draw_text.text_style.font_size: 9}
+            LinkCol{qc0 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc1 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc2 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc3 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc4 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc5 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc6 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc7 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc8 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc9 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc10 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc11 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+            LinkCol{qc12 := Label{text: "" draw_text.color: #x66ddff draw_text.text_style.font_size: 18}}
+        }
+
+        // --- Link q <--> C^compress (top-k, causal) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "q -> C" draw_text.color: #x665522 draw_text.text_style.font_size: 9}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            LinkCol{lc0 := Label{text: "" draw_text.color: #xffcc44 draw_text.text_style.font_size: 16}}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            LinkCol{lc1 := Label{text: "" draw_text.color: #xffcc44 draw_text.text_style.font_size: 16}}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            View{width: 52 height: 18}
+            LinkCol{lc2 := Label{text: "" draw_text.color: #xffcc44 draw_text.text_style.font_size: 16}}
+        }
+
+        // --- C^compress row (with top-512 + RoPE annotations) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.} spacing: 8
+            Label{width: 90 text: "C^compress" draw_text.color: #xffcc44 draw_text.text_style.font_size: 12}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80 flow: Down align: Align{x: 0.5 y: 0.0} spacing: 3
+                Cell{draw_bg.color: #xcc8822 lc0_s := Label{text: "C0" draw_text.color: #xfff}}
+                Label{text: "top-512" draw_text.color: #x887755 draw_text.text_style.font_size: 8}
+                Label{text: "RoPE: 3" draw_text.color: #xaaaabb draw_text.text_style.font_size: 8}
+            }
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80 flow: Down align: Align{x: 0.5 y: 0.0} spacing: 3
+                Cell{draw_bg.color: #xcc8822 lc1_s := Label{text: "C1" draw_text.color: #xfff}}
+                Label{text: "top-512" draw_text.color: #x887755 draw_text.text_style.font_size: 8}
+                Label{text: "RoPE: 7" draw_text.color: #xaaaabb draw_text.text_style.font_size: 8}
+            }
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80}
+            View{width: 52 height: 80 flow: Down align: Align{x: 0.5 y: 0.0} spacing: 3
+                Cell{draw_bg.color: #xcc8822 lc2_s := Label{text: "C2" draw_text.color: #xfff}}
+                Label{text: "top-512" draw_text.color: #x887755 draw_text.text_style.font_size: 8}
+                Label{text: "RoPE: 11" draw_text.color: #xaaaabb draw_text.text_style.font_size: 8}
+            }
+        }
+
+        // --- Link Ca/Za <--> C^compress (stride-4 current block) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "Ca -> C" draw_text.color: #x553377 draw_text.text_style.font_size: 9}
+            LinkCol{la0 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la1 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la2 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la3 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la4 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la5 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la6 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la7 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la8 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la9 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la10 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la11 := Label{text: "^" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+            LinkCol{la12 := Label{text: "" draw_text.color: #xcc88ff draw_text.text_style.font_size: 16}}
+        }
+
+        // --- Ca & Za row ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "Ca & Za" draw_text.color: #xcc88ff draw_text.text_style.font_size: 12}
+            Cell{draw_bg.color: #x7844aa Label{text: "0" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "1" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "2" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "3" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "4" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "5" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "6" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "7" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "8" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "9" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "10" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "11" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x7844aa Label{text: "12" draw_text.color: #xfff}}
+        }
+
+        // --- Link Cb/Zb <--> C^compress (overlap previous block) ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "Cb -> C" draw_text.color: #x225544 draw_text.text_style.font_size: 9}
+            LinkCol{lb0 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb1 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb2 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb3 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb4 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb5 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb6 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb7 := Label{text: "^" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb8 := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb9 := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb10 := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb11 := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+            LinkCol{lb12 := Label{text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 16}}
+        }
+
+        // --- Cb & Zb row ---
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 8
+            Label{width: 90 text: "Cb & Zb" draw_text.color: #x66ffaa draw_text.text_style.font_size: 12}
+            Cell{draw_bg.color: #x44aa77 Label{text: "0" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "1" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "2" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "3" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "4" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "5" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "6" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "7" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "8" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "9" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "10" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "11" draw_text.color: #xfff}}
+            Cell{draw_bg.color: #x44aa77 Label{text: "12" draw_text.color: #xfff}}
+        }
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x1a1a28 draw_bg.radius: 8. padding: Inset{left: 20. right: 20. top: 12. bottom: 12.} flow: Down spacing: 4
+        Label{text: "Connection rules (DeepSeek V4 C4A -- per vllm blog)" draw_text.color: #x66ffaa draw_text.text_style.font_size: 11}
+        Label{text: "sliding window:  q attends last 128 raw k(v) (demo: 0..q)" draw_text.color: #xffaa66 draw_text.text_style.font_size: 11}
+        Label{text: "C4A compressed:  C_i = weighted_sum(tokens[4i, 4i+8)), RoPE pos = 4i+3, top-512 selection" draw_text.color: #xffcc44 draw_text.text_style.font_size: 11}
+        Label{text: "causal:  q attends C_i only if q >= 4i+7   ->   C0 needs q>=7, C1 needs q>=11, C2 needs q>=15" draw_text.color: #xcc88ff draw_text.text_style.font_size: 11}
+        narr := Label{width: Fill text: "" draw_text.color: #xeeeeff draw_text.text_style.font_size: 12}
+    }
+}

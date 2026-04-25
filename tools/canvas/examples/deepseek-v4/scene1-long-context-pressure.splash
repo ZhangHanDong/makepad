@@ -1,0 +1,71 @@
+let state = { t: 0 }
+
+fn bar(n) {
+    let s = ""
+    let i = 0
+    while i < n { s = s + "|"  i = i + 1 }
+    s
+}
+
+fn tick() {
+    state.t = state.t + 1
+    if state.t > 50 { state.t = 0 }
+
+    let t = state.t
+    if t > 40 { t = 40 }
+
+    ui.tok_count.set_text("" + (t * 25) + "K tokens")
+
+    let kv_n = t
+    let comp_n = t * t / 40
+    if comp_n > 40 { comp_n = 40 }
+
+    ui.kv_bar.set_text(bar(kv_n))
+    ui.comp_bar.set_text(bar(comp_n))
+
+    ui.kv_label.set_text("" + (kv_n * 32) + " MB")
+    ui.comp_label.set_text("" + (comp_n * comp_n * 10) + " GFLOPs")
+
+    if t >= 30 {
+        ui.warning.set_text("Long context needs compressed memory + sparse lookup")
+    }
+    if state.t == 0 {
+        ui.warning.set_text("Watch KV cache grow linearly and compute grow quadratically...")
+    }
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 32. right: 32. top: 24. bottom: 24.} spacing: 14
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 1 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "Long Context Pressure" draw_text.color: #xeeeeff draw_text.text_style.font_size: 22}
+        Filler{}
+        tok_count := Label{text: "0K tokens" draw_text.color: #xffaa66 draw_text.text_style.font_size: 14}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 4
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+            Label{text: "KV Cache Memory" draw_text.color: #x66aaff draw_text.text_style.font_size: 12}
+            Filler{}
+            kv_label := Label{text: "0 MB" draw_text.color: #xaaaadd draw_text.text_style.font_size: 11}
+        }
+        kv_bar := Label{text: "" draw_text.color: #x66aaff draw_text.text_style.font_size: 28}
+        Label{text: "linear growth — every token adds fixed KV" draw_text.color: #x666677 draw_text.text_style.font_size: 9}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 4
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+            Label{text: "Attention Compute" draw_text.color: #xff66aa draw_text.text_style.font_size: 12}
+            Filler{}
+            comp_label := Label{text: "0 GFLOPs" draw_text.color: #xddaadd draw_text.text_style.font_size: 11}
+        }
+        comp_bar := Label{text: "" draw_text.color: #xff66aa draw_text.text_style.font_size: 28}
+        Label{text: "quadratic growth — O(N^2) matmul" draw_text.color: #x666677 draw_text.text_style.font_size: 9}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x1a1a28 draw_bg.radius: 8. padding: Inset{left: 20. right: 20. top: 14. bottom: 14.} flow: Down spacing: 4
+        Label{text: "Observation" draw_text.color: #x66ffaa draw_text.text_style.font_size: 11}
+        warning := Label{text: "Watch KV cache grow linearly and compute grow quadratically..." draw_text.color: #xeeeeff draw_text.text_style.font_size: 13}
+    }
+}

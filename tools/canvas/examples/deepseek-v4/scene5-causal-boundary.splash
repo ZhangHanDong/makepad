@@ -1,0 +1,122 @@
+let state = { q: 3 }
+
+fn tick() {
+    state.q = state.q + 1
+    if state.q > 17 { state.q = 3 }
+    let q = state.q
+
+    ui.q_label.set_text("q = " + q)
+
+    // C0 (end = 7)
+    let c0_ok_txt = ""
+    let c0_bad_txt = "X  LOCKED"
+    let c0_state_txt = "BLOCKED"
+    let c0_reason_txt = "q=" + q + "  <  7     C0 covers future"
+    if q >= 7 {
+        c0_ok_txt = ">>> VISIBLE <<<"
+        c0_bad_txt = ""
+        c0_state_txt = "VISIBLE"
+        c0_reason_txt = "q=" + q + "  >=  7    q attends C0"
+    }
+    ui.c0_ok.set_text(c0_ok_txt)
+    ui.c0_bad.set_text(c0_bad_txt)
+    ui.c0_state.set_text(c0_state_txt)
+    ui.c0_reason.set_text(c0_reason_txt)
+
+    // C1 (end = 11)
+    let c1_ok_txt = ""
+    let c1_bad_txt = "X  LOCKED"
+    let c1_state_txt = "BLOCKED"
+    let c1_reason_txt = "q=" + q + "  <  11    C1 covers future"
+    if q >= 11 {
+        c1_ok_txt = ">>> VISIBLE <<<"
+        c1_bad_txt = ""
+        c1_state_txt = "VISIBLE"
+        c1_reason_txt = "q=" + q + "  >=  11   q attends C1"
+    }
+    ui.c1_ok.set_text(c1_ok_txt)
+    ui.c1_bad.set_text(c1_bad_txt)
+    ui.c1_state.set_text(c1_state_txt)
+    ui.c1_reason.set_text(c1_reason_txt)
+
+    // C2 (end = 15)
+    let c2_ok_txt = ""
+    let c2_bad_txt = "X  LOCKED"
+    let c2_state_txt = "BLOCKED"
+    let c2_reason_txt = "q=" + q + "  <  15    C2 covers future"
+    if q >= 15 {
+        c2_ok_txt = ">>> VISIBLE <<<"
+        c2_bad_txt = ""
+        c2_state_txt = "VISIBLE"
+        c2_reason_txt = "q=" + q + "  >=  15   q attends C2"
+    }
+    ui.c2_ok.set_text(c2_ok_txt)
+    ui.c2_bad.set_text(c2_bad_txt)
+    ui.c2_state.set_text(c2_state_txt)
+    ui.c2_reason.set_text(c2_reason_txt)
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 32. right: 32. top: 22. bottom: 22.} spacing: 14
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 5 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "Causal Boundary" draw_text.color: #xeeeeff draw_text.text_style.font_size: 22}
+        Filler{}
+        q_label := Label{text: "q = 3" draw_text.color: #x66aaff draw_text.text_style.font_size: 20}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 6
+        Label{text: "Causal rule (vllm DeepSeek V4 blog)" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        Label{width: Fill text: "q attends C_i   if and only if   q  >=  4i + 7" draw_text.color: #x66ffaa draw_text.text_style.font_size: 20}
+        Label{text: "    C0 (i=0) end = 7      C1 (i=1) end = 11      C2 (i=2) end = 15" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+    }
+
+    View{width: Fill height: Fit flow: Right spacing: 10
+
+        RoundedView{width: Fill height: Fit draw_bg.color: #x201a10 draw_bg.radius: 8. padding: Inset{left: 16. right: 16. top: 14. bottom: 14.} flow: Down spacing: 6
+            View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+                Label{text: "C0" draw_text.color: #xffcc44 draw_text.text_style.font_size: 20}
+                View{width: 10}
+                Label{text: "end = 7" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+                Filler{}
+                c0_state := Label{text: "BLOCKED" draw_text.color: #xcccccc draw_text.text_style.font_size: 12}
+            }
+            c0_ok := Label{width: Fill text: "" draw_text.color: #x00ff66 draw_text.text_style.font_size: 24}
+            c0_bad := Label{width: Fill text: "X  LOCKED" draw_text.color: #xff5566 draw_text.text_style.font_size: 24}
+            c0_reason := Label{width: Fill text: "q=3  <  7     C0 covers future" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11}
+        }
+
+        RoundedView{width: Fill height: Fit draw_bg.color: #x201a10 draw_bg.radius: 8. padding: Inset{left: 16. right: 16. top: 14. bottom: 14.} flow: Down spacing: 6
+            View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+                Label{text: "C1" draw_text.color: #xffcc44 draw_text.text_style.font_size: 20}
+                View{width: 10}
+                Label{text: "end = 11" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+                Filler{}
+                c1_state := Label{text: "BLOCKED" draw_text.color: #xcccccc draw_text.text_style.font_size: 12}
+            }
+            c1_ok := Label{width: Fill text: "" draw_text.color: #x00ff66 draw_text.text_style.font_size: 24}
+            c1_bad := Label{width: Fill text: "X  LOCKED" draw_text.color: #xff5566 draw_text.text_style.font_size: 24}
+            c1_reason := Label{width: Fill text: "q=3  <  11    C1 covers future" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11}
+        }
+
+        RoundedView{width: Fill height: Fit draw_bg.color: #x201a10 draw_bg.radius: 8. padding: Inset{left: 16. right: 16. top: 14. bottom: 14.} flow: Down spacing: 6
+            View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+                Label{text: "C2" draw_text.color: #xffcc44 draw_text.text_style.font_size: 20}
+                View{width: 10}
+                Label{text: "end = 15" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+                Filler{}
+                c2_state := Label{text: "BLOCKED" draw_text.color: #xcccccc draw_text.text_style.font_size: 12}
+            }
+            c2_ok := Label{width: Fill text: "" draw_text.color: #x00ff66 draw_text.text_style.font_size: 24}
+            c2_bad := Label{width: Fill text: "X  LOCKED" draw_text.color: #xff5566 draw_text.text_style.font_size: 24}
+            c2_reason := Label{width: Fill text: "q=3  <  15    C2 covers future" draw_text.color: #xaaaaaa draw_text.text_style.font_size: 11}
+        }
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 6
+        Label{text: "Boundary timeline" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        Label{width: Fill text: "q:    0  1  2  3  4  5  6 | 7  8  9  10 | 11 12 13 14 | 15 ..." draw_text.color: #x99bbff draw_text.text_style.font_size: 13}
+        Label{width: Fill text: "       |  all blocked  | C0 open  |  + C1  |  + C2  ..." draw_text.color: #xffcc44 draw_text.text_style.font_size: 12}
+    }
+}

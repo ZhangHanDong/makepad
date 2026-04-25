@@ -1,0 +1,134 @@
+let state = { t: 0 }
+
+fn tick() {
+    state.t = state.t + 1
+    if state.t > 40 { state.t = 0 }
+    let t = state.t
+    let pulse = t % 2
+
+    // Stage timing: 4 stages of 10s each
+    // 0..9   : show raw tokens (1M)
+    // 10..19 : c4a compression (1M -> 250K)
+    // 20..29 : c128a compression (1M -> 8K)
+    // 30..40 : top-k selection contrast
+
+    let c4a_tokens = "(not yet)"
+    let c4a_topk = ""
+    let c128a_tokens = "(not yet)"
+    let c128a_topk = ""
+    let narr = ""
+
+    if t < 10 {
+        narr = "Same input: 1M raw tokens. Two different compression strategies will read it."
+    } else if t < 20 {
+        // c4a appearing
+        c4a_tokens = "~250K entries"
+        narr = "c4a: stride=4, window=8 -> 1M / 4 ~= 250K compressed entries (fine grained)"
+    } else if t < 30 {
+        // c128a appearing
+        c4a_tokens = "~250K entries"
+        c128a_tokens = "~8K entries"
+        narr = "c128a: stride=128, window=128 -> 1M / 128 ~= 8K compressed entries (coarse grained)"
+    } else {
+        // top-k contrast
+        c4a_tokens = "~250K entries"
+        c4a_topk = "top-512 selected (sparse)"
+        c128a_tokens = "~8K entries"
+        c128a_topk = "top-8192 selected (near-full)"
+        narr = "Trade-off: c4a = many fine entries + small top-k; c128a = few coarse entries + large top-k."
+    }
+
+    ui.c4a_entries.set_text(c4a_tokens)
+    ui.c4a_topk.set_text(c4a_topk)
+    ui.c128a_entries.set_text(c128a_tokens)
+    ui.c128a_topk.set_text(c128a_topk)
+    ui.narr.set_text(narr)
+
+    // Animated pulse dot showing active stage
+    let p1 = ""
+    let p2 = ""
+    let p3 = ""
+    if t < 10 { p1 = ">" }
+    else if t < 20 { p2 = ">" }
+    else if t < 30 { p3 = ">" }
+    else { p1 = ">"  p2 = ">"  p3 = ">" }
+
+    ui.stage1.set_text(p1 + " 1M raw tokens")
+    ui.stage2.set_text(p2 + " compression")
+    ui.stage3.set_text(p3 + " top-k attention")
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 32. right: 32. top: 22. bottom: 22.} spacing: 14
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 6 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "C4A vs C128A  (Two Compression Granularities)" draw_text.color: #xeeeeff draw_text.text_style.font_size: 22}
+    }
+
+    // Pipeline stages
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Right align: Align{y: 0.5} spacing: 12
+        stage1 := Label{text: ">  1M raw tokens" draw_text.color: #xffaa66 draw_text.text_style.font_size: 12}
+        Label{text: "-->" draw_text.color: #444466 draw_text.text_style.font_size: 12}
+        stage2 := Label{text: "   compression" draw_text.color: #xffcc44 draw_text.text_style.font_size: 12}
+        Label{text: "-->" draw_text.color: #444466 draw_text.text_style.font_size: 12}
+        stage3 := Label{text: "   top-k attention" draw_text.color: #xcc88ff draw_text.text_style.font_size: 12}
+    }
+
+    // Two comparison cards side-by-side
+    View{width: Fill height: Fit flow: Right spacing: 14
+
+        // C4A
+        RoundedView{width: Fill height: Fit draw_bg.color: #x1f1420 draw_bg.radius: 10. padding: Inset{left: 20. right: 20. top: 18. bottom: 18.} flow: Down spacing: 10
+            Label{text: "C4A" draw_text.color: #xff88cc draw_text.text_style.font_size: 28}
+            Label{text: "fine-grained compression, sparse top-k" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+
+            Label{text: "window = 8" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 12}
+            Label{text: "stride = 4" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 12}
+
+            Label{text: "Compressed entries" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            c4a_entries := Label{width: Fill text: "(not yet)" draw_text.color: #xffaa44 draw_text.text_style.font_size: 22}
+
+            Label{text: "Sparse selection" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            c4a_topk := Label{width: Fill text: "" draw_text.color: #xff66aa draw_text.text_style.font_size: 18}
+
+            Label{text: "use: catch salient distant tokens" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        }
+
+        // C128A
+        RoundedView{width: Fill height: Fit draw_bg.color: #x142020 draw_bg.radius: 10. padding: Inset{left: 20. right: 20. top: 18. bottom: 18.} flow: Down spacing: 10
+            Label{text: "C128A" draw_text.color: #x88ffcc draw_text.text_style.font_size: 28}
+            Label{text: "coarse compression, near-full top-k" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+
+            Label{text: "window = 128" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 12}
+            Label{text: "stride = 128" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 12}
+
+            Label{text: "Compressed entries" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            c128a_entries := Label{width: Fill text: "(not yet)" draw_text.color: #x66ffaa draw_text.text_style.font_size: 22}
+
+            Label{text: "Near-full selection" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+            c128a_topk := Label{width: Fill text: "" draw_text.color: #x66ddaa draw_text.text_style.font_size: 18}
+
+            Label{text: "use: broad context summary" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        }
+    }
+
+    // Numbers comparison row (static)
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 6
+        Label{text: "1,000,000 tokens  ->  compression ratio comparison" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 12
+            Label{width: 70 text: "c4a" draw_text.color: #xff88cc draw_text.text_style.font_size: 12}
+            Label{text: "1M  /  4  =  250K entries  -->  top-512  =  attend 0.2% of entries" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 11}
+        }
+        View{width: Fill height: Fit flow: Right align: Align{y: 0.5} spacing: 12
+            Label{width: 70 text: "c128a" draw_text.color: #x88ffcc draw_text.text_style.font_size: 12}
+            Label{text: "1M  /  128  =  8K entries  -->  top-8192  =  attend nearly all entries" draw_text.color: #xbbbbbb draw_text.text_style.font_size: 11}
+        }
+    }
+
+    // Narration
+    RoundedView{width: Fill height: Fit draw_bg.color: #x1a1a28 draw_bg.radius: 8. padding: Inset{left: 20. right: 20. top: 14. bottom: 14.} flow: Down spacing: 4
+        Label{text: "Why two paths?" draw_text.color: #x66ffaa draw_text.text_style.font_size: 11}
+        narr := Label{width: Fill text: "Same input, two compression levels..." draw_text.color: #xeeeeff draw_text.text_style.font_size: 13}
+    }
+}

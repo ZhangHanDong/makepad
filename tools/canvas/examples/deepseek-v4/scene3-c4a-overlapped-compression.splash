@@ -1,0 +1,93 @@
+let state = { t: 0 }
+
+fn tick() {
+    state.t = state.t + 1
+    if state.t > 20 { state.t = 0 }
+    let t = state.t
+
+    if t < 2 {
+        ui.phase.set_text("c4a: 8-token overlapping windows, stride = 4")
+        ui.merge1.set_text("")
+        ui.merge2.set_text("")
+        ui.merge3.set_text("")
+        ui.c_result.set_text("")
+    } else if t < 6 {
+        ui.phase.set_text("Phase 1: Ca/Za[0..3] --> C0     (first compressed entry)")
+        ui.merge1.set_text("[Ca/Za 0..3]  -->  C0")
+        ui.merge2.set_text("")
+        ui.merge3.set_text("")
+        ui.c_result.set_text("C0 covers tokens 0..3")
+    } else if t < 10 {
+        ui.phase.set_text("Phase 2: Cb/Zb[0..3] + Ca/Za[4..7] --> C1     (overlap by 4)")
+        ui.merge1.set_text("[Ca/Za 0..3]  -->  C0")
+        ui.merge2.set_text("[Cb/Zb 0..3] + [Ca/Za 4..7]  -->  C1   (8-token window)")
+        ui.merge3.set_text("")
+        ui.c_result.set_text("C0 covers 0..3   |   C1 covers 0..7")
+    } else if t < 14 {
+        ui.phase.set_text("Phase 3: Cb/Zb[4..7] + Ca/Za[8..11] --> C2     (overlap by 4)")
+        ui.merge1.set_text("[Ca/Za 0..3]  -->  C0")
+        ui.merge2.set_text("[Cb/Zb 0..3] + [Ca/Za 4..7]  -->  C1")
+        ui.merge3.set_text("[Cb/Zb 4..7] + [Ca/Za 8..11]  -->  C2   (8-token window)")
+        ui.c_result.set_text("C0: 0..3   |   C1: 0..7   |   C2: 4..11")
+    } else {
+        ui.phase.set_text("Result: each compressed entry covers 8 tokens, neighbors overlap by 4")
+        ui.merge1.set_text("[Ca/Za 0..3]  -->  C0")
+        ui.merge2.set_text("[Cb/Zb 0..3] + [Ca/Za 4..7]  -->  C1")
+        ui.merge3.set_text("[Cb/Zb 4..7] + [Ca/Za 8..11]  -->  C2")
+        ui.c_result.set_text("3 overlapping C entries cover 12 tokens with stride-4 compression")
+    }
+
+    // Highlight token bands: show which tokens are "current" Ca/Za or "previous" Cb/Zb
+    if t < 2 {
+        ui.tok_purple.set_text("")
+        ui.tok_green.set_text("")
+    } else if t < 6 {
+        ui.tok_purple.set_text("Ca/Za:  [0][1][2][3]")
+        ui.tok_green.set_text("")
+    } else if t < 10 {
+        ui.tok_purple.set_text("Ca/Za:             [4][5][6][7]")
+        ui.tok_green.set_text("Cb/Zb:  [0][1][2][3]")
+    } else if t < 14 {
+        ui.tok_purple.set_text("Ca/Za:                         [8][9][10][11]")
+        ui.tok_green.set_text("Cb/Zb:             [4][5][6][7]")
+    } else {
+        ui.tok_purple.set_text("")
+        ui.tok_green.set_text("")
+    }
+}
+
+SolidView{width: Fill height: Fit draw_bg.color: #x0a0a14 flow: Down padding: Inset{left: 32. right: 32. top: 24. bottom: 24.} spacing: 14
+
+    View{width: Fill height: Fit flow: Right align: Align{y: 0.5}
+        Label{text: "Scene 3 / 6" draw_text.color: #x66aaff draw_text.text_style.font_size: 10}
+        View{width: 16}
+        Label{text: "C4A Overlapped Compression" draw_text.color: #xeeeeff draw_text.text_style.font_size: 22}
+    }
+
+    // Tokens strip with highlighted bands
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 6
+        Label{text: "Tokens" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        Label{width: Fill text: "[0][1][2][3][4][5][6][7][8][9][10][11]" draw_text.color: #xffaa66 draw_text.text_style.font_size: 18}
+        tok_purple := Label{width: Fill text: "" draw_text.color: #xcc88ff draw_text.text_style.font_size: 15}
+        tok_green := Label{width: Fill text: "" draw_text.color: #x66ffaa draw_text.text_style.font_size: 15}
+    }
+
+    // Merge flow
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 14. bottom: 14.} flow: Down spacing: 8
+        Label{text: "Merge into compressed entries" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        merge1 := Label{width: Fill text: "" draw_text.color: #xff6b6b draw_text.text_style.font_size: 14}
+        merge2 := Label{width: Fill text: "" draw_text.color: #xffaa44 draw_text.text_style.font_size: 14}
+        merge3 := Label{width: Fill text: "" draw_text.color: #xffcc22 draw_text.text_style.font_size: 14}
+    }
+
+    // Current entries state
+    RoundedView{width: Fill height: Fit draw_bg.color: #x14141f draw_bg.radius: 8. padding: Inset{left: 18. right: 18. top: 12. bottom: 12.} flow: Down spacing: 4
+        Label{text: "Compressed entries" draw_text.color: #x888899 draw_text.text_style.font_size: 10}
+        c_result := Label{width: Fill text: "" draw_text.color: #xeeeeff draw_text.text_style.font_size: 13}
+    }
+
+    RoundedView{width: Fill height: Fit draw_bg.color: #x1a1a28 draw_bg.radius: 8. padding: Inset{left: 20. right: 20. top: 14. bottom: 14.} flow: Down spacing: 4
+        Label{text: "Rule" draw_text.color: #x66ffaa draw_text.text_style.font_size: 11}
+        phase := Label{width: Fill text: "c4a uses 8-token overlapping windows with stride 4, not simple 4-token averaging" draw_text.color: #xeeeeff draw_text.text_style.font_size: 13}
+    }
+}
