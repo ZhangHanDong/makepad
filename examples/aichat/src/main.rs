@@ -6,6 +6,9 @@ pub use makepad_diagram_kit;
 pub use makepad_widgets;
 
 use makepad_ai::*;
+use makepad_widgets::makepad_draw::svg::{
+    collect_edges, collect_text_cmds, parse_svg, SvgDocument, SvgEdge, SvgTextAnchor, SvgTextCmd,
+};
 use makepad_widgets::makepad_platform::makepad_micro_serde::*;
 use makepad_widgets::*;
 use streaming_markdown_kit::{
@@ -158,6 +161,34 @@ script_mod! {
         }
     }
 
+    let MermaidSvgView = #(MermaidSvgView::register_widget(vm)) {
+        width: Fill
+        height: Fit
+        // Animated flow dot shader: SDF circle + halo. Per-edge color
+        // (incl. pulse alpha in `.w`) is written from Rust.
+        draw_flow_dot +: {
+            color: #xe2e8f0
+            pixel: fn() {
+                let r = length(self.pos - vec2(0.5, 0.5))
+                let core = 1.0 - smoothstep(0.30, 0.38, r)
+                let halo = (1.0 - smoothstep(0.38, 0.50, r)) * 0.55
+                let a = clamp(core + halo, 0.0, 1.0) * self.color.w
+                return Pal.premul(vec4(self.color.xyz, a))
+            }
+        }
+        draw_text +: {
+            color: #xe2e8f0
+            text_style: theme.font_code{
+                font_size: 12
+                font_family: FontFamily{
+                    latin := FontMember{res: crate_resource("self:resources/LiberationMono-Regular.ttf") asc: 0.0 desc: 0.0}
+                    chinese := FontMember{res: crate_resource("self:resources/LXGWWenKaiMono-Regular.ttf") asc: 0.0 desc: 0.0}
+                    emoji := FontMember{res: crate_resource("self:resources/NotoColorEmoji.ttf") asc: 0.0 desc: 0.0}
+                }
+            }
+        }
+    }
+
     let ChatList = #(ChatList::register_widget(vm)) {
         width: Fill
         height: Fill
@@ -244,6 +275,15 @@ script_mod! {
                         height: Fit
                         flow: Right
                         diagram_view := DiagramView {
+                            width: Fit
+                            height: Fit
+                        }
+                    }
+                    mermaid_block := ScrollXView {
+                        width: Fill
+                        height: Fit
+                        flow: Right
+                        mermaid_view := MermaidSvgView {
                             width: Fit
                             height: Fit
                         }
@@ -368,6 +408,16 @@ script_mod! {
                             width: Fill
                             height: Fit
                             diagram_view := DiagramView {
+                                width: Fit
+                                height: Fit
+                            }
+                        }
+                        mermaid_block := ScrollXView{
+                            flow: Right
+                            new_batch: true
+                            width: Fill
+                            height: Fit
+                            mermaid_view := MermaidSvgView {
                                 width: Fit
                                 height: Fit
                             }
@@ -1138,6 +1188,342 @@ struct SavedHistory {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub text: String,
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct MermaidSvgView {
+    #[uid]
+    uid: WidgetUid,
+    #[source]
+    source: ScriptObjectRef,
+    #[walk]
+    walk: Walk,
+    #[layout]
+    layout: Layout,
+    #[redraw]
+    #[live]
+    draw_svg: DrawSvg,
+    #[live]
+    draw_text: DrawText,
+    #[live]
+    draw_flow_dot: DrawColor,
+    #[rust]
+    doc: SvgDocument,
+    #[rust]
+    content_w: f64,
+    #[rust]
+    content_h: f64,
+    #[rust]
+    last_src_hash: u64,
+    #[rust]
+    pending_src_hash: u64,
+    #[rust]
+    cached_text_cmds: Vec<SvgTextCmd>,
+    #[rust]
+    cached_edges: Vec<SvgEdge>,
+    #[rust(1.0f64)]
+    zoom: f64,
+    #[rust]
+    pan: DVec2,
+    #[rust]
+    drag_start_abs: Option<DVec2>,
+    #[rust]
+    drag_start_pan: DVec2,
+    #[rust]
+    last_rect: Rect,
+    #[rust]
+    anim_t: f32,
+    #[rust]
+    next_frame: NextFrame,
+}
+
+impl MermaidSvgView {
+    pub fn set_svg_str(&mut self, cx: &mut Cx, svg: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        svg.hash(&mut hasher);
+        let hash = hasher.finish();
+        if hash == self.last_src_hash && !self.doc.root.is_empty() {
+            return;
+        }
+
+        self.last_src_hash = hash;
+        self.doc = parse_svg(svg);
+        self.cached_text_cmds = collect_text_cmds(&self.doc);
+        self.cached_edges = collect_edges(&self.doc);
+        self.draw_svg.cache_valid = false;
+        self.draw_svg.set_doc_bounds(&self.doc);
+        if let Some(vb) = self.doc.viewbox.as_ref() {
+            self.draw_svg.content_bounds = (vb.x, vb.y, vb.x + vb.width, vb.y + vb.height);
+            self.content_w = vb.width as f64;
+            self.content_h = vb.height as f64;
+            self.draw_svg.content_size = dvec2(self.content_w, self.content_h);
+        }
+        self.redraw(cx);
+    }
+
+    pub fn set_mermaid_src(&mut self, cx: &mut Cx, src: &str) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let cleaned: String = src.chars().filter(|c| *c != '▋').collect();
+        let trimmed = cleaned.trim();
+        if trimmed.is_empty() || trimmed.len() < 8 {
+            return;
+        }
+
+        let mut hasher = DefaultHasher::new();
+        trimmed.hash(&mut hasher);
+        let hash = hasher.finish();
+        if hash == self.last_src_hash && !self.doc.root.is_empty() {
+            return;
+        }
+
+        // Streaming debounce: render only when the same source arrives twice
+        // in a row. During active token streaming the body changes every
+        // frame; after a pause or close it stabilizes and renders once.
+        if hash != self.pending_src_hash {
+            self.pending_src_hash = hash;
+            return;
+        }
+
+        match streaming_markdown_kit::render_mermaid_to_svg(trimmed) {
+            Ok(svg) => {
+                self.set_svg_str(cx, &svg);
+                self.last_src_hash = hash;
+            }
+            Err(err) => {
+                log!("mermaid render error: {:?}", err);
+            }
+        }
+    }
+}
+
+impl Widget for MermaidSvgView {
+    fn set_text(&mut self, cx: &mut Cx, v: &str) {
+        self.set_mermaid_src(cx, v);
+    }
+
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, _scope: &mut Scope) {
+        if self.next_frame.is_event(event).is_some() {
+            self.anim_t = (self.anim_t + 0.003).rem_euclid(1.0);
+            self.next_frame = cx.new_next_frame();
+            self.redraw(cx);
+        }
+
+        match event.hits_with_capture_overload(cx, self.draw_svg.area(), true) {
+            Hit::FingerDown(fe) if fe.is_primary_hit() => {
+                if fe.tap_count >= 2 {
+                    self.zoom = 1.0;
+                    self.pan = DVec2::default();
+                    self.drag_start_abs = None;
+                    self.redraw(cx);
+                } else {
+                    self.drag_start_abs = Some(fe.abs);
+                    self.drag_start_pan = self.pan;
+                    cx.set_cursor(MouseCursor::Grabbing);
+                }
+            }
+            Hit::FingerMove(fe) => {
+                if let Some(start) = self.drag_start_abs {
+                    self.pan = self.drag_start_pan + (fe.abs - start);
+                    self.redraw(cx);
+                }
+            }
+            Hit::FingerUp(_) => {
+                if self.drag_start_abs.is_some() {
+                    self.drag_start_abs = None;
+                    cx.set_cursor(MouseCursor::Grab);
+                }
+            }
+            Hit::FingerHoverIn(_) => cx.set_cursor(MouseCursor::Grab),
+            Hit::FingerScroll(fs) => {
+                if !fs.modifiers.is_primary() {
+                    return;
+                }
+                let dy = if fs.scroll.y.abs() > f64::EPSILON {
+                    fs.scroll.y
+                } else {
+                    fs.scroll.x
+                };
+                let factor = (1.0 - dy * 0.005).clamp(0.5, 2.0);
+                let old_zoom = self.zoom.max(0.01);
+                let new_zoom = (old_zoom * factor).clamp(0.2, 8.0);
+                let local = fs.abs - self.last_rect.pos - self.pan;
+                let content_local = local / old_zoom;
+                self.pan = fs.abs - self.last_rect.pos - content_local * new_zoom;
+                self.zoom = new_zoom;
+                self.redraw(cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, _scope: &mut Scope, walk: Walk) -> DrawStep {
+        if self.doc.root.is_empty() {
+            return DrawStep::done();
+        }
+        let sw = self.draw_svg.content_size.x;
+        let sh = self.draw_svg.content_size.y;
+        if sw <= 0.0 || sh <= 0.0 {
+            return DrawStep::done();
+        }
+        let walk = Walk {
+            abs_pos: walk.abs_pos,
+            margin: walk.margin,
+            width: match walk.width {
+                Size::Fit { .. } => Size::Fixed(sw),
+                other => other,
+            },
+            height: match walk.height {
+                Size::Fit { .. } => Size::Fixed(sh),
+                other => other,
+            },
+            metrics: walk.metrics,
+        };
+        let rect = cx.walk_turtle(walk);
+        self.last_rect = rect;
+
+        let zoom = if self.zoom > 0.01 { self.zoom } else { 1.0 };
+        let effective_rect = Rect {
+            pos: rect.pos + self.pan,
+            size: rect.size * zoom,
+        };
+
+        self.draw_svg.svg_doc = Some(std::mem::take(&mut self.doc));
+        self.draw_svg.has_animations = false;
+        self.draw_svg.render_to_rect(cx, &effective_rect, 0.0);
+        self.doc = self.draw_svg.svg_doc.take().unwrap_or_default();
+
+        let text_cmds = std::mem::take(&mut self.cached_text_cmds);
+        self.render_text_cmds(cx, &effective_rect, &text_cmds);
+        self.cached_text_cmds = text_cmds;
+
+        let edges = std::mem::take(&mut self.cached_edges);
+        self.render_flow_dots(cx, &effective_rect, &edges);
+        let has_edges = !edges.is_empty();
+        self.cached_edges = edges;
+
+        if has_edges {
+            self.next_frame = cx.new_next_frame();
+        }
+        DrawStep::done()
+    }
+}
+
+impl MermaidSvgView {
+    fn render_text_cmds(&mut self, cx: &mut Cx2d, rect: &Rect, cmds: &[SvgTextCmd]) {
+        if cmds.is_empty() {
+            return;
+        }
+        let (min_x, min_y, max_x, max_y) = self.draw_svg.content_bounds;
+        let content_w = (max_x - min_x) as f64;
+        let content_h = (max_y - min_y) as f64;
+        if content_w <= 0.0 || content_h <= 0.0 {
+            return;
+        }
+        let scale = (rect.size.x / content_w).min(rect.size.y / content_h);
+        let render_w = content_w * scale;
+        let render_h = content_h * scale;
+        let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
+        let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
+        const PX_TO_PT: f64 = 0.75;
+
+        for cmd in cmds {
+            if cmd.text.trim().is_empty() {
+                continue;
+            }
+            let world_font_size = (cmd.font_size as f64 * scale * PX_TO_PT).max(1.0);
+            self.draw_text.text_style.font_size = world_font_size as f32;
+            self.draw_text.color = vec4(
+                cmd.color.0,
+                cmd.color.1,
+                cmd.color.2,
+                cmd.color.3.max(0.0),
+            );
+
+            let lines: Vec<&str> = cmd.text.split('\n').collect();
+            let line_step_screen = world_font_size * 1.2;
+            let base_cy = origin_y + (cmd.y as f64 - min_y as f64) * scale;
+            let base_cx_screen = origin_x + (cmd.x as f64 - min_x as f64) * scale;
+
+            for (line_index, line) in lines.iter().enumerate() {
+                if line.is_empty() {
+                    continue;
+                }
+                let estimated_width: f64 = line
+                    .chars()
+                    .map(|ch| {
+                        let advance = if (ch as u32) >= 0x2E80 { 1.0 } else { 0.55 };
+                        advance * world_font_size
+                    })
+                    .sum();
+                let anchor_shift = match cmd.text_anchor {
+                    SvgTextAnchor::Start => 0.0,
+                    SvgTextAnchor::Middle => -0.5,
+                    SvgTextAnchor::End => -1.0,
+                } * estimated_width;
+
+                let px = base_cx_screen + anchor_shift;
+                let cy = base_cy + line_step_screen * line_index as f64;
+                let py = cy - world_font_size * 0.7;
+                self.draw_text.draw_abs(cx, dvec2(px, py), line);
+            }
+        }
+    }
+
+    fn render_flow_dots(&mut self, cx: &mut Cx2d, rect: &Rect, edges: &[SvgEdge]) {
+        if edges.is_empty() {
+            return;
+        }
+        let (min_x, min_y, max_x, max_y) = self.draw_svg.content_bounds;
+        let content_w = (max_x - min_x) as f64;
+        let content_h = (max_y - min_y) as f64;
+        if content_w <= 0.0 || content_h <= 0.0 {
+            return;
+        }
+        let scale = (rect.size.x / content_w).min(rect.size.y / content_h);
+        let render_w = content_w * scale;
+        let render_h = content_h * scale;
+        let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
+        let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
+        let dot_size = 10.0_f64;
+        let pulse =
+            0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
+
+        for (edge_index, edge) in edges.iter().enumerate() {
+            if edge.points.len() < 2 {
+                continue;
+            }
+            let phase = (self.anim_t + edge_index as f32 * 0.17).rem_euclid(1.0);
+            let max_index = edge.points.len() - 1;
+            let float_index = phase * max_index as f32;
+            let point_index = float_index as usize;
+            let next_index = (point_index + 1).min(max_index);
+            let frac = float_index - point_index as f32;
+            let p0 = edge.points[point_index];
+            let p1 = edge.points[next_index];
+            let wx = p0.0 + (p1.0 - p0.0) * frac;
+            let wy = p0.1 + (p1.1 - p0.1) * frac;
+
+            let sx = origin_x + (wx as f64 - min_x as f64) * scale;
+            let sy = origin_y + (wy as f64 - min_y as f64) * scale;
+
+            self.draw_flow_dot.color = vec4(
+                edge.color.0,
+                edge.color.1,
+                edge.color.2,
+                edge.color.3 * pulse,
+            );
+            self.draw_flow_dot.draw_abs(
+                cx,
+                Rect {
+                    pos: dvec2(sx - dot_size * 0.5, sy - dot_size * 0.5),
+                    size: dvec2(dot_size, dot_size),
+                },
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
