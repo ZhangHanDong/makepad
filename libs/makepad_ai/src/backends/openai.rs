@@ -119,6 +119,7 @@ impl OpenAiBackend {
         request: &AiRequest,
         model: &str,
         reasoning_effort: &Option<String>,
+        thinking: &Option<String>,
     ) -> String {
         let mut json = String::new();
         json.push_str("{");
@@ -140,6 +141,11 @@ impl OpenAiBackend {
         // Reasoning effort (for o-series models)
         if let Some(effort) = reasoning_effort {
             json.push_str(&format!("\"reasoning_effort\":\"{}\",", effort));
+        }
+
+        // Optional thinking mode for OpenAI-compatible providers.
+        if let Some(mode) = thinking {
+            json.push_str(&format!("\"thinking\":{{\"type\":\"{}\"}},", mode));
         }
 
         if !request.tools.is_empty() {
@@ -250,6 +256,7 @@ impl OpenAiBackend {
             model,
             base_url,
             reasoning_effort,
+            thinking,
         } = &self.config
         else {
             panic!("OpenAiBackend requires OpenAI config");
@@ -266,7 +273,7 @@ impl OpenAiBackend {
             http.set_header("Authorization".to_string(), format!("Bearer {}", api_key));
         }
 
-        let body = Self::build_request_json(request, model, reasoning_effort);
+        let body = Self::build_request_json(request, model, reasoning_effort, thinking);
         http.set_string_body(body);
         http
     }
@@ -376,6 +383,32 @@ impl OpenAiBackend {
         }
 
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_json_includes_optional_thinking_mode() {
+        let request = AiRequest {
+            messages: vec![Message::user("ping")],
+            max_tokens: 32,
+            ..Default::default()
+        };
+
+        let backend = OpenAiBackend::new(BackendConfig::OpenAI {
+            api_key: "test-key".to_string(),
+            model: "openai-compatible-model".to_string(),
+            base_url: Some("https://example.com/v1/chat/completions".to_string()),
+            reasoning_effort: None,
+            thinking: Some("disabled".to_string()),
+        });
+
+        let body = String::from_utf8(backend.build_http_request(&request).body.unwrap()).unwrap();
+
+        assert!(body.contains("\"thinking\":{\"type\":\"disabled\"}"));
     }
 }
 

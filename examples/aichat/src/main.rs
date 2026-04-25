@@ -548,6 +548,7 @@ impl App {
                         model: "gpt-4o".to_string(),
                         base_url: None,
                         reasoning_effort: None,
+                        thinking: None,
                     },
                 )))) as Box<dyn Agent>
             }),
