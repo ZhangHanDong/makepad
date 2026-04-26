@@ -91,6 +91,9 @@ impl MacosWindow {
         match config.chrome {
             MacosWindowChrome::Borderless => {
                 style_mask |= NSWindowStyleMask::NSBorderlessWindowMask as u64;
+                if config.resizable {
+                    style_mask |= NSWindowStyleMask::NSResizableWindowMask as u64;
+                }
             }
             MacosWindowChrome::Titled => {
                 style_mask |= NSWindowStyleMask::NSTitledWindowMask as u64;
@@ -921,5 +924,26 @@ pub fn get_cocoa_window(this: &Object) -> &mut MacosWindow {
     unsafe {
         let ptr: *mut c_void = *this.get_ivar("macos_window_ptr");
         &mut *(ptr as *mut MacosWindow)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn borderless_standard_windows_can_still_resize() {
+        let config = MacosWindowConfig {
+            chrome: MacosWindowChrome::Borderless,
+            resizable: true,
+            ..MacosWindowConfig::default()
+        };
+
+        let style_mask = MacosWindow::style_mask_for_config(config);
+
+        assert_ne!(
+            style_mask & NSWindowStyleMask::NSResizableWindowMask as u64,
+            0
+        );
     }
 }
