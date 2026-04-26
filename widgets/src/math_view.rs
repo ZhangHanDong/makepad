@@ -34,10 +34,19 @@ script_mod! {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct MathComponent {
-    shape_id: GlyphShapeId,
-    origin: Vec2f,
-    size: Vec2f,
+pub struct MathComponent {
+    pub shape_id: GlyphShapeId,
+    pub origin: Vec2f,
+    pub size: Vec2f,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledMath {
+    pub components: Vec<MathComponent>,
+    pub width: f32,
+    pub height: f32,
+    pub ascent: f32,
+    pub descent: f32,
 }
 
 #[derive(Script, ScriptHook, Widget)]
@@ -133,7 +142,6 @@ impl Widget for MathView {
 impl MathView {
     fn compile_math(&mut self, cx: &mut Cx2d) {
         let font_family_id = self.draw_text.text_style.font_family_id();
-        self.draw_text.text_style.ensure_fonts_loaded(cx.cx.cx);
         if self.text == self.old_text
             && self.font_size == self.old_font_size
             && self.old_font_family_id == Some(font_family_id)
@@ -154,74 +162,91 @@ impl MathView {
             return;
         }
 
-        let layout_font = {
-            let mut fonts = cx.fonts.borrow_mut();
-            let family = fonts.get_or_load_font_family(font_family_id);
-            family.fonts().first().cloned()
-        };
-
-        let Some(layout_font) = layout_font else {
-            self.layout_cache = None;
-            self.components.clear();
-            self.draw_glyph.clear_shapes();
-            self.debug_reason = Some("missing-math-font".to_string());
-            return;
-        };
-
-        let nodes = latex_math::parse(&self.text);
-        let layout_size = self.font_size as f32 * 1.75;
-        let Some(layout) = latex_math::layout(
-            &nodes,
-            layout_font.data().as_slice(),
-            layout_size,
-            MathStyle::Display,
-        ) else {
-            self.layout_cache = None;
-            self.components.clear();
-            self.draw_glyph.clear_shapes();
-            self.debug_reason = Some("math-layout-failed".to_string());
-            return;
-        };
-
         self.draw_glyph.clear_shapes();
-        let mut components = Vec::new();
-        for item in &layout.items {
-            match item {
-                LayoutItem::Glyph(glyph) => {
-                    if let Some(shape_id) = build_glyph_shape(
-                        &mut self.draw_glyph,
-                        layout_font.as_ref(),
-                        glyph,
-                        layout.ascent,
-                    ) {
-                        push_component(&self.draw_glyph, shape_id, &mut components);
-                    }
+        match compile_math_into(
+            cx,
+            &mut self.draw_glyph,
+            &mut self.draw_text,
+            self.font_size,
+            &self.text,
+        ) {
+            Some(compiled) => {
+                self.layout_cache = Some(latex_math::LayoutOutput {
+                    items: Vec::new(),
+                    width: compiled.width,
+                    height: compiled.height,
+                    ascent: compiled.ascent,
+                    descent: compiled.descent,
+                });
+                self.components = compiled.components;
+                self.debug_reason = None;
+            }
+            None => {
+                self.layout_cache = None;
+                self.components.clear();
+                self.draw_glyph.clear_shapes();
+                self.debug_reason = Some("math-layout-failed".to_string());
+            }
+        }
+    }
+}
+
+pub fn compile_math_into(
+    cx: &mut Cx2d,
+    dg: &mut DrawGlyph,
+    draw_text: &mut DrawText,
+    font_size: f64,
+    text: &str,
+) -> Option<CompiledMath> {
+    draw_text.text_style.ensure_fonts_loaded(cx.cx.cx);
+    let font_family_id = draw_text.text_style.font_family_id();
+    let layout_font = {
+        let mut fonts = cx.fonts.borrow_mut();
+        let family = fonts.get_or_load_font_family(font_family_id);
+        family.fonts().first().cloned()
+    }?;
+
+    let nodes = latex_math::parse(text);
+    let layout_size = font_size as f32 * 1.75;
+    let layout = latex_math::layout(
+        &nodes,
+        layout_font.data().as_slice(),
+        layout_size,
+        MathStyle::Display,
+    )?;
+
+    let mut components = Vec::new();
+    for item in &layout.items {
+        match item {
+            LayoutItem::Glyph(glyph) => {
+                if let Some(shape_id) =
+                    build_glyph_shape(dg, layout_font.as_ref(), glyph, layout.ascent)
+                {
+                    push_component(dg, shape_id, &mut components);
                 }
-                LayoutItem::Rule(rule) => {
-                    if let Some(shape_id) =
-                        build_rule_shape(&mut self.draw_glyph, rule, layout.ascent)
-                    {
-                        push_component(&self.draw_glyph, shape_id, &mut components);
-                    }
+            }
+            LayoutItem::Rule(rule) => {
+                if let Some(shape_id) = build_rule_shape(dg, rule, layout.ascent) {
+                    push_component(dg, shape_id, &mut components);
                 }
-                LayoutItem::Rect(rect) => {
-                    if let Some(shape_id) = build_rect_shape(
-                        &mut self.draw_glyph,
-                        rect.x,
-                        layout.ascent + rect.y,
-                        rect.width,
-                        rect.height,
-                    ) {
-                        push_component(&self.draw_glyph, shape_id, &mut components);
-                    }
+            }
+            LayoutItem::Rect(rect) => {
+                if let Some(shape_id) =
+                    build_rect_shape(dg, rect.x, layout.ascent + rect.y, rect.width, rect.height)
+                {
+                    push_component(dg, shape_id, &mut components);
                 }
             }
         }
-
-        self.layout_cache = Some(layout);
-        self.components = components;
-        self.debug_reason = None;
     }
+
+    Some(CompiledMath {
+        components,
+        width: layout.width,
+        height: layout.height,
+        ascent: layout.ascent,
+        descent: layout.descent,
+    })
 }
 
 fn build_glyph_shape(

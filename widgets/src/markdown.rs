@@ -1,6 +1,12 @@
 use crate::{
-    image::{ImageRef, ImageWidgetRefExt}, link_label::LinkLabel, makepad_derive_widget::*,
-    makepad_draw::*, text_flow::TextFlow, widget::*, widget_async::ScriptAsyncResult,
+    image::{ImageRef, ImageWidgetRefExt},
+    link_label::LinkLabel,
+    makepad_derive_widget::*,
+    makepad_draw::*,
+    math_view::{compile_math_into, CompiledMath},
+    text_flow::TextFlow,
+    widget::*,
+    widget_async::ScriptAsyncResult,
     WidgetMatchEvent,
 };
 
@@ -11,8 +17,8 @@ use crate::makepad_draw::DrawSvg;
 
 use pulldown_cmark::{CodeBlockKind, Event as MdEvent, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
@@ -404,11 +410,7 @@ fn insert_failed_entry(cx: &mut Cx, key: u64, reason: String) {
 /// Takes `&mut Cx` (not `&mut Cx2d`) so it can be called from both the
 /// draw-thread hot path (Cx2d derefs to Cx) and the `Event::NetworkResponses`
 /// handler where only `&mut Cx` is available.
-fn decode_and_cache_bytes(
-    cx: &mut Cx,
-    key: u64,
-    bytes: &[u8],
-) -> Result<ImageCacheEntry, String> {
+fn decode_and_cache_bytes(cx: &mut Cx, key: u64, bytes: &[u8]) -> Result<ImageCacheEntry, String> {
     // M-img-3: SVG path is dispatched FIRST so raster-magic false positives
     // (exceedingly rare) can't mask an SVG. The oversize gate runs before
     // parse — `parse_svg` has no internal limits, so the byte cap is our
@@ -425,8 +427,8 @@ fn decode_and_cache_bytes(
                 IMAGE_SVG_BYTES_MAX
             ));
         }
-        let svg_str = std::str::from_utf8(bytes)
-            .map_err(|_| "svg parse error (non-utf8)".to_string())?;
+        let svg_str =
+            std::str::from_utf8(bytes).map_err(|_| "svg parse error (non-utf8)".to_string())?;
         let doc = parse_svg(svg_str);
         // Empty root → parser found no recognizable `<svg>` geometry. Treat
         // as parse failure so the placeholder path fires, matching spec
@@ -468,7 +470,11 @@ fn decode_and_cache_bytes(
     // Texture upload requires `&mut Cx`; finish it BEFORE we take the
     // global borrow.
     let texture = buf.into_new_texture(cx);
-    let entry = ImageCacheEntry::Raster { texture, width: w, height: h };
+    let entry = ImageCacheEntry::Raster {
+        texture,
+        width: w,
+        height: h,
+    };
     let cache = cx.global::<MarkdownImageCache>();
     let cap = cache.effective_cap();
     cache.entries.insert(key, entry.clone());
@@ -481,12 +487,7 @@ fn decode_and_cache_bytes(
 /// `inline_svg` for vector) and render `entry` at a display size scaled to
 /// respect `IMAGE_MAX_DISPLAY_W`, aspect-ratio-preserved. Returns true on
 /// success, false if the required template is not registered.
-fn draw_cached_image(
-    cx: &mut Cx2d,
-    tf: &mut TextFlow,
-    key: u64,
-    entry: ImageCacheEntry,
-) -> bool {
+fn draw_cached_image(cx: &mut Cx2d, tf: &mut TextFlow, key: u64, entry: ImageCacheEntry) -> bool {
     let (iw_u, ih_u) = entry.dims();
     let (iw, ih) = (iw_u as f64, ih_u as f64);
     let (dw, dh) = if iw > IMAGE_MAX_DISPLAY_W {
@@ -733,6 +734,20 @@ script_mod! {
             color: #x475569
         }
 
+        draw_glyph_math +: {
+            aa_pad_px: 1.0
+        }
+
+        draw_text_math +: {
+            text_style: TextStyle{
+                font_family: FontFamily{
+                    latin := FontMember{res: crate_resource("self:resources/NewCMMath-Regular.otf") asc: 0.0 desc: 0.0}
+                }
+                font_size: theme.font_size_p
+                line_spacing: 1.2
+            }
+        }
+
         draw_block +: {
             line_color: theme.color_label_inner
             sep_color: theme.color_shadow
@@ -838,6 +853,7 @@ struct CellSpan {
     bold: bool,
     italic: bool,
     code: bool,
+    math: Option<CompiledMath>,
     /// Present when this span was generated inside a `[text](url)` run.
     /// v1 captures the href for future use but does not instantiate a
     /// clickable LinkLabel inside the buffered draw path, nor does it
@@ -879,6 +895,10 @@ pub struct Markdown {
     in_mermaid_block: bool,
     #[rust]
     mermaid_block_string: String,
+    #[rust]
+    in_diagram_block: bool,
+    #[rust]
+    diagram_block_string: String,
     #[live(false)]
     use_math_widget: bool,
     #[rust]
@@ -942,7 +962,6 @@ pub struct Markdown {
     // recycles destroy + recreate Markdown widgets on scroll, so any
     // widget-local state would be lost and images would re-fetch every
     // scroll-back. Access sites go through `cx.global::<MarkdownImageCache>()`.
-
     /// State for an in-progress `Start(Tag::Image)` ... `End(TagEnd::Image)`
     /// range. The inner `MdEvent::Text` events between Start and End carry
     /// the alt text — we buffer them here so we can render `🖼 <alt>` at
@@ -962,6 +981,10 @@ pub struct Markdown {
     /// Grid line color (borders + dividers between cells).
     #[live]
     draw_table_line: DrawColor,
+    #[live]
+    draw_glyph_math: DrawGlyph,
+    #[live]
+    draw_text_math: DrawText,
 }
 
 impl Widget for Markdown {
@@ -1024,8 +1047,10 @@ impl Widget for Markdown {
                             if let Some(id) = kv.key.as_id() {
                                 if !self.text_flow.has_template(id) {
                                     if let Some(template_obj) = kv.value.as_object() {
-                                        self.text_flow.register_template(id,
-                                            vm.bx.heap.new_object_ref(template_obj));
+                                        self.text_flow.register_template(
+                                            id,
+                                            vm.bx.heap.new_object_ref(template_obj),
+                                        );
                                     }
                                 }
                             }
@@ -1083,7 +1108,8 @@ impl ScriptHook for Markdown {
                     for kv in vec {
                         if let Some(id) = kv.key.as_id() {
                             if let Some(template_obj) = kv.value.as_object() {
-                                self.text_flow.apply_template(vm, apply, scope, id, template_obj);
+                                self.text_flow
+                                    .apply_template(vm, apply, scope, id, template_obj);
                             }
                         }
                     }
@@ -1094,7 +1120,6 @@ impl ScriptHook for Markdown {
 }
 
 impl Markdown {
-
     fn process_markdown_doc(&mut self, cx: &mut Cx2d) {
         let tf = &mut self.text_flow;
         // Track state for nested formatting
@@ -1243,9 +1268,7 @@ impl Markdown {
                         }
                     }
                 }
-                MdEvent::Start(Tag::Image {
-                    dest_url, ..
-                }) => {
+                MdEvent::Start(Tag::Image { dest_url, .. }) => {
                     // Try to load + decode the image (cache hit short-circuits).
                     // On success we draw it inline here and mark the state so the
                     // intervening MdEvent::Text (alt) events get swallowed until
@@ -1282,9 +1305,10 @@ impl Markdown {
                         tf.new_line_collapsed_with_spacing(cx, self.pre_code_spacing);
                     }
                     is_first_block = false;
-                    // Two fenced-block language hooks:
+                    // Fenced-block language hooks:
                     //   ```runsplash  → dispatch to `splash_block` template
                     //   ```mermaid    → dispatch to `mermaid_block` template
+                    //   ```diagram    → dispatch to `diagram_block` template
                     // Any other language falls through to the generic
                     // `code_block` template (or inline styling if that
                     // template is not registered).
@@ -1294,12 +1318,16 @@ impl Markdown {
                         None
                     };
                     let has_mermaid_tpl = tf.has_template(live_id!(mermaid_block));
+                    let has_diagram_tpl = tf.has_template(live_id!(diagram_block));
                     if lang == Some("runsplash") {
                         self.in_splash_block = true;
                         self.splash_block_string.clear();
                     } else if lang == Some("mermaid") && has_mermaid_tpl {
                         self.in_mermaid_block = true;
                         self.mermaid_block_string.clear();
+                    } else if lang == Some("diagram") && has_diagram_tpl {
+                        self.in_diagram_block = true;
+                        self.diagram_block_string.clear();
                     } else if self.use_code_block_widget {
                         self.in_code_block = true;
                         self.code_block_string.clear();
@@ -1332,6 +1360,14 @@ impl Markdown {
                         // `Widget::set_text` to render source → SVG in place.
                         tf.item_with(cx, entry_id, id!(mermaid_block), |cx, item, _tf| {
                             item.widget(cx, ids!(mermaid_view)).set_text(cx, &mbs);
+                            item.draw_all_unscoped(cx);
+                        });
+                    } else if self.in_diagram_block {
+                        self.in_diagram_block = false;
+                        let entry_id = tf.new_counted_id();
+                        let dbs = self.diagram_block_string.clone();
+                        tf.item_with(cx, entry_id, id!(diagram_block), |cx, item, _tf| {
+                            item.widget(cx, ids!(diagram_view)).set_text(cx, &dbs);
                             item.draw_all_unscoped(cx);
                         });
                     } else if self.in_code_block {
@@ -1369,6 +1405,7 @@ impl Markdown {
                             bold: self.table_cell_bold > 0,
                             italic: self.table_cell_italic > 0,
                             code: true,
+                            math: None,
                             link_href: self.table_cell_link.clone(),
                         });
                     } else {
@@ -1384,20 +1421,27 @@ impl Markdown {
                 }
                 // Inline math ($...$)
                 MdEvent::InlineMath(text) => {
-                    // Inside a table we buffer the raw math source into the
-                    // cell as plain text — MathView is its own sub-widget and
-                    // firing it during the buffering phase would draw live
-                    // into the parent turtle, corrupting the delayed grid.
                     if self.in_table {
-                        // Same rationale as the non-table fallback: render
-                        // inline math as plain text in a fixed-width code
-                        // span when MathView is unavailable during the
-                        // buffered draw path.
+                        let math = if self.use_math_widget {
+                            self.draw_text_math.text_style.font_size =
+                                *tf.font_sizes.last().unwrap_or(&tf.font_size) as f32;
+                            compile_math_into(
+                                cx,
+                                &mut self.draw_glyph_math,
+                                &mut self.draw_text_math,
+                                *tf.font_sizes.last().unwrap_or(&tf.font_size) as f64,
+                                &text,
+                            )
+                        } else {
+                            None
+                        };
+                        let code = math.is_none();
                         self.table_current_cell.push(CellSpan {
                             text: text.into_string(),
                             bold: self.table_cell_bold > 0,
                             italic: self.table_cell_italic > 0,
-                            code: true,
+                            code,
+                            math,
                             link_href: self.table_cell_link.clone(),
                         });
                     } else if self.use_math_widget {
@@ -1457,12 +1501,15 @@ impl Markdown {
                             bold: self.table_cell_bold > 0,
                             italic: self.table_cell_italic > 0,
                             code: false,
+                            math: None,
                             link_href: self.table_cell_link.clone(),
                         });
                     } else if self.in_splash_block {
                         self.splash_block_string.push_str(&text);
                     } else if self.in_mermaid_block {
                         self.mermaid_block_string.push_str(&text);
+                    } else if self.in_diagram_block {
+                        self.diagram_block_string.push_str(&text);
                     } else if self.in_code_block {
                         self.code_block_string.push_str(&text);
                     } else {
@@ -1479,12 +1526,15 @@ impl Markdown {
                             bold: self.table_cell_bold > 0,
                             italic: self.table_cell_italic > 0,
                             code: false,
+                            math: None,
                             link_href: self.table_cell_link.clone(),
                         });
                     } else if self.in_splash_block {
                         self.splash_block_string.push('\n');
                     } else if self.in_mermaid_block {
                         self.mermaid_block_string.push('\n');
+                    } else if self.in_diagram_block {
+                        self.diagram_block_string.push('\n');
                     } else if self.in_code_block {
                         self.code_block_string.push('\n');
                     } else {
@@ -1498,12 +1548,15 @@ impl Markdown {
                             bold: self.table_cell_bold > 0,
                             italic: self.table_cell_italic > 0,
                             code: false,
+                            math: None,
                             link_href: self.table_cell_link.clone(),
                         });
                     } else if self.in_splash_block {
                         self.splash_block_string.push('\n');
                     } else if self.in_mermaid_block {
                         self.mermaid_block_string.push('\n');
+                    } else if self.in_diagram_block {
+                        self.diagram_block_string.push('\n');
                     } else if self.in_code_block {
                         self.code_block_string.push('\n');
                     } else {
@@ -1550,10 +1603,12 @@ impl Markdown {
                         &mut self.draw_table_bg,
                         &mut self.draw_table_header_bg,
                         &mut self.draw_table_line,
+                        &mut self.draw_glyph_math,
                         &self.table_rows,
                         self.table_has_header,
                         &self.table_alignments,
                     );
+                    self.draw_glyph_math.clear_shapes();
                     self.in_table = false;
                     self.table_rows.clear();
                     self.table_current_row.clear();
@@ -1570,20 +1625,23 @@ impl Markdown {
                     self.table_current_row.clear();
                 }
                 MdEvent::End(TagEnd::TableHead) => {
-                    self.table_rows.push(std::mem::take(&mut self.table_current_row));
+                    self.table_rows
+                        .push(std::mem::take(&mut self.table_current_row));
                     self.in_table_head = false;
                 }
                 MdEvent::Start(Tag::TableRow) => {
                     self.table_current_row.clear();
                 }
                 MdEvent::End(TagEnd::TableRow) => {
-                    self.table_rows.push(std::mem::take(&mut self.table_current_row));
+                    self.table_rows
+                        .push(std::mem::take(&mut self.table_current_row));
                 }
                 MdEvent::Start(Tag::TableCell) => {
                     self.table_current_cell.clear();
                 }
                 MdEvent::End(TagEnd::TableCell) => {
-                    self.table_current_row.push(std::mem::take(&mut self.table_current_cell));
+                    self.table_current_row
+                        .push(std::mem::take(&mut self.table_current_cell));
                 }
                 _ => {} // Unimplemented or unnecessary events
             }
@@ -1596,10 +1654,12 @@ impl Markdown {
         // producing a "whole table pops in at the end" UX.
         if self.in_table {
             if !self.table_current_cell.is_empty() {
-                self.table_current_row.push(std::mem::take(&mut self.table_current_cell));
+                self.table_current_row
+                    .push(std::mem::take(&mut self.table_current_cell));
             }
             if !self.table_current_row.is_empty() {
-                self.table_rows.push(std::mem::take(&mut self.table_current_row));
+                self.table_rows
+                    .push(std::mem::take(&mut self.table_current_row));
             }
             if !self.table_rows.is_empty() {
                 let tf = &mut self.text_flow;
@@ -1609,10 +1669,12 @@ impl Markdown {
                     &mut self.draw_table_bg,
                     &mut self.draw_table_header_bg,
                     &mut self.draw_table_line,
+                    &mut self.draw_glyph_math,
                     &self.table_rows,
                     self.table_has_header,
                     &self.table_alignments,
                 );
+                self.draw_glyph_math.clear_shapes();
             }
             self.in_table = false;
             self.table_rows.clear();
@@ -1771,8 +1833,14 @@ impl Markdown {
         let mut any_hit = false;
         for response in responses {
             match response {
-                NetworkResponse::HttpResponse { request_id, response }
-                | NetworkResponse::HttpStreamComplete { request_id, response } => {
+                NetworkResponse::HttpResponse {
+                    request_id,
+                    response,
+                }
+                | NetworkResponse::HttpStreamComplete {
+                    request_id,
+                    response,
+                } => {
                     // Scoped borrow: resolve request_id → cache key and
                     // drop the borrow before we call decode/warn helpers
                     // (each of which re-borrows the global internally).
@@ -1790,7 +1858,11 @@ impl Markdown {
                             response.status_code, key
                         );
                         Self::warn_once_http(cx, key, &msg);
-                        insert_failed_entry(cx, key, format!("http status {}", response.status_code));
+                        insert_failed_entry(
+                            cx,
+                            key,
+                            format!("http status {}", response.status_code),
+                        );
                         continue;
                     }
                     let Some(body) = response.body.as_ref() else {
@@ -1802,7 +1874,8 @@ impl Markdown {
                     if body.len() > IMAGE_HTTP_BODY_MAX {
                         let msg = format!(
                             "markdown image: body too large ({} bytes, key=0x{:x})",
-                            body.len(), key
+                            body.len(),
+                            key
                         );
                         Self::warn_once_http(cx, key, &msg);
                         insert_failed_entry(cx, key, "body too large".to_string());
@@ -1858,6 +1931,7 @@ impl Markdown {
         draw_bg: &mut DrawColor,
         draw_header_bg: &mut DrawColor,
         draw_line: &mut DrawColor,
+        draw_glyph_math: &mut DrawGlyph,
         rows: &[Vec<Vec<CellSpan>>],
         has_header: bool,
         alignments: &[pulldown_cmark::Alignment],
@@ -1911,20 +1985,49 @@ impl Markdown {
             }
         };
 
+        enum LaidCellAtom {
+            Text {
+                span: CellSpan,
+                laidout: std::rc::Rc<crate::makepad_draw::text::layouter::LaidoutText>,
+                y: f64,
+            },
+            Math {
+                math: CompiledMath,
+                x: f64,
+                y: f64,
+            },
+        }
+
         // --- Pass 1: measure column widths (spans laid out single-line) ---
         let mut col_widths: Vec<f64> = vec![0.0; ncols];
         for (r, row) in rows.iter().enumerate() {
             let is_header_row = has_header && r == 0;
             for (c, cell) in row.iter().enumerate() {
-                if c >= ncols { break; }
-                if cell.is_empty() { continue; }
+                if c >= ncols {
+                    break;
+                }
+                if cell.is_empty() {
+                    continue;
+                }
                 let mut cell_w: f64 = 0.0;
                 for span in cell.iter() {
-                    if span.text.is_empty() { continue; }
+                    if let Some(math) = span.math.as_ref() {
+                        cell_w += math.width as f64;
+                        continue;
+                    }
+                    if span.text.is_empty() {
+                        continue;
+                    }
                     tf.draw_text.text_style = style_for(span, is_header_row);
                     tf.draw_text.text_style.font_size = font_size;
                     let laid = tf.draw_text.layout(
-                        cx, 0.0, 0.0, None, false, Align::default(), &span.text,
+                        cx,
+                        0.0,
+                        0.0,
+                        None,
+                        false,
+                        Align::default(),
+                        &span.text,
                     );
                     cell_w += laid.size_in_lpxs.width as f64;
                 }
@@ -1935,7 +2038,9 @@ impl Markdown {
         }
         // Columns with no content get a minimum so dividers still render.
         for w in col_widths.iter_mut() {
-            if *w < font_size as f64 { *w = font_size as f64; }
+            if *w < font_size as f64 {
+                *w = font_size as f64;
+            }
         }
 
         // --- Pass 1.5: lay out spans with cross-span wrap, cache Rcs, derive row heights ---
@@ -1969,8 +2074,7 @@ impl Markdown {
         // as a whole. This is the simplest acceptable approximation for
         // multi-row alignment; per-row centering would require redrawing
         // each laidout row individually.
-        let mut laid: Vec<Vec<Vec<std::rc::Rc<crate::makepad_draw::text::layouter::LaidoutText>>>>
-            = Vec::with_capacity(rows.len());
+        let mut laid: Vec<Vec<Vec<LaidCellAtom>>> = Vec::with_capacity(rows.len());
         // Parallel grid of (max_right_edge, total_height_lpxs) per cell so
         // the draw pass doesn't recompute.
         let mut cell_metrics: Vec<Vec<(f64, f64)>> = Vec::with_capacity(rows.len());
@@ -1979,8 +2083,7 @@ impl Markdown {
         let row_h_f32 = row_h as f32;
         for (r, row) in rows.iter().enumerate() {
             let is_header_row = has_header && r == 0;
-            let mut row_cells: Vec<Vec<std::rc::Rc<crate::makepad_draw::text::layouter::LaidoutText>>>
-                = Vec::with_capacity(ncols);
+            let mut row_cells: Vec<Vec<LaidCellAtom>> = Vec::with_capacity(ncols);
             let mut row_cell_metrics: Vec<(f64, f64)> = Vec::with_capacity(ncols);
             let mut row_max_h: f64 = row_h;
             for c in 0..ncols {
@@ -1993,7 +2096,29 @@ impl Markdown {
                         let mut current_x: f64 = 0.0;
                         let mut current_y: f64 = 0.0;
                         for span in cell.iter() {
-                            if span.text.is_empty() { continue; }
+                            if let Some(math) = span.math.as_ref() {
+                                let math_w = math.width as f64;
+                                let math_h = math.height as f64;
+                                if current_x > 0.0 && current_x + math_w > col_widths[c] {
+                                    current_x = 0.0;
+                                    current_y += row_h;
+                                }
+                                let right_edge = current_x + math_w;
+                                if right_edge > cell_max_right {
+                                    cell_max_right = right_edge;
+                                }
+                                cell_total_h = cell_total_h.max(current_y + row_h.max(math_h));
+                                cell_out.push(LaidCellAtom::Math {
+                                    math: math.clone(),
+                                    x: current_x,
+                                    y: current_y,
+                                });
+                                current_x = right_edge;
+                                continue;
+                            }
+                            if span.text.is_empty() {
+                                continue;
+                            }
                             tf.draw_text.text_style = style_for(span, is_header_row);
                             tf.draw_text.text_style.font_size = font_size;
                             let laidout = tf.draw_text.layout(
@@ -2011,21 +2136,31 @@ impl Markdown {
                             // cases within the laidout's own coordinates).
                             for lr in &laidout.rows {
                                 let w = lr.width_in_lpxs as f64;
-                                if w > cell_max_right { cell_max_right = w; }
+                                if w > cell_max_right {
+                                    cell_max_right = w;
+                                }
                             }
                             let n_rows = laidout.rows.len();
                             if n_rows > 1 {
                                 current_y += (n_rows - 1) as f64 * row_h;
                             }
-                            current_x = laidout.rows.last()
+                            current_x = laidout
+                                .rows
+                                .last()
                                 .map(|lr| lr.width_in_lpxs as f64)
                                 .unwrap_or(current_x);
-                            cell_out.push(laidout);
+                            cell_out.push(LaidCellAtom::Text {
+                                span: span.clone(),
+                                laidout,
+                                y: current_y,
+                            });
                         }
-                        cell_total_h = current_y + row_h;
+                        cell_total_h = cell_total_h.max(current_y + row_h);
                     }
                 }
-                if cell_total_h > row_max_h { row_max_h = cell_total_h; }
+                if cell_total_h > row_max_h {
+                    row_max_h = cell_total_h;
+                }
                 row_cells.push(cell_out);
                 row_cell_metrics.push((cell_max_right, cell_total_h));
             }
@@ -2044,13 +2179,25 @@ impl Markdown {
         let oy = rect.pos.y;
 
         // Background fill + rounded border (drawn by draw_bg's SDF).
-        draw_bg.draw_abs(cx, Rect { pos: dvec2(ox, oy), size: dvec2(total_w, total_h) });
+        draw_bg.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(ox, oy),
+                size: dvec2(total_w, total_h),
+            },
+        );
 
         // Header-row bg tint overlaid on main bg so the header is visually
         // distinct even when the bold-font override is missing / subtle.
         if has_header {
             let hdr_h = row_heights[0];
-            draw_header_bg.draw_abs(cx, Rect { pos: dvec2(ox, oy), size: dvec2(total_w, hdr_h) });
+            draw_header_bg.draw_abs(
+                cx,
+                Rect {
+                    pos: dvec2(ox, oy),
+                    size: dvec2(total_w, hdr_h),
+                },
+            );
         }
 
         // Per-cell text draw. Use draw_walk_laidout with abs_pos so the
@@ -2065,7 +2212,10 @@ impl Markdown {
             let mut x = ox;
             for c in 0..ncols {
                 let col_w = col_widths[c] + CELL_PAD_H * 2.0;
-                let align = alignments.get(c).copied().unwrap_or(pulldown_cmark::Alignment::None);
+                let align = alignments
+                    .get(c)
+                    .copied()
+                    .unwrap_or(pulldown_cmark::Alignment::None);
                 if let Some(cell) = row.get(c) {
                     if !cell.is_empty() {
                         let cell_laid = &laid[r][c];
@@ -2086,57 +2236,68 @@ impl Markdown {
                             // Left / None — default
                             _ => x + CELL_PAD_H,
                         };
-                        // Replay the indent-based state machine from pass
-                        // 1.5. Each span is a separate laidout block whose
-                        // abs_pos is offset downward by the accumulated y
-                        // from prior wrapped rows; its first row is indented
-                        // by the x-cursor left over from the previous span.
-                        let mut current_x: f64 = 0.0;
-                        let mut current_y: f64 = 0.0;
-                        let mut span_iter = cell.iter().filter(|s| !s.text.is_empty());
-                        for laidout in cell_laid.iter() {
-                            let span = match span_iter.next() {
-                                Some(s) => s,
-                                None => break,
-                            };
-                            tf.draw_text.text_style = style_for(span, is_header_row);
-                            tf.draw_text.text_style.font_size = font_size;
-                            tf.draw_text.color = tf.font_color;
-                            tf.draw_text.temp_y_shift = tf.draw_text.text_style.top_drop;
-                            let _ = tf.draw_text.draw_walk_laidout(
-                                cx,
-                                Walk {
-                                    abs_pos: Some(dvec2(
-                                        cell_origin_x,
-                                        text_y + current_y,
-                                    )),
-                                    margin: Default::default(),
-                                    width: makepad_draw::turtle::Size::Fit {
-                                        min: None,
-                                        max: None,
-                                    },
-                                    height: makepad_draw::turtle::Size::Fit {
-                                        min: None,
-                                        max: None,
-                                    },
-                                    metrics: Default::default(),
-                                },
-                                laidout,
-                            );
-                            let n_rows = laidout.rows.len();
-                            if n_rows > 1 {
-                                current_y += (n_rows - 1) as f64 * row_h;
+                        for atom in cell_laid.iter() {
+                            match atom {
+                                LaidCellAtom::Text { span, laidout, y } => {
+                                    tf.draw_text.text_style = style_for(span, is_header_row);
+                                    tf.draw_text.text_style.font_size = font_size;
+                                    tf.draw_text.color = tf.font_color;
+                                    tf.draw_text.temp_y_shift = tf.draw_text.text_style.top_drop;
+                                    let _ = tf.draw_text.draw_walk_laidout(
+                                        cx,
+                                        Walk {
+                                            abs_pos: Some(dvec2(cell_origin_x, text_y + *y)),
+                                            margin: Default::default(),
+                                            width: makepad_draw::turtle::Size::Fit {
+                                                min: None,
+                                                max: None,
+                                            },
+                                            height: makepad_draw::turtle::Size::Fit {
+                                                min: None,
+                                                max: None,
+                                            },
+                                            metrics: Default::default(),
+                                        },
+                                        laidout,
+                                    );
+                                }
+                                LaidCellAtom::Math { math, x, y } => {
+                                    let math_y =
+                                        text_y + *y + ((row_h - math.height as f64) * 0.5).max(0.0);
+                                    for component in &math.components {
+                                        let mut layers = {
+                                            let Some(shape) =
+                                                draw_glyph_math.shape(component.shape_id)
+                                            else {
+                                                continue;
+                                            };
+                                            shape.layers.clone()
+                                        };
+                                        for layer in &mut layers {
+                                            layer.color = vec4(
+                                                tf.font_color.x,
+                                                tf.font_color.y,
+                                                tf.font_color.z,
+                                                tf.font_color.w * layer.color.w,
+                                            );
+                                        }
+                                        draw_glyph_math.draw_layers_abs(
+                                            cx,
+                                            Rect {
+                                                pos: dvec2(
+                                                    cell_origin_x + *x + component.origin.x as f64,
+                                                    math_y + component.origin.y as f64,
+                                                ),
+                                                size: dvec2(
+                                                    component.size.x as f64,
+                                                    component.size.y as f64,
+                                                ),
+                                            },
+                                            &layers,
+                                        );
+                                    }
+                                }
                             }
-                            current_x = laidout.rows.last()
-                                .map(|lr| lr.width_in_lpxs as f64)
-                                .unwrap_or(current_x);
-                            // current_x is used implicitly by the next span
-                            // via the cached laidout, which was computed in
-                            // pass 1.5 with the correct first_row_indent —
-                            // so we don't need to feed it into draw_walk_laidout
-                            // here. We still keep the variable for clarity
-                            // and symmetry with the measure pass.
-                            let _ = current_x;
                         }
                     }
                 }
@@ -2153,14 +2314,26 @@ impl Markdown {
         let mut hy = oy;
         for r in 0..rows.len().saturating_sub(1) {
             hy += row_heights[r];
-            border.draw_abs(cx, Rect { pos: dvec2(ox, hy), size: dvec2(total_w, LINE_W) });
+            border.draw_abs(
+                cx,
+                Rect {
+                    pos: dvec2(ox, hy),
+                    size: dvec2(total_w, LINE_W),
+                },
+            );
         }
 
         // Vertical separators between each column.
         let mut vx = ox;
         for c in 0..ncols.saturating_sub(1) {
             vx += col_widths[c] + CELL_PAD_H * 2.0;
-            border.draw_abs(cx, Rect { pos: dvec2(vx, oy), size: dvec2(LINE_W, total_h) });
+            border.draw_abs(
+                cx,
+                Rect {
+                    pos: dvec2(vx, oy),
+                    size: dvec2(LINE_W, total_h),
+                },
+            );
         }
     }
 }
@@ -2353,14 +2526,26 @@ mod tests {
 
     #[test]
     fn parse_image_src_http_https() {
-        assert!(matches!(parse_image_src("http://example.com/x.png"), ImageSrc::Http(_)));
-        assert!(matches!(parse_image_src("https://example.com/x.png"), ImageSrc::Http(_)));
+        assert!(matches!(
+            parse_image_src("http://example.com/x.png"),
+            ImageSrc::Http(_)
+        ));
+        assert!(matches!(
+            parse_image_src("https://example.com/x.png"),
+            ImageSrc::Http(_)
+        ));
     }
 
     #[test]
     fn parse_image_src_unknown_scheme_is_invalid() {
-        assert!(matches!(parse_image_src("gopher://old/x.png"), ImageSrc::Invalid));
-        assert!(matches!(parse_image_src("ftp://host/x.png"), ImageSrc::Invalid));
+        assert!(matches!(
+            parse_image_src("gopher://old/x.png"),
+            ImageSrc::Invalid
+        ));
+        assert!(matches!(
+            parse_image_src("ftp://host/x.png"),
+            ImageSrc::Invalid
+        ));
         assert!(matches!(parse_image_src(""), ImageSrc::Invalid));
     }
 
@@ -2386,7 +2571,10 @@ mod tests {
 
     #[test]
     fn parse_image_src_data_missing_comma_invalid() {
-        assert!(matches!(parse_image_src("data:image/png;base64"), ImageSrc::Invalid));
+        assert!(matches!(
+            parse_image_src("data:image/png;base64"),
+            ImageSrc::Invalid
+        ));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2535,11 +2723,23 @@ mod tests {
     /// — `parse_image_src` must not accidentally accept ftp/gopher as HTTP.
     #[test]
     fn m_img_2_non_http_scheme_is_invalid() {
-        assert!(matches!(parse_image_src("ftp://host/a.png"), ImageSrc::Invalid));
-        assert!(matches!(parse_image_src("gopher://old/a.png"), ImageSrc::Invalid));
+        assert!(matches!(
+            parse_image_src("ftp://host/a.png"),
+            ImageSrc::Invalid
+        ));
+        assert!(matches!(
+            parse_image_src("gopher://old/a.png"),
+            ImageSrc::Invalid
+        ));
         // And a positive control: http/https still route to Http().
-        assert!(matches!(parse_image_src("http://h/x.png"), ImageSrc::Http(_)));
-        assert!(matches!(parse_image_src("https://h/x.png"), ImageSrc::Http(_)));
+        assert!(matches!(
+            parse_image_src("http://h/x.png"),
+            ImageSrc::Http(_)
+        ));
+        assert!(matches!(
+            parse_image_src("https://h/x.png"),
+            ImageSrc::Http(_)
+        ));
     }
 
     /// Spec scenario: "Same URL across two events dedups to one request".
@@ -2598,8 +2798,10 @@ mod tests {
         let mut seen: HashMap<u64, ()> = HashMap::new();
         assert!(!seen.contains_key(&key));
         seen.insert(key, ());
-        assert!(seen.contains_key(&key),
-            "cache-hit predicate must recognise a re-rendered HTTP URL");
+        assert!(
+            seen.contains_key(&key),
+            "cache-hit predicate must recognise a re-rendered HTTP URL"
+        );
 
         // Second set_text with the same URL → same key → cache hit;
         // no mutation of pending_http needed.
@@ -2718,8 +2920,10 @@ mod tests {
     fn m_img_3_parse_produces_document() {
         let src = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect x="1" y="1" width="8" height="8"/></svg>"#;
         let doc = parse_svg(src);
-        assert!(!doc.root.is_empty(),
-            "simple svg must parse to a non-empty root");
+        assert!(
+            !doc.root.is_empty(),
+            "simple svg must parse to a non-empty root"
+        );
         // And intrinsic dims reflect the declared width/height.
         let (lw, lh) = doc.logical_size();
         assert_eq!(lw, 10.0);
@@ -2752,8 +2956,11 @@ mod tests {
         // the closed-form: a 16x16 RGBA8 raster would cost 1024 bytes,
         // which is 10x more than this SVG's raw source.)
         let raster_bytes = 16 * 16 * 4;
-        assert_ne!(raster_bytes, src.len(),
-            "raster and svg charges must not accidentally coincide");
+        assert_ne!(
+            raster_bytes,
+            src.len(),
+            "raster and svg charges must not accidentally coincide"
+        );
     }
 
     /// Spec #5: Malformed XML must fall back to the placeholder path
@@ -2769,8 +2976,10 @@ mod tests {
         // Truncated / unbalanced: no valid <svg> root found.
         let garbage = "<not-svg><broken";
         let doc = parse_svg(garbage);
-        assert!(doc.root.is_empty(),
-            "malformed XML must leave an empty doc.root (our fallback sentinel)");
+        assert!(
+            doc.root.is_empty(),
+            "malformed XML must leave an empty doc.root (our fallback sentinel)"
+        );
         // Completely empty string.
         let doc = parse_svg("");
         assert!(doc.root.is_empty());
@@ -2824,18 +3033,24 @@ mod tests {
             },
         );
         touch_lru(&mut cache.lru, key);
-        assert!(cache.entries.contains_key(&key),
-            "widget 1 should see its own insert");
+        assert!(
+            cache.entries.contains_key(&key),
+            "widget 1 should see its own insert"
+        );
 
         // Widget 2 (different simulated instance; same Cx global) reads
         // via the SAME `cache` reference — proving the Cx-global shape
         // replaces a per-widget `HashMap`. The real Cx upgrade swaps
         // the sharing mechanism but preserves this semantic.
         let seen_by_widget_2 = cache.entries.get(&key).cloned();
-        assert!(seen_by_widget_2.is_some(),
-            "widget 2 must see widget 1's insert — that's the whole point of M-img-4");
-        assert!(matches!(seen_by_widget_2.unwrap(),
-            ImageCacheEntry::Failed { .. }));
+        assert!(
+            seen_by_widget_2.is_some(),
+            "widget 2 must see widget 1's insert — that's the whole point of M-img-4"
+        );
+        assert!(matches!(
+            seen_by_widget_2.unwrap(),
+            ImageCacheEntry::Failed { .. }
+        ));
 
         // And the LRU ordering is likewise shared.
         assert_eq!(cache.lru, vec![key]);
@@ -2881,8 +3096,10 @@ mod tests {
         let pending_after = cache.pending_http.len();
 
         assert!(!decision, "Failed entry must render placeholder (false)");
-        assert_eq!(pending_before, pending_after,
-            "Failed entry must NOT trigger pending_http insert / fetch");
+        assert_eq!(
+            pending_before, pending_after,
+            "Failed entry must NOT trigger pending_http insert / fetch"
+        );
     }
 
     /// M-img-4 #3: Failed entries charge `IMAGE_FAILED_ENTRY_BYTES` and
@@ -2924,13 +3141,18 @@ mod tests {
         evict_over_cap(&mut cache, 200);
         let total_bytes: usize = cache.entries.values().map(|e| e.byte_size()).sum();
         assert!(total_bytes < 200, "eviction must honor strict-less-than");
-        assert!(cache.entries.len() <= 3,
+        assert!(
+            cache.entries.len() <= 3,
             "at 64B each under a 200B cap, at most 3 Failed entries survive, got {}",
-            cache.entries.len());
+            cache.entries.len()
+        );
 
         // Oldest keys (0, 1, ...) evicted first; newest (8, 9, ...) remain.
         let surviving: Vec<u64> = cache.lru.iter().copied().collect();
-        assert!(surviving.iter().all(|k| *k >= 7),
-            "LRU eviction must preserve newest keys, surviving = {:?}", surviving);
+        assert!(
+            surviving.iter().all(|k| *k >= 7),
+            "LRU eviction must preserve newest keys, surviving = {:?}",
+            surviving
+        );
     }
 }
