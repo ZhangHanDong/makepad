@@ -376,6 +376,26 @@ impl Agent for StatelessBackendAdapter {
                         self.pending_requests.remove(&request_id.0)
                     {
                         if let Some(session) = self.sessions.get_mut(&session_id.0) {
+                            let final_text = response
+                                .message
+                                .content
+                                .iter()
+                                .filter_map(|block| {
+                                    if let ContentBlock::Text { text } = block {
+                                        Some(text.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<String>();
+                            if !final_text.is_empty() && session.accumulated_text.is_empty() {
+                                session.accumulated_text.push_str(&final_text);
+                                agent_events.push(AgentEvent::TextDelta {
+                                    prompt_id,
+                                    text: final_text,
+                                });
+                            }
+
                             let mut tool_requests = Vec::new();
                             for block in &response.message.content {
                                 if let ContentBlock::ToolUse { id, name, input } = block {
