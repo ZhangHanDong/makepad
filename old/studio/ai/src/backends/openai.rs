@@ -127,6 +127,8 @@ impl OpenAiBackend {
         model: &str,
         reasoning_effort: &Option<String>,
         thinking: &Option<String>,
+        max_tokens_override: Option<u32>,
+        temperature_override: Option<f32>,
     ) -> String {
         let mut json = String::new();
         json.push_str("{");
@@ -138,10 +140,11 @@ impl OpenAiBackend {
         json.push_str("\"stream\":true,");
 
         // Max tokens
-        json.push_str(&format!("\"max_tokens\":{},", request.max_tokens));
+        let max_tokens = max_tokens_override.unwrap_or(request.max_tokens);
+        json.push_str(&format!("\"max_tokens\":{},", max_tokens));
 
         // Temperature
-        if let Some(temp) = request.temperature {
+        if let Some(temp) = temperature_override.or(request.temperature) {
             json.push_str(&format!("\"temperature\":{},", temp));
         }
 
@@ -263,6 +266,8 @@ impl OpenAiBackend {
             base_url,
             reasoning_effort,
             thinking,
+            max_tokens,
+            temperature,
         } = &self.config
         else {
             panic!("OpenAiBackend requires OpenAI config");
@@ -273,10 +278,11 @@ impl OpenAiBackend {
             .unwrap_or_else(|| "https://api.openai.com/v1/chat/completions".to_string());
 
         log!(
-            "OpenAI request: model={} base_url={} max_tokens={} thinking={:?} messages={}",
+            "OpenAI request: model={} base_url={} max_tokens={} temperature={:?} thinking={:?} messages={}",
             model,
             url,
-            request.max_tokens,
+            max_tokens.unwrap_or(request.max_tokens),
+            temperature.or(request.temperature),
             thinking,
             request.messages.len()
         );
@@ -288,7 +294,8 @@ impl OpenAiBackend {
             http.set_header("Authorization".to_string(), format!("Bearer {}", api_key));
         }
 
-        let body = Self::build_request_json(request, model, reasoning_effort, thinking);
+        let body =
+            Self::build_request_json(request, model, reasoning_effort, thinking, *max_tokens, *temperature);
         http.set_string_body(body);
         http
     }
@@ -626,6 +633,8 @@ mod tests {
             base_url: Some("https://api.moonshot.ai/v1/chat/completions".to_string()),
             reasoning_effort: None,
             thinking: Some("disabled".to_string()),
+            max_tokens: None,
+            temperature: None,
         });
 
         let body = String::from_utf8(backend.build_http_request(&request).body.unwrap()).unwrap();

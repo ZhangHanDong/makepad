@@ -1986,6 +1986,8 @@ impl App {
                         base_url: None,
                         reasoning_effort: None,
                         thinking: None,
+                        max_tokens: None,
+                        temperature: None,
                     },
                 )))) as Box<dyn Agent>
             }),
@@ -1998,6 +2000,15 @@ impl App {
                     .ok()
                     .filter(|mode| matches!(mode.as_str(), "enabled" | "disabled"))
                     .unwrap_or_else(|| "disabled".to_string());
+                let thinking_enabled = thinking == "enabled";
+                let max_tokens = std::env::var("MOONSHOT_MAX_TOKENS")
+                    .ok()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .or_else(|| thinking_enabled.then_some(16_000));
+                let temperature = std::env::var("MOONSHOT_TEMPERATURE")
+                    .ok()
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .or_else(|| thinking_enabled.then_some(1.0));
                 Box::new(StatelessBackendAdapter::new(Box::new(OpenAiBackend::new(
                     BackendConfig::OpenAI {
                         api_key: key,
@@ -2005,6 +2016,8 @@ impl App {
                         base_url: Some(base_url),
                         reasoning_effort: None,
                         thinking: Some(thinking),
+                        max_tokens,
+                        temperature,
                     },
                 )))) as Box<dyn Agent>
             }),
