@@ -1,13 +1,13 @@
-use makepad_widgets;
+pub use makepad_widgets_dll as makepad_widgets;
 
 use makepad_widgets::*;
+use makepad_xr::obj::Tank;
 use makepad_xr::scene::*;
+use std::fmt::Write as _;
 
 app_main!(App);
 
-const ACTIVITY_POSE_SYNC_INTERVAL_SECONDS: f64 = 0.6;
-const ACTIVITY_POSE_SYNC_POSITION_EPSILON_METERS: f32 = 0.015;
-const ACTIVITY_POSE_SYNC_ROTATION_EPSILON_DEGREES: f32 = 1.5;
+const DEBUG_VIEW_REFRESH_INTERVAL_SECONDS: f64 = 1.0;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -37,6 +37,166 @@ script_mod! {
         metallic: 0.04
     }
 
+    let TankSlot = XrNode{
+        body: mod.widgets.XrBodyKind.Dynamic
+        depth_query_support: mod.widgets.XrDepthQuerySupportRig.FourWheels
+        shared_object_policy: mod.widgets.XrSharedObjectPolicy.PooledOnDemand
+        spawn_pool: true
+        physics_size: vec3(0.29, 0.09, 0.41)
+        density: 120.0
+        friction: 1.35
+        restitution: 0.02
+        pos: vec3(-12.0, -12.0, 0.0)
+        rot: vec3(0.0, 0.0, 0.0)
+
+        tank_body_mount := XrNode{
+            body: mod.widgets.XrBodyKind.Disabled
+            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+            pos: vec3(0.0, 0.0, 0.0)
+
+            hull_block := Cube{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                size: vec3(0.28, 0.09, 0.41)
+                corner_radius: 0.03
+                roughness: 0.58
+                metallic: 0.03
+                color: #x6a8337
+            }
+
+            tank_turret_yaw := XrNode{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                pos: vec3(0.0, 0.08, 0.015)
+                turret_block := Cube{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    size: vec3(0.12, 0.07, 0.17)
+                    corner_radius: 0.026
+                    roughness: 0.44
+                    metallic: 0.02
+                    color: #x8ca853
+                }
+
+                tank_barrel_pitch := XrNode{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    pos: vec3(0.0, 0.0, 0.08)
+                    barrel_block := Cube{
+                        body: mod.widgets.XrBodyKind.Disabled
+                        shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                        pos: vec3(0.0, 0.0, 0.14)
+                        size: vec3(0.025, 0.025, 0.28)
+                        corner_radius: 0.02
+                        roughness: 0.30
+                        metallic: 0.06
+                        color: #x24291c
+                    }
+                }
+            }
+        }
+
+        tank_wheel_0 := XrNode{
+            body: mod.widgets.XrBodyKind.Disabled
+            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+            pos: vec3(-0.113, -0.045, 0.189)
+            wheel_mesh := IcoSphere{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                scale: vec3(0.44, 1.0, 1.0)
+                radius: 0.117
+                diffuse: #xc4c7ce
+                color: #x18212b
+
+                marker := Cube{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    size: vec3(0.020, 0.020, 0.020)
+                    pos: vec3(0.0, 0.072, 0.0)
+                    corner_radius: 0.006
+                    roughness: 0.22
+                    metallic: 0.06
+                    color: #xe8ebf2
+                }
+            }
+        }
+
+        tank_wheel_1 := XrNode{
+            body: mod.widgets.XrBodyKind.Disabled
+            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+            pos: vec3(-0.113, -0.045, -0.189)
+            wheel_mesh := IcoSphere{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                scale: vec3(0.44, 1.0, 1.0)
+                radius: 0.117
+                diffuse: #xc4c7ce
+                color: #x18212b
+
+                marker := Cube{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    size: vec3(0.020, 0.020, 0.020)
+                    pos: vec3(0.0, 0.072, 0.0)
+                    corner_radius: 0.006
+                    roughness: 0.22
+                    metallic: 0.06
+                    color: #xe8ebf2
+                }
+            }
+        }
+
+        tank_wheel_2 := XrNode{
+            body: mod.widgets.XrBodyKind.Disabled
+            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+            pos: vec3(0.113, -0.045, 0.189)
+            wheel_mesh := IcoSphere{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                scale: vec3(0.44, 1.0, 1.0)
+                radius: 0.117
+                diffuse: #xc4c7ce
+                color: #x18212b
+
+                marker := Cube{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    size: vec3(0.020, 0.020, 0.020)
+                    pos: vec3(0.0, 0.072, 0.0)
+                    corner_radius: 0.006
+                    roughness: 0.22
+                    metallic: 0.06
+                    color: #xe8ebf2
+                }
+            }
+        }
+
+        tank_wheel_3 := XrNode{
+            body: mod.widgets.XrBodyKind.Disabled
+            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+            pos: vec3(0.113, -0.045, -0.189)
+            wheel_mesh := IcoSphere{
+                body: mod.widgets.XrBodyKind.Disabled
+                shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                scale: vec3(0.44, 1.0, 1.0)
+                radius: 0.117
+                diffuse: #xc4c7ce
+                color: #x18212b
+
+                marker := Cube{
+                    body: mod.widgets.XrBodyKind.Disabled
+                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                    size: vec3(0.020, 0.020, 0.020)
+                    pos: vec3(0.0, 0.072, 0.0)
+                    corner_radius: 0.006
+                    roughness: 0.22
+                    metallic: 0.06
+                    color: #xe8ebf2
+                }
+            }
+        }
+    }
+
     let XrUiButton = mod.widgets.ButtonFlat{
         draw_bg +: {
             border_size: 0.0
@@ -56,8 +216,9 @@ script_mod! {
         ui:  XrRoot{
             window.inner_size: vec2(1400, 900)
             pass.clear_color: #x0b1118
-            camera.fov_y: 52.0
-            camera.distance: 1.8
+            camera.fov_y: 38.0
+            camera.desktop_target: vec3(0.05, 0.10, -0.72)
+            camera.distance: 1.85
             env.gravity: 9.8
             env.env_cube: true
             env.depth_mesh: false
@@ -309,64 +470,54 @@ script_mod! {
                     pos: vec3(0.0, -0.16, 0.0)
                     scale: vec3(0.62, 0.62, 0.62)
                     on_render: ||{
+                        tank_controller := Tank{}
+
                         Platform{
-                            pos: vec3(0.05, -0.06, -0.10)
-                            size: vec3(1.60, 0.08, 1.10)
+                            pos: vec3(0.0, -0.06, 0.0)
+                            size: vec3(0.48387095, 0.08, 0.48387095)
+                            friction: 1.8
                             color: #x283544
                         }
 
                         Cube{
                             body: mod.widgets.XrBodyKind.Fixed
-                            size: vec3(0.14, 0.12, 0.14)
-                            corner_radius: 0.02
+                            size: vec3(0.34, 0.05, 0.46)
+                            corner_radius: 0.018
                             roughness: 0.78
-                            metallic: 0.02
-                            color: #x516579
-                            pos: vec3(-0.34, 0.00, -0.26)
-                        }
-
-                        Cube{
-                            body: mod.widgets.XrBodyKind.Fixed
-                            size: vec3(0.18, 0.10, 0.18)
-                            corner_radius: 0.02
-                            roughness: 0.78
-                            metallic: 0.02
-                            color: #x516579
-                            pos: vec3(0.34, -0.01, -0.32)
-                        }
-
-                        Cube{
-                            body: mod.widgets.XrBodyKind.Fixed
-                            size: vec3(0.54, 0.08, 0.12)
-                            corner_radius: 0.018
-                            roughness: 0.82
                             metallic: 0.0
-                            color: #x1f2b37
-                            pos: vec3(0.05, -0.02, -0.48)
+                            friction: 1.6
+                            color: #x4b5f72
+                            pos: vec3(0.30, 0.01, -0.06)
+                            rot: vec3(0.24, 0.0, 0.0)
                         }
 
-                        Cube{
-                            body: mod.widgets.XrBodyKind.Fixed
-                            size: vec3(0.12, 0.16, 0.42)
-                            corner_radius: 0.018
-                            roughness: 0.80
-                            metallic: 0.0
-                            color: #x202f3d
-                            pos: vec3(-0.48, 0.02, -0.02)
+                        tank_slots := XrNode{
+                            body: mod.widgets.XrBodyKind.Disabled
+                            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                            for index in 0..8 {
+                                TankSlot{
+                                    pos: vec3(-14.0 - index * 0.7, -8.0, 0.0)
+                                }
+                            }
                         }
 
-                        Cube{
-                            body: mod.widgets.XrBodyKind.Fixed
-                            size: vec3(0.12, 0.16, 0.42)
-                            corner_radius: 0.018
-                            roughness: 0.80
-                            metallic: 0.0
-                            color: #x202f3d
-                            pos: vec3(0.58, 0.02, -0.02)
-                        }
-
-                        Tank{
-                            pos: vec3(0.05, 0.03, -0.10)
+                        tank_projectiles := XrNode{
+                            body: mod.widgets.XrBodyKind.Disabled
+                            shared_object_policy: mod.widgets.XrSharedObjectPolicy.None
+                            for index in 0..48 {
+                                IcoSphere{
+                                    spawn_pool: true
+                                    shared_object_policy: mod.widgets.XrSharedObjectPolicy.PooledOnDemand
+                                    gravity_scale: 1.0
+                                    density: 0.65
+                                    friction: 0.08
+                                    restitution: 0.01
+                                    radius: 0.024
+                                    diffuse: #xa0a4aa
+                                    color: #xffc857
+                                    pos: vec3(-12.0, -12.0 - index * 0.01, 0.0)
+                                }
+                            }
                         }
                     }
                 }
@@ -437,9 +588,12 @@ script_mod! {
                 auto_alignment_enabled: false
             }
 
+            xr_scene_sync_controller := XrSceneSyncController{}
+
             control_strip := XrView{
                 visible: false
                 show_in_non_xr: true
+                pos: vec3(0.05, 0.44, -0.78)
                 wrist_left: true
                 logical_size: vec2(1220, 700)
                 pixel_scale: 0.000215
@@ -578,9 +732,15 @@ script_mod! {
                             on_press: || ui.root.set_depth_query_hits(!ui.root.depth_query_hits_visible())
                         }
 
+                        tank_depth_mesh_mode_button := XrUiButton{
+                            width: 154
+                            text: "Tank TSDF Mode"
+                            on_press: || ui.root.toggle_depth_mesh_focus_cube()
+                        }
+
                         scene_status := Label{
                             width: Fill
-                            text: "Default scene: tank mode. Drive with the right thumbstick in head-relative screen direction, and grab the tank directly with your hands."
+                            text: "Default scene: tank mode. Left stick steers, right trigger accelerates, left trigger reverses, right stick aims the turret, A/X fire shells, B resets the tank, and controller grip picks the tank up."
                             draw_text.color: #xe8f4ff
                         }
                     }
@@ -598,22 +758,10 @@ script_mod! {
                             draw_text.color: #xe8f4ff
                         }
 
-                        depth_resolution_3_button := XrUiButton{
-                            width: 64
-                            text: "3 cm"
-                            on_press: || ui.root.set_depth_voxel_size(0.03)
-                        }
-
-                        depth_resolution_5_button := XrUiButton{
-                            width: 64
-                            text: "5 cm"
-                            on_press: || ui.root.set_depth_voxel_size(0.05)
-                        }
-
-                        depth_resolution_10_button := XrUiButton{
-                            width: 72
-                            text: "10 cm"
-                            on_press: || ui.root.set_depth_voxel_size(0.10)
+                        depth_resolution_2_button := XrUiButton{
+                            width: 94
+                            text: "2 cm fixed"
+                            on_press: || ui.root.set_depth_voxel_size(0.02)
                         }
                     }
 
@@ -682,7 +830,7 @@ script_mod! {
                                 debug_field := Label{
                                     width: Fill
                                     height: Fit
-                                    text: "Connected peers: 0"
+                                    text: "Waiting for debug stats..."
                                     draw_text.color: #xe8f4ff
                                     draw_text.flow: Flow.Right{wrap: true}
                                 }
@@ -741,7 +889,7 @@ script_mod! {
                     wrist_sync_status := Label{
                         width: Fill
                         height: Fit
-                        text: "P:0.0 C:0.0"
+                        text: "P:0.0 X:0.0"
                         draw_text.color: #xe8f4ff
                         draw_text.flow: Flow.Right{wrap: true}
                     }
@@ -758,220 +906,57 @@ pub struct App {
     #[live]
     ui: WidgetRef,
     #[rust]
-    network_started: bool,
-    #[rust]
     last_debug_text: String,
     #[rust]
-    suppress_activity_broadcast: Option<XrActivityId>,
+    last_debug_refresh_at: Option<f64>,
     #[rust]
-    pending_shared_scene_reset: bool,
+    last_wrist_perf_text: String,
     #[rust]
-    last_activity_pose_sync: Option<Pose>,
+    debug_text_scratch: String,
     #[rust]
-    last_activity_pose_sync_activity: Option<XrActivityId>,
-    #[rust]
-    last_activity_pose_sync_at: f64,
+    wrist_perf_text_scratch: String,
 }
 
 impl App {
-    fn poses_match(left: Pose, right: Pose) -> bool {
-        let translation_delta = (left.position - right.position).length();
-        let rotation_dot = left
-            .orientation
-            .dot(right.orientation)
-            .abs()
-            .clamp(0.0, 1.0);
-        let rotation_delta_degrees = (2.0 * rotation_dot.acos()).to_degrees();
-        translation_delta <= ACTIVITY_POSE_SYNC_POSITION_EPSILON_METERS
-            && rotation_delta_degrees <= ACTIVITY_POSE_SYNC_ROTATION_EPSILON_DEGREES
-    }
-
-    fn current_activity(&self, cx: &mut Cx) -> Option<XrActivityId> {
-        self.ui
-            .widget(cx, ids!(scene_select))
-            .borrow::<XrSelect>()
-            .map(|select| select.activity_id())
-    }
-
-    fn active_scene_widget(&self, cx: &mut Cx) -> Option<WidgetRef> {
-        self.ui
-            .widget(cx, ids!(scene_select))
-            .borrow::<XrSelect>()
-            .and_then(|select| select.active_child_widget_ref())
-    }
-
-    fn apply_activity(&mut self, cx: &mut Cx, activity_id: XrActivityId) -> Option<WidgetRef> {
-        self.ui
-            .widget(cx, ids!(scene_select))
-            .borrow_mut::<XrSelect>()
-            .and_then(|mut select| select.set_activity(cx, activity_id))
-    }
-
-    fn ensure_network_started(&mut self, cx: &mut Cx) {
-        if self.network_started {
-            return;
-        }
-        if let Some(mut peer_sync) = self
-            .ui
-            .widget(cx, ids!(xr_peer_sync))
-            .borrow_mut::<XrPeerSync>()
-        {
-            peer_sync.set_enabled(cx, true);
-            self.network_started = true;
-        }
-    }
-
-    fn ensure_activity_announced(&mut self, cx: &mut Cx) {
-        let Some(activity_id) = self.current_activity(cx) else {
-            return;
+    fn run_scene_sync_pre_event(&self, cx: &mut Cx, event: &Event) {
+        let controller = self.ui.widget(cx, ids!(xr_scene_sync_controller));
+        if let Some(mut controller) = controller.borrow_mut::<XrSceneSyncController>() {
+            controller.pre_ui_event(cx, event);
         };
-        if let Some(mut peer_sync) = self
-            .ui
-            .widget(cx, ids!(xr_peer_sync))
-            .borrow_mut::<XrPeerSync>()
-        {
-            if peer_sync.enabled() && peer_sync.current_activity().is_none() {
-                let _ = peer_sync.set_local_activity(cx, activity_id);
-            }
-        }
     }
 
-    fn sync_authoritative_activity_pose(&mut self, cx: &mut Cx) {
-        let Some(activity_id) = self.current_activity(cx) else {
-            self.last_activity_pose_sync = None;
-            self.last_activity_pose_sync_activity = None;
-            self.last_activity_pose_sync_at = 0.0;
-            return;
+    fn run_scene_sync_post_event(&self, cx: &mut Cx, event: &Event) {
+        let controller = self.ui.widget(cx, ids!(xr_scene_sync_controller));
+        if let Some(mut controller) = controller.borrow_mut::<XrSceneSyncController>() {
+            controller.post_ui_event(cx, event);
         };
-
-        let should_sync = self
-            .ui
-            .widget(cx, ids!(xr_peer_sync))
-            .borrow::<XrPeerSync>()
-            .is_some_and(|peer_sync| {
-                peer_sync.enabled()
-                    && peer_sync.connected_peer_count() != 0
-                    && peer_sync.local_is_activity_authority()
-            });
-        if !should_sync {
-            self.last_activity_pose_sync = None;
-            self.last_activity_pose_sync_activity = None;
-            self.last_activity_pose_sync_at = 0.0;
-            return;
-        }
-
-        let Some(content_pose) = self.ui.borrow::<XrRoot>().and_then(|root| root.content_pose()) else {
-            return;
-        };
-        let now = Cx::time_now();
-        let activity_changed = self.last_activity_pose_sync_activity != Some(activity_id);
-        let pose_changed = self
-            .last_activity_pose_sync
-            .is_none_or(|previous| !Self::poses_match(previous, content_pose));
-        let interval_elapsed = now - self.last_activity_pose_sync_at
-            >= ACTIVITY_POSE_SYNC_INTERVAL_SECONDS;
-        if !(activity_changed || pose_changed || interval_elapsed) {
-            return;
-        }
-
-        if let Some(mut peer_sync) = self
-            .ui
-            .widget(cx, ids!(xr_peer_sync))
-            .borrow_mut::<XrPeerSync>()
-        {
-            if peer_sync.send_activity_pose_reset(content_pose) {
-                self.last_activity_pose_sync = Some(content_pose);
-                self.last_activity_pose_sync_activity = Some(activity_id);
-                self.last_activity_pose_sync_at = now;
-            }
-        }
     }
 
-    fn refresh_spawnable_registry(&mut self, cx: &mut Cx, force: bool) {
-        let Some(activity_id) = self.current_activity(cx) else {
-            return;
+    fn run_tank_pre_event(&self, cx: &mut Cx, event: &Event) {
+        let tank = self.ui.widget(cx, ids!(tank_controller));
+        if let Some(mut tank) = tank.borrow_mut::<Tank>() {
+            tank.pre_ui_event(cx, event);
         };
-        let peer_sync_widget = self.ui.widget(cx, ids!(xr_peer_sync));
-        let should_refresh = force
-            || peer_sync_widget
-                .borrow::<XrPeerSync>()
-                .is_some_and(|peer_sync| peer_sync.spawnable_activity() != Some(activity_id));
-        if !should_refresh {
-            if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                peer_sync.flush_pending_shared_object_controls(cx);
-            }
-            return;
-        }
-        let Some(scene_widget) = self.active_scene_widget(cx) else {
-            return;
-        };
-        let bindings = collect_scene_spawnable_objects(activity_id, &scene_widget);
-        {
-            if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                peer_sync.set_spawnable_objects(activity_id, bindings);
-                peer_sync.flush_pending_shared_object_controls(cx);
-            };
-        }
     }
 
-    fn apply_remote_body_spawn(&mut self, cx: &mut Cx, spawn: XrBodySpawn) {
-        if let Some(mut root) = self.ui.borrow_mut::<XrRoot>() {
-            root.spawn_body(cx, spawn);
-        }
-    }
-
-    fn apply_remote_body_despawn(&mut self, cx: &mut Cx, widget_uid: WidgetUid) {
-        if let Some(mut root) = self.ui.borrow_mut::<XrRoot>() {
-            root.despawn_body(cx, widget_uid);
-        }
-    }
-
-    fn apply_body_impulse(&mut self, cx: &mut Cx, impulse: XrBodyImpulse) {
-        if let Some(mut root) = self.ui.borrow_mut::<XrRoot>() {
-            root.apply_body_impulse(cx, impulse);
-        }
-    }
-
-    fn publish_local_shared_object_states(&mut self, cx: &mut Cx) {
-        let runtime_bodies = self.ui.borrow::<XrRoot>().map(|root| root.runtime_bodies());
-        let Some(runtime_bodies) = runtime_bodies else {
-            return;
+    fn run_tank_post_event(&self, cx: &mut Cx) {
+        let tank = self.ui.widget(cx, ids!(tank_controller));
+        if let Some(mut tank) = tank.borrow_mut::<Tank>() {
+            tank.post_ui_event(cx);
         };
-        let peer_sync_widget = self.ui.widget(cx, ids!(xr_peer_sync));
-        let maybe_peer_sync = peer_sync_widget.borrow_mut::<XrPeerSync>();
-        if let Some(mut peer_sync) = maybe_peer_sync {
-            peer_sync.publish_local_shared_object_states(cx, runtime_bodies.as_ref());
-        }
-    }
-
-    fn apply_pending_shared_scene_reset(&mut self, cx: &mut Cx) {
-        if !self.pending_shared_scene_reset {
-            return;
-        }
-        let runtime_bodies = self.ui.borrow::<XrRoot>().map(|root| root.runtime_bodies());
-        let Some(runtime_bodies) = runtime_bodies else {
-            return;
-        };
-        if runtime_bodies.is_empty() {
-            return;
-        }
-        let reset_applied = {
-            let peer_sync_widget = self.ui.widget(cx, ids!(xr_peer_sync));
-            let reset_applied =
-                if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                    peer_sync.reset_local_shared_bootstrap_objects(runtime_bodies.as_ref());
-                    true
-                } else {
-                    false
-                };
-            reset_applied
-        };
-        if reset_applied {
-            self.pending_shared_scene_reset = false;
-        }
     }
 
     fn refresh_debug_fields(&mut self, cx: &mut Cx) {
+        let now = Cx::time_now();
+        if self
+            .last_debug_refresh_at
+            .is_some_and(|last| now - last < DEBUG_VIEW_REFRESH_INTERVAL_SECONDS)
+        {
+            return;
+        }
+        self.last_debug_refresh_at = Some(now);
+
+        let mut draw_top_children_text = String::new();
         let (
             surface_count,
             compute_ms,
@@ -980,6 +965,27 @@ impl App {
             frame_cpu_ms,
             frame_update_cpu_ms,
             frame_draw_cpu_ms,
+            draw_setup_cpu_ms,
+            draw_env_prepare_cpu_ms,
+            draw_sort_cpu_ms,
+            draw_children_cpu_ms,
+            draw_child_count,
+            draw_transparent_child_count,
+            draw_runtime_body_count,
+            draw_geometry_pool_slots,
+            draw_geometry_pool_live,
+            draw_draw_list_pool_slots,
+            draw_draw_list_pool_live,
+            draw_texture_pool_slots,
+            draw_texture_pool_live,
+            draw_depth_mesh_chunk_count,
+            draw_recycled_depth_mesh_geometry_count,
+            draw_depth_mesh_pending_upsert_count,
+            draw_depth_query_retained_hit_count,
+            xr_frame_cpu_ms,
+            xr_render_cpu_ms,
+            xr_depth_readback_cpu_ms,
+            xr_frame_cpu_breakdown,
         ) = if let Some(root) = self.ui.borrow::<XrRoot>() {
             (
                 root.physics_depth_query_surface_count(),
@@ -989,15 +995,39 @@ impl App {
                 root.frame_cpu_ms(),
                 root.frame_update_cpu_ms(),
                 root.frame_draw_cpu_ms(),
+                root.draw_setup_cpu_ms(),
+                root.draw_env_prepare_cpu_ms(),
+                root.draw_sort_cpu_ms(),
+                root.draw_children_cpu_ms(),
+                root.draw_child_count(),
+                root.draw_transparent_child_count(),
+                root.draw_runtime_body_count(),
+                root.draw_geometry_pool_slots(),
+                root.draw_geometry_pool_live(),
+                root.draw_draw_list_pool_slots(),
+                root.draw_draw_list_pool_live(),
+                root.draw_texture_pool_slots(),
+                root.draw_texture_pool_live(),
+                root.draw_depth_mesh_chunk_count(),
+                root.draw_recycled_depth_mesh_geometry_count(),
+                root.draw_depth_mesh_pending_upsert_count(),
+                root.draw_depth_query_retained_hit_count(),
+                cx.xr_frame_cpu_time_ms(),
+                cx.xr_render_cpu_time_ms(),
+                cx.xr_depth_readback_cpu_time_ms(),
+                cx.xr_frame_cpu_breakdown(),
             )
         } else {
             return;
         };
+        if let Some(root) = self.ui.borrow::<XrRoot>() {
+            root.write_draw_top_children_text(&mut draw_top_children_text);
+        }
         let connected_peers = self
             .ui
             .widget(cx, ids!(xr_peer_sync))
             .borrow::<XrPeerSync>()
-            .map(|peer_sync| {
+            .map(|peer_sync| { 
                 (
                     peer_sync.connected_peer_count(),
                     peer_sync.shared_object_count(),
@@ -1040,8 +1070,94 @@ impl App {
             .xr_gpu_frame_time_ms()
             .map(|gpu_ms| format!("{gpu_ms:.2} ms"))
             .unwrap_or_else(|| "waiting".to_string());
-        let debug_text = format!(
-            "Connected peers: {}\nShared objects: {}\n{}\n{}\n{}\n{}\n{}\n{}\nPhysics planes: {surface_count}\nPhysics compute time: {compute_ms:.2} ms\nQuery time: {query_ms:.2} ms\nRapier time: {rapier_ms:.2} ms\nCPU frame time: {frame_cpu_ms:.2} ms\nUpdate time: {frame_update_cpu_ms:.2} ms\nDraw time: {frame_draw_cpu_ms:.2} ms\nTSDF size: {tsdf_memory_mb:.1} MB\nDepth frames kept: {depth_frames_kept}\nGPU time: {gpu_time_text}",
+        let xr_frame_cpu_text = xr_frame_cpu_ms
+            .map(|cpu_ms| format!("{cpu_ms:.2} ms"))
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_render_cpu_text = xr_render_cpu_ms
+            .map(|cpu_ms| format!("{cpu_ms:.2} ms"))
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_depth_readback_cpu_text = xr_depth_readback_cpu_ms
+            .map(|cpu_ms| format!("{cpu_ms:.2} ms"))
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_begin_chain = xr_frame_cpu_breakdown
+            .map(|cpu| {
+                format!(
+                    "wait {:.2} > begin {:.2} > loc-space {:.2} > loc-views {:.2} > acq {:.2} > wait-img {:.2} > acq-depth {:.2}",
+                    cpu.wait_frame_ms,
+                    cpu.begin_frame_ms,
+                    cpu.locate_space_ms,
+                    cpu.locate_views_ms,
+                    cpu.acquire_swapchain_ms,
+                    cpu.wait_swapchain_ms,
+                    cpu.acquire_depth_ms,
+                )
+            })
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_work_chain = xr_frame_cpu_breakdown
+            .map(|cpu| {
+                format!(
+                    "prep {:.2} > xr {:.2} > next {:.2} > draw {:.2} > shaders {:.2} > repaint {:.2} > readback {:.2} > end {:.2} > resize {:.2} > total {:.2}",
+                    cpu.update_prepare_ms,
+                    cpu.update_dispatch_ms,
+                    cpu.next_frame_ms,
+                    cpu.draw_event_ms,
+                    cpu.compile_shaders_ms,
+                    cpu.repaint_ms,
+                    cpu.depth_readback_ms,
+                    cpu.end_frame_ms,
+                    cpu.resize_projection_ms,
+                    cpu.total_ms,
+                )
+            })
+            .unwrap_or_else(|| "waiting".to_string());
+        let bytes_to_mb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+        let xr_repaint_chain = xr_frame_cpu_breakdown
+            .map(|cpu| {
+                format!(
+                    "wait-fence {:.2} > prep-tex {:.2} > record {:.2} > submit {:.2}",
+                    cpu.repaint_wait_inflight_ms,
+                    cpu.repaint_prepare_textures_ms,
+                    cpu.repaint_record_draw_ms,
+                    cpu.repaint_submit_ms,
+                )
+            })
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_repaint_uploads = xr_frame_cpu_breakdown
+            .map(|cpu| {
+                format!(
+                    "tex {:.2} MB/{} > packet {:.2} MB/{} > geom {:.2} MB > desc {}",
+                    bytes_to_mb(cpu.repaint_texture_upload_bytes),
+                    cpu.repaint_texture_upload_count,
+                    bytes_to_mb(cpu.repaint_packet_buffer_bytes),
+                    cpu.repaint_packet_buffer_count,
+                    bytes_to_mb(cpu.repaint_geometry_upload_bytes),
+                    cpu.repaint_descriptor_set_count,
+                )
+            })
+            .unwrap_or_else(|| "waiting".to_string());
+        let xr_repaint_draw = xr_frame_cpu_breakdown
+            .map(|cpu| {
+                format!(
+                    "items {} > calls {} > packets {} > instances {} > indices {}",
+                    cpu.repaint_draw_items,
+                    cpu.repaint_draw_calls,
+                    cpu.repaint_packets,
+                    cpu.repaint_instances,
+                    cpu.repaint_indices,
+                )
+            })
+            .unwrap_or_else(|| "waiting".to_string());
+        let mut gamepad_count = 0usize;
+        for state in cx.game_input_states() {
+            let GameInputState::Gamepad(_gamepad) = state else {
+                continue;
+            };
+            gamepad_count += 1;
+        }
+        self.debug_text_scratch.clear();
+        let _ = write!(
+            &mut self.debug_text_scratch,
+            "OpenXR frame CPU: {xr_frame_cpu_text}\nOpenXR begin chain: {xr_begin_chain}\nOpenXR work chain: {xr_work_chain}\nOpenXR repaint chain: {xr_repaint_chain}\nOpenXR repaint uploads: {xr_repaint_uploads}\nOpenXR repaint draw: {xr_repaint_draw}\nVulkan XR render CPU: {xr_render_cpu_text}\nDepth readback CPU: {xr_depth_readback_cpu_text}\nUI frame CPU: {frame_cpu_ms:.2} ms\nUI update time: {frame_update_cpu_ms:.2} ms\nUI draw time: {frame_draw_cpu_ms:.2} ms\nUI draw chain: setup {draw_setup_cpu_ms:.2} > env {draw_env_prepare_cpu_ms:.2} > sort {draw_sort_cpu_ms:.2} > children {draw_children_cpu_ms:.2}\nUI top children: {draw_top_children_text}\nUI draw state: children {draw_child_count}/{draw_transparent_child_count} runtime-bodies {draw_runtime_body_count}\nUI pool state: geom {draw_geometry_pool_live}/{draw_geometry_pool_slots} > lists {draw_draw_list_pool_live}/{draw_draw_list_pool_slots} > tex {draw_texture_pool_live}/{draw_texture_pool_slots}\nUI depth state: chunks {draw_depth_mesh_chunk_count} recycled-geoms {draw_recycled_depth_mesh_geometry_count} pending-upserts {draw_depth_mesh_pending_upsert_count} retained-hits {draw_depth_query_retained_hit_count}\nPhysics planes: {surface_count}\nPhysics compute time: {compute_ms:.2} ms\nQuery time: {query_ms:.2} ms\nRapier time: {rapier_ms:.2} ms\nTSDF size: {tsdf_memory_mb:.1} MB\nDepth frames kept: {depth_frames_kept}\nGPU time: {gpu_time_text}\nGamepads: {gamepad_count}\nConnected peers: {}\nShared objects: {}\n{}\n{}\n{}\n{}\n{}\n{}",
             connected_peers.0,
             connected_peers.1,
             connected_peers.2,
@@ -1051,152 +1167,27 @@ impl App {
             connected_peers.6,
             connected_peers.7,
         );
-        if self.last_debug_text != debug_text {
+        if self.last_debug_text != self.debug_text_scratch {
             self.ui
                 .widget(cx, ids!(debug_field))
-                .set_text(cx, &debug_text);
-            self.last_debug_text = debug_text;
+                .set_text(cx, &self.debug_text_scratch);
+            self.last_debug_text.clear();
+            self.last_debug_text.push_str(&self.debug_text_scratch);
         }
-        let wrist_perf_text = format!(
-            "P:{:.1} C:{:.1}",
+        self.wrist_perf_text_scratch.clear();
+        let _ = write!(
+            &mut self.wrist_perf_text_scratch,
+            "P:{:.1} X:{:.1}",
             compute_ms + query_ms + rapier_ms,
-            frame_cpu_ms,
+            xr_frame_cpu_ms.unwrap_or(frame_cpu_ms),
         );
-        self.ui
-            .widget(cx, ids!(wrist_sync_status))
-            .set_text(cx, &wrist_perf_text);
-    }
-}
-
-impl MatchEvent for App {
-    fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        let root_uid = self.ui.widget_uid();
-        let scene_select_uid = self.ui.widget(cx, ids!(scene_select)).widget_uid();
-        let peer_sync_widget = self.ui.widget(cx, ids!(xr_peer_sync));
-        let peer_sync_uid = peer_sync_widget.widget_uid();
-
-        let mut remote_activity = None;
-        let mut remote_body_spawns = Vec::new();
-        let mut remote_body_impulses = Vec::new();
-        let mut remote_body_despawns = Vec::new();
-        let mut remote_activity_pose_reset = None;
-        let mut local_activity = None;
-        let mut local_body_spawns = Vec::new();
-        let mut local_activity_pose_reset = None;
-        let mut scene_changed = false;
-
-        for action in actions {
-            let Some(widget_action) = action.as_widget_action() else {
-                continue;
-            };
-            if widget_action.widget_uid == peer_sync_uid {
-                match widget_action.cast::<XrPeerSyncAction>() {
-                    XrPeerSyncAction::ActivityChanged(activity_id) => {
-                        remote_activity = Some(activity_id);
-                    }
-                    XrPeerSyncAction::ActivityPoseReset(pose) => {
-                        remote_activity_pose_reset = Some(pose);
-                    }
-                    XrPeerSyncAction::BodySpawn(spawn) => {
-                        remote_body_spawns.push(spawn);
-                    }
-                    XrPeerSyncAction::BodyImpulse(impulse) => {
-                        remote_body_impulses.push(impulse);
-                    }
-                    XrPeerSyncAction::BodyDespawn(widget_uid) => {
-                        remote_body_despawns.push(widget_uid);
-                    }
-                    XrPeerSyncAction::None => {}
-                }
-            }
-            if widget_action.widget_uid == root_uid
-            {
-                match widget_action.cast::<XrRootAction>() {
-                    XrRootAction::PhysicsReset => {
-                        self.pending_shared_scene_reset = true;
-                    }
-                    XrRootAction::ContentPoseReset(pose) => {
-                        local_activity_pose_reset = Some(pose);
-                    }
-                    XrRootAction::None => {}
-                }
-            }
-            if widget_action.widget_uid == scene_select_uid {
-                if let XrSelectAction::ActiveChildChanged(activity_id) =
-                    widget_action.cast::<XrSelectAction>()
-                {
-                    local_activity = Some(activity_id);
-                }
-            }
-            if let Some(body_spawn) = widget_action.action.downcast_ref::<XrBodySpawn>() {
-                local_body_spawns.push(*body_spawn);
-            }
-            if matches!(
-                widget_action.cast::<XrNodeAction>(),
-                XrNodeAction::SceneChanged
-            ) {
-                scene_changed = true;
-            }
-        }
-
-        if scene_changed {
-            self.refresh_spawnable_registry(cx, true);
-        }
-
-        if let Some(activity_id) = remote_activity {
-            if self.current_activity(cx) != Some(activity_id) {
-                self.suppress_activity_broadcast = Some(activity_id);
-                if self.apply_activity(cx, activity_id).is_none() {
-                    self.suppress_activity_broadcast = None;
-                }
-            }
-            self.refresh_spawnable_registry(cx, true);
-        }
-
-        if let Some(activity_id) = local_activity {
-            self.refresh_spawnable_registry(cx, true);
-            if self.suppress_activity_broadcast == Some(activity_id) {
-                self.suppress_activity_broadcast = None;
-            } else if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                let _ = peer_sync.set_local_activity(cx, activity_id);
-            }
-        }
-
-        if let Some(pose) = remote_activity_pose_reset {
-            if let Some(mut root) = self.ui.borrow_mut::<XrRoot>() {
-                root.set_content_pose(cx, pose);
-            }
-            self.pending_shared_scene_reset = true;
-        }
-
-        if let Some(pose) = local_activity_pose_reset {
-            self.pending_shared_scene_reset = true;
-            if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                let _ = peer_sync.send_activity_pose_reset(pose);
-            }
-        }
-
-        for widget_uid in remote_body_despawns {
-            self.apply_remote_body_despawn(cx, widget_uid);
-        }
-
-        for spawn in remote_body_spawns {
-            self.apply_remote_body_spawn(cx, spawn);
-        }
-
-        for impulse in remote_body_impulses {
-            self.apply_body_impulse(cx, impulse);
-        }
-
-        if !local_body_spawns.is_empty() {
-            self.refresh_spawnable_registry(cx, false);
-            if let Some(mut peer_sync) = peer_sync_widget.borrow_mut::<XrPeerSync>() {
-                for spawn in local_body_spawns {
-                    if let Some(spawn) = peer_sync.send_local_body_spawn(spawn) {
-                        self.apply_remote_body_spawn(cx, spawn);
-                    }
-                }
-            }
+        if self.last_wrist_perf_text != self.wrist_perf_text_scratch {
+            self.ui
+                .widget(cx, ids!(wrist_sync_status))
+                .set_text(cx, &self.wrist_perf_text_scratch);
+            self.last_wrist_perf_text.clear();
+            self.last_wrist_perf_text
+                .push_str(&self.wrist_perf_text_scratch);
         }
     }
 }
@@ -1209,20 +1200,11 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
-        self.match_event(cx, event);
+        self.run_scene_sync_pre_event(cx, event);
+        self.run_tank_pre_event(cx, event);
         self.ui.handle_event(cx, event, &mut Scope::empty());
-        if matches!(event, Event::Startup) {
-            self.ensure_network_started(cx);
-        }
-        self.ensure_activity_announced(cx);
-        self.sync_authoritative_activity_pose(cx);
-        self.refresh_spawnable_registry(cx, false);
-        self.apply_pending_shared_scene_reset(cx);
-        if matches!(event, Event::XrUpdate(_))
-            || (matches!(event, Event::NextFrame(_)) && !cx.in_xr_mode())
-        {
-            self.publish_local_shared_object_states(cx);
-        }
+        self.run_tank_post_event(cx);
+        self.run_scene_sync_post_event(cx, event);
         self.refresh_debug_fields(cx);
     }
 }

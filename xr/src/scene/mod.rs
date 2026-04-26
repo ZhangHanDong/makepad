@@ -12,13 +12,19 @@ pub mod xr_peer_sync {
     pub use crate::sync::xr_peer_sync::*;
 }
 
+pub mod xr_scene_sync_controller {
+    pub use crate::sync::xr_scene_sync_controller::*;
+}
+
 pub(crate) use xr_gesture::{
     arm_pair_metrics, flat_head_forward, hand_closed_fist_contact_point,
     hand_closed_fist_contact_point_geometry_only,
 };
 
 pub use crate::net::{XrActivityId, XrSpawnableObjectId};
-pub use xr_body_spawn::{XrBodyImpulse, XrBodySpawn};
+pub use crate::sync::xr_peer_sync::{XrPeerSync, XrPeerSyncAction};
+pub use crate::sync::xr_scene_sync_controller::XrSceneSyncController;
+pub use xr_body_spawn::{XrBodyDrive, XrBodyImpulse, XrBodySpawn, XrBodyWrench, XrCarControl};
 pub use xr_env::{DrawDepthMeshBasic, XrEnv};
 pub use xr_node::{
     xr_draw_list_depth, xr_sort_child_draw_order, xr_widget_children, xr_widget_is_transparent,
@@ -26,8 +32,8 @@ pub use xr_node::{
     XrDrawContext, XrDrawScopeData, XrHandInfluencePoint, XrNode, XrNodeAction,
     XrPassthroughScopeData, XrPhysicsShape, XrRenderClass, XrRuntimeBodyState,
     XrSharedObjectPolicy, XR_HAND_INFLUENCE_POINTS_PER_HAND, XR_HAND_INFLUENCE_POINT_COUNT,
+    XR_RUNTIME_LINKED_SUPPORT_BODY_COUNT,
 };
-pub use crate::sync::xr_peer_sync::{XrPeerSync, XrPeerSyncAction};
 pub use xr_permissions_flow::XrPermissionsFlow;
 pub use xr_root::{XrCamera, XrRoot, XrRootAction};
 pub use xr_select::{XrSelect, XrSelectAction};

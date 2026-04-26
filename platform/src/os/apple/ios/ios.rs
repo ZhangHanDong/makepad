@@ -10,6 +10,7 @@ use {
                 VideoSeekableRangesEvent, VideoSource, VideoTextureUpdatedEvent,
                 VideoYuvTexturesReady,
             },
+            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
         },
         makepad_live_id::*,
@@ -426,7 +427,7 @@ impl Cx {
                     self.draw_pass(*draw_pass_id, metal_cx, DrawPassMode::MTKView(mtk_view));
 
                     // Draw popup window passes as overlays on the same MTKView
-                    for popup_pass_id in &passes_todo.clone() {
+                    for popup_pass_id in &passes_todo {
                         if let CxDrawPassParent::Window(pw_id) = self.passes[*popup_pass_id].parent
                         {
                             let pw = &self.windows[pw_id];
@@ -742,6 +743,39 @@ impl Cx {
                 } else {
                     panic!()
                 };
+
+                // Synthesize internal drag-and-drop events from touch gestures.
+                if self.os.internal_drag_items.is_some() {
+                    if let Some(touch) = e.touches.iter().find(|t| {
+                        t.state == crate::event::TouchState::Stop
+                    }) {
+                        if let Some(items) = self.os.internal_drag_items.take() {
+                            self.call_event_handler(&Event::Drop(DropEvent {
+                                modifiers: e.modifiers.clone(),
+                                handled: Arc::new(Mutex::new(false)),
+                                abs: touch.abs,
+                                items,
+                            }));
+                            self.drag_drop.cycle_drag();
+                            self.call_event_handler(&Event::DragEnd);
+                            self.drag_drop.cycle_drag();
+                        }
+                    } else if let Some(touch) = e.touches.iter().find(|t| {
+                        t.state == crate::event::TouchState::Move
+                    }) {
+                        if let Some(items) = self.os.internal_drag_items.as_ref() {
+                            self.call_event_handler(&Event::Drag(DragEvent {
+                                modifiers: e.modifiers.clone(),
+                                handled: Arc::new(Mutex::new(false)),
+                                abs: touch.abs,
+                                items: items.clone(),
+                                response: Arc::new(Mutex::new(DragResponse::None)),
+                            }));
+                            self.drag_drop.cycle_drag();
+                        }
+                    }
+                }
+
                 self.fingers.process_touch_update_end(&e.touches);
             }
             IosEvent::LongPress(e) => {
@@ -798,12 +832,14 @@ impl Cx {
             }
         }
 
-        // If a script re-apply was requested (e.g., safe area insets changed
-        // on rotation), fire LiveEdit now that all event handlers have returned.
-        if self.pending_script_reapply {
-            self.pending_script_reapply = false;
-            self.call_event_handler(&Event::LiveEdit);
-            self.redraw_all();
+        // After every event, drain any pending re-apply. The cheap gate
+        // (both flags false) keeps the hot path zero-cost; everything
+        // else — picking the right `Event` variant for each flag,
+        // skipping shader-cache reset for manual triggers, deferring a
+        // same-tick `ScriptReapply` follow-up to keep rotation light —
+        // is documented in `run_live_edit_if_needed`.
+        if self.pending_script_reapply || self.pending_live_edit_request {
+            self.run_live_edit_if_needed("ios");
         }
 
         if self.any_passes_dirty()
@@ -919,10 +955,10 @@ impl Cx {
                 }
                 CxOsOp::AccessibilityUpdate(_) => {}
                 CxOsOp::FullscreenWindow(_window_id) => {
-                    with_ios_app(|app| app.set_fullscreen(true));
+                    IosApp::set_fullscreen(true);
                 }
                 CxOsOp::NormalizeWindow(_window_id) => {
-                    with_ios_app(|app| app.set_fullscreen(false));
+                    IosApp::set_fullscreen(false);
                 }
                 CxOsOp::SetCursor(_) => {
                     // no need
@@ -965,18 +1001,20 @@ impl Cx {
                     visible,
                 } => {
                     let rect = area.clipped_rect(self);
-                    with_ios_app(|app| {
-                        let Some(mtk_view) = app.mtk_view else {
-                            return;
-                        };
+                    // Extract mtk_view inside a short borrow, then do UIKit
+                    // view hierarchy ops outside — addSubview/removeFromSuperview/
+                    // setFrame can trigger layout callbacks that re-enter IOS_APP.
+                    let mtk_view = with_ios_app(|app| app.mtk_view);
+                    if let Some(mtk_view) = mtk_view {
                         let host_view: ObjcId = unsafe { msg_send![mtk_view, superview] };
-                        if host_view == nil {
-                            return;
+                        if host_view != nil {
+                            if let Some(browser) =
+                                self.os.system_browsers.get_mut(&browser_id)
+                            {
+                                browser.update(host_view, rect, visible);
+                            }
                         }
-                        if let Some(browser) = self.os.system_browsers.get_mut(&browser_id) {
-                            browser.update(host_view, rect, visible);
-                        }
-                    });
+                    }
                 }
                 CxOsOp::DetachSystemBrowser { browser_id } => {
                     if let Some(browser) = self.os.system_browsers.get_mut(&browser_id) {
@@ -1246,6 +1284,9 @@ impl Cx {
                         window.popup_position = None;
                         window.popup_size = None;
                     }
+                }
+                CxOsOp::StartDragging(items) => {
+                    self.os.internal_drag_items = Some(Arc::new(items));
                 }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
@@ -1536,6 +1577,7 @@ pub struct CxOs {
     pub(crate) camera_players: HashMap<LiveId, IosCameraPlayer>,
     pub(crate) native_camera_previews: HashMap<LiveId, IosNativeCameraPreview>,
     pub(crate) system_browsers: HashMap<LiveId, IosSystemBrowser>,
+    pub(crate) internal_drag_items: Option<Arc<Vec<DragItem>>>,
 }
 
 pub struct PermissionResultChannel {

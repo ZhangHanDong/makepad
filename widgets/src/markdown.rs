@@ -1,13 +1,7 @@
 use crate::{
-    image::{ImageRef, ImageWidgetRefExt},
-    link_label::LinkLabel,
-    makepad_derive_widget::*,
-    makepad_draw::*,
-    math_view::{compile_math_into, CompiledMath},
-    text_flow::TextFlow,
-    widget::*,
-    widget_async::ScriptAsyncResult,
-    WidgetMatchEvent,
+    image::{ImageRef, ImageWidgetRefExt}, link_label::LinkLabel, makepad_derive_widget::*,
+    makepad_draw::*, math_view::{compile_math_into, CompiledMath}, text_flow::TextFlow, widget::*,
+    widget_async::ScriptAsyncResult, WidgetMatchEvent,
 };
 
 // SVG types (M-img-3). `parse_svg` is zero-deps XML parser; `SvgDocument` is
@@ -756,50 +750,10 @@ script_mod! {
             quote_fg_color: theme.color_label_inner
             code_color: theme.color_bg_highlight
             selection_color: theme.color_selection_focus
+            table_header_bg_color: theme.color_bg_highlight
+            table_border_color: theme.color_shadow
             space_1: uniform(theme.space_1)
             space_2: uniform(theme.space_2)
-
-            pixel: fn() {
-                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                match self.block_type {
-                    FlowBlockType.Quote => {
-                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
-                        sdf.fill(self.quote_bg_color)
-                        sdf.box(self.space_1 self.space_1 self.space_1 self.rect_size.y-self.space_2 1.5)
-                        sdf.fill(self.quote_fg_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Sep => {
-                        sdf.box(0. 1. self.rect_size.x-1. self.rect_size.y-2. 2.)
-                        sdf.fill(self.sep_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Code => {
-                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
-                        sdf.fill(self.code_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.InlineCode => {
-                        sdf.box(1. 1. self.rect_size.x-2. self.rect_size.y-2. 2.)
-                        sdf.fill(self.code_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Underline => {
-                        sdf.box(0. self.rect_size.y-2. self.rect_size.x 2.0 0.5)
-                        sdf.fill(self.line_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Strikethrough => {
-                        sdf.box(0. self.rect_size.y * 0.45 self.rect_size.x 2.0 0.5)
-                        sdf.fill(self.line_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Selection => {
-                        return vec4(self.selection_color.rgb * self.selection_color.a, self.selection_color.a)
-                    }
-                }
-                return #f00
-            }
         }
 
         link := mod.widgets.MarkdownLink{}
@@ -1126,7 +1080,6 @@ impl Markdown {
         // Track state for nested formatting
         let mut list_stack: Vec<ListState> = Vec::new();
         let mut is_first_block = true;
-
         let parser = Parser::new_ext(
             self.body.as_ref(),
             Options::ENABLE_TABLES | Options::ENABLE_MATH,
@@ -1643,6 +1596,30 @@ impl Markdown {
                 MdEvent::End(TagEnd::TableCell) => {
                     self.table_current_row
                         .push(std::mem::take(&mut self.table_current_cell));
+                }
+                MdEvent::InlineHtml(text) => {
+                    // Support a handful of inline HTML tags that have no
+                    // CommonMark equivalent. Anything not matched is ignored,
+                    // matching the pre-existing behavior.
+                    match text.trim().to_ascii_lowercase().as_str() {
+                        "<sub>" => {
+                            tf.push_size_rel_scale(0.7);
+                            tf.y_shift_scales.push(0.55);
+                        }
+                        "</sub>" => {
+                            tf.font_sizes.pop();
+                            tf.y_shift_scales.pop();
+                        }
+                        "<sup>" => {
+                            tf.push_size_rel_scale(0.7);
+                            tf.y_shift_scales.push(-0.2);
+                        }
+                        "</sup>" => {
+                            tf.font_sizes.pop();
+                            tf.y_shift_scales.pop();
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {} // Unimplemented or unnecessary events
             }

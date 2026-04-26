@@ -11,8 +11,7 @@ use {
         event::keyboard::CharOffset,
         event::xr::XrAnchor,
         event::{
-            video_playback::CameraPreviewMode, DragItem, NextFrame, Timer, Trigger,
-            VideoSource,
+            video_playback::CameraPreviewMode, DragItem, NextFrame, Timer, Trigger, VideoSource,
         },
         gpu_info::GpuInfo,
         ime::TextInputConfig,
@@ -45,6 +44,42 @@ pub enum CxThreadPriority {
     Utility,
     Background,
     Idle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct XrFrameCpuBreakdown {
+    pub total_ms: f64,
+    pub wait_frame_ms: f64,
+    pub begin_frame_ms: f64,
+    pub locate_space_ms: f64,
+    pub locate_views_ms: f64,
+    pub acquire_swapchain_ms: f64,
+    pub wait_swapchain_ms: f64,
+    pub acquire_depth_ms: f64,
+    pub update_prepare_ms: f64,
+    pub update_dispatch_ms: f64,
+    pub next_frame_ms: f64,
+    pub draw_event_ms: f64,
+    pub compile_shaders_ms: f64,
+    pub repaint_ms: f64,
+    pub repaint_wait_inflight_ms: f64,
+    pub repaint_prepare_textures_ms: f64,
+    pub repaint_record_draw_ms: f64,
+    pub repaint_submit_ms: f64,
+    pub repaint_texture_upload_count: u32,
+    pub repaint_texture_upload_bytes: u64,
+    pub repaint_packet_buffer_count: u32,
+    pub repaint_packet_buffer_bytes: u64,
+    pub repaint_geometry_upload_bytes: u64,
+    pub repaint_descriptor_set_count: u32,
+    pub repaint_draw_items: u64,
+    pub repaint_draw_calls: u64,
+    pub repaint_packets: u64,
+    pub repaint_instances: u64,
+    pub repaint_indices: u64,
+    pub depth_readback_ms: f64,
+    pub end_frame_ms: f64,
+    pub resize_projection_ms: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -150,6 +185,22 @@ pub trait CxOsApi {
     }
 
     fn xr_gpu_frame_time_ms(&self) -> Option<f64> {
+        None
+    }
+
+    fn xr_frame_cpu_time_ms(&self) -> Option<f64> {
+        None
+    }
+
+    fn xr_render_cpu_time_ms(&self) -> Option<f64> {
+        None
+    }
+
+    fn xr_depth_readback_cpu_time_ms(&self) -> Option<f64> {
+        None
+    }
+
+    fn xr_frame_cpu_breakdown(&self) -> Option<XrFrameCpuBreakdown> {
         None
     }
 
@@ -340,6 +391,7 @@ pub enum CxOsOp {
     XrStartPresenting,
     XrSetRenderScale(f32),
     XrSetLocalAnchor(XrAnchor),
+    XrSetLocalFloor(f32),
     XrAdvertiseAnchor(XrAnchor),
     XrDiscoverAnchor(u8),
     XrStopPresenting,
@@ -425,6 +477,7 @@ impl std::fmt::Debug for CxOsOp {
             Self::XrStopPresenting => write!(f, "XrStopPresenting"),
             Self::XrAdvertiseAnchor(_) => write!(f, "XrAdvertiseAnchor"),
             Self::XrSetLocalAnchor(_) => write!(f, "XrSetLocalAnchor"),
+            Self::XrSetLocalFloor(_) => write!(f, "XrSetLocalFloor"),
             Self::XrDiscoverAnchor(_) => write!(f, "XrDiscoverAnchor"),
         }
     }
@@ -434,14 +487,33 @@ impl Cx {
         self.in_draw_event
     }
 
-    /// Updates the `mod.widgets.SAFE_INSET_PAD_*` values on the script heap
-    /// so that Splash code can reference them in widget definitions.
-    /// Requests a deferred re-application of all script/Splash widget definitions,
-    /// causing widgets to pick up updated values from the script heap.
-    /// The re-apply happens on the next event loop iteration (not synchronously),
-    /// to avoid re-entrancy issues when called from within an event handler.
+    /// Requests a deferred `Event::ScriptReapply` on the next event-loop
+    /// iteration. The captured app value is re-applied with
+    /// `Apply::ScriptReapply` — no `script_mod` re-run, so runtime
+    /// `script_eval!` overrides on the heap are preserved. Widgets that
+    /// reference shared heap objects (e.g. `mod.widgets.IMG_MSG_FIT`) pick
+    /// up in-place mutations on this re-apply walk.
+    ///
+    /// Use this when the change you made is a runtime mutation of a shared
+    /// heap object — typically a `script_eval!` override.
     pub fn request_script_reapply(&mut self) {
         self.pending_script_reapply = true;
+    }
+
+    /// Requests a deferred `Event::LiveEdit` on the next event-loop iteration.
+    /// The handler re-runs `script_mod` (re-evaluating any expressions that
+    /// reference primitive heap values like `mod.widgets.SAFE_INSET_PAD_TOP`)
+    /// and then re-applies the widget tree with `Apply::Reload`.
+    ///
+    /// Use this only when a primitive heap value has changed and that value
+    /// is consumed by `script_mod!` block expressions — those expressions are
+    /// not re-evaluated by `Apply::ScriptReapply`. `Apply::Reload` walks
+    /// clobber runtime widget state (animator values, dynamic instance
+    /// buffers, user-typed text in widgets that don't early-return on
+    /// LiveEdit), so prefer `request_script_reapply` when the change can be
+    /// modeled as a shared-heap-object mutation instead.
+    pub fn request_live_edit(&mut self) {
+        self.pending_live_edit_request = true;
     }
 
     pub fn update_safe_inset_script_values(&mut self, insets: crate::event::SafeAreaInsets) {
@@ -450,10 +522,30 @@ impl Cx {
             return;
         };
         let widgets = vm.heap.module(id!(widgets));
-        vm.heap.set_value(widgets, id!(SAFE_INSET_PAD_TOP).into(), insets.top.into(), NoTrap);
-        vm.heap.set_value(widgets, id!(SAFE_INSET_PAD_BOTTOM).into(), insets.bottom.into(), NoTrap);
-        vm.heap.set_value(widgets, id!(SAFE_INSET_PAD_LEFT).into(), insets.left.into(), NoTrap);
-        vm.heap.set_value(widgets, id!(SAFE_INSET_PAD_RIGHT).into(), insets.right.into(), NoTrap);
+        vm.heap.set_value(
+            widgets,
+            id!(SAFE_INSET_PAD_TOP).into(),
+            insets.top.into(),
+            NoTrap,
+        );
+        vm.heap.set_value(
+            widgets,
+            id!(SAFE_INSET_PAD_BOTTOM).into(),
+            insets.bottom.into(),
+            NoTrap,
+        );
+        vm.heap.set_value(
+            widgets,
+            id!(SAFE_INSET_PAD_LEFT).into(),
+            insets.left.into(),
+            NoTrap,
+        );
+        vm.heap.set_value(
+            widgets,
+            id!(SAFE_INSET_PAD_RIGHT).into(),
+            insets.right.into(),
+            NoTrap,
+        );
     }
 
     pub fn xr_capabilities(&self) -> &XrCapabilities {
@@ -472,12 +564,52 @@ impl Cx {
         <Self as CxOsApi>::xr_gpu_frame_time_ms(self)
     }
 
+    pub fn xr_frame_cpu_time_ms(&self) -> Option<f64> {
+        <Self as CxOsApi>::xr_frame_cpu_time_ms(self)
+    }
+
+    pub fn xr_render_cpu_time_ms(&self) -> Option<f64> {
+        <Self as CxOsApi>::xr_render_cpu_time_ms(self)
+    }
+
+    pub fn xr_depth_readback_cpu_time_ms(&self) -> Option<f64> {
+        <Self as CxOsApi>::xr_depth_readback_cpu_time_ms(self)
+    }
+
+    pub fn xr_frame_cpu_breakdown(&self) -> Option<XrFrameCpuBreakdown> {
+        <Self as CxOsApi>::xr_frame_cpu_breakdown(self)
+    }
+
     pub fn xr_display_refresh_rate_hz(&self) -> Option<f64> {
         <Self as CxOsApi>::xr_display_refresh_rate_hz(self)
     }
 
     pub fn xr_effective_frame_rate_hz(&self) -> Option<f64> {
         <Self as CxOsApi>::xr_effective_frame_rate_hz(self)
+    }
+
+    pub fn geometry_pool_slot_count(&self) -> usize {
+        self.geometries.0.slot_count()
+    }
+
+    pub fn geometry_pool_live_count(&self) -> usize {
+        self.geometries.0.live_count()
+    }
+
+    pub fn draw_list_pool_slot_count(&self) -> usize {
+        self.draw_lists.0.slot_count()
+    }
+
+    pub fn draw_list_pool_live_count(&self) -> usize {
+        self.draw_lists.0.live_count()
+    }
+
+    pub fn texture_pool_slot_count(&self) -> usize {
+        self.textures.0.slot_count()
+    }
+
+    pub fn texture_pool_live_count(&self) -> usize {
+        self.textures.0.live_count()
     }
 
     pub fn set_thread_priority(priority: CxThreadPriority) {
@@ -667,6 +799,10 @@ impl Cx {
 
     pub fn xr_set_local_anchor(&mut self, anchor: XrAnchor) {
         self.platform_ops.push(CxOsOp::XrSetLocalAnchor(anchor));
+    }
+
+    pub fn xr_set_local_floor(&mut self, floor_y: f32) {
+        self.platform_ops.push(CxOsOp::XrSetLocalFloor(floor_y));
     }
 
     pub fn xr_discover_anchor(&mut self, id: u8) {

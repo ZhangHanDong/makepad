@@ -580,10 +580,74 @@ impl Cx {
     }
 
     pub(crate) fn run_live_edit_if_needed(&mut self, _backend: &str) {
-        if self.handle_live_edit() {
-            self.draw_shaders.reset_for_live_reload();
-            self.call_event_handler(&Event::LiveEdit);
-            self.redraw_all();
+        // Three independent triggers, fanning out to two events. The
+        // critical distinction between FileChange and Manual is whether
+        // we follow LiveEdit up with an immediate ScriptReapply pass in
+        // the SAME tick — manual triggers (rotation) defer it to the next
+        // tick to keep each tick's work bounded, since rotation can fire
+        // multiple WindowGeomChange events back-to-back during the
+        // animation and each Apply walk over the full widget tree is
+        // non-trivial on mobile hardware.
+        //
+        // 1. `LiveEditTrigger::FileChange` — file watcher delivered a
+        //    hot-reloaded `script_mod!` block (or studio websocket sent
+        //    a `LiveChange`). The DSL itself changed; shader caches may
+        //    be stale, so `reset_for_live_reload` runs. Any preference
+        //    re-broadcast in the LiveEdit handler propagates immediately
+        //    via the same-tick `ScriptReapply` follow-up — file changes
+        //    are a live-coding scenario where the user wants to see the
+        //    update right away.
+        //
+        // 2. `LiveEditTrigger::Manual` — `cx.request_live_edit()` was
+        //    called (canonical case: safe-area insets changed on iOS
+        //    rotation, where `mod.widgets.SAFE_INSET_PAD_*` heap
+        //    primitives need to be re-baked into `script_mod!` block
+        //    expressions). The DSL did NOT change; we skip
+        //    `reset_for_live_reload` (no shader code changed), and we
+        //    skip the immediate ScriptReapply follow-up — if the
+        //    LiveEdit handler set `pending_script_reapply` (e.g. robrix
+        //    re-broadcasting preferences), it lands on the next event-
+        //    loop tick. Without this split, rotation incurred a visible
+        //    1-2s lag from doing two full Apply walks per geom change.
+        //
+        // 3. `LiveEditTrigger::None` + `pending_script_reapply` — set by
+        //    `cx.request_script_reapply()` after runtime mutations to a
+        //    *shared* heap *object* (`script_eval!` overriding
+        //    `mod.widgets.IMG_MSG_FIT.max`, etc.). Re-running script_mod
+        //    would clobber those overrides; we fire `Event::ScriptReapply`
+        //    which re-applies the captured `app_value` with
+        //    `Apply::ScriptReapply` — no script_mod re-run, runtime
+        //    overrides preserved, imperative-setter fields early-return.
+        use crate::live_reload::LiveEditTrigger;
+        match self.handle_live_edit() {
+            LiveEditTrigger::FileChange => {
+                self.draw_shaders.reset_for_live_reload();
+                self.pending_script_reapply = false;
+                self.call_event_handler(&Event::LiveEdit);
+                self.redraw_all();
+                if self.pending_script_reapply {
+                    self.pending_script_reapply = false;
+                    self.call_event_handler(&Event::ScriptReapply);
+                    self.redraw_all();
+                }
+            }
+            LiveEditTrigger::Manual => {
+                // Clear `pending_script_reapply` defensively — LiveEdit's
+                // script_mod re-run clobbers heap overrides anyway, and an
+                // app-level handler that re-broadcasts (e.g. robrix's
+                // `broadcast_all`) sets a fresh flag that lands on the
+                // next tick.
+                self.pending_script_reapply = false;
+                self.call_event_handler(&Event::LiveEdit);
+                self.redraw_all();
+            }
+            LiveEditTrigger::None => {
+                if self.pending_script_reapply {
+                    self.pending_script_reapply = false;
+                    self.call_event_handler(&Event::ScriptReapply);
+                    self.redraw_all();
+                }
+            }
         }
     }
 

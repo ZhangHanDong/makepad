@@ -2,6 +2,7 @@ use {
     crate::{
         animator::AnimatorImpl,
         event::{TouchState, TAP_COUNT_DISTANCE},
+        flat_list::WidgetItem,
         makepad_derive_widget::*,
         makepad_draw::*,
         scroll_bar::{ScrollAxis, ScrollBar, ScrollBarAction},
@@ -109,12 +110,6 @@ impl ListDrawState {
     fn is_down_again(&self) -> bool {
         matches!(self, Self::DownAgain { .. })
     }
-}
-
-#[derive(Default)]
-struct WidgetItem {
-    widget: WidgetRef,
-    template: LiveId,
 }
 
 struct AlignItem {
@@ -449,7 +444,7 @@ pub struct PortalList {
     #[rust]
     items: ComponentMap<usize, WidgetItem>,
     #[rust]
-    reusable_items: Vec<WidgetItem>,
+    reusable_items: HashMap<LiveId, Vec<WidgetItem>>,
 
     #[rust(ScrollState::Stopped)]
     scroll_state: ScrollState,
@@ -593,8 +588,7 @@ impl PortalList {
                 // `last_item_pos` far short of the viewport bottom. Without
                 // this guard, `at_end` could become a false positive whenever
                 // a zero-size item appears in the middle of the visible range.
-                let drew_last_item = last_drawn_index
-                    == Some(self.range_end.saturating_sub(1));
+                let drew_last_item = last_drawn_index == Some(self.range_end.saturating_sub(1));
 
                 if list[0].index == self.range_start {
                     let mut total = 0.0;
@@ -807,8 +801,8 @@ impl PortalList {
             let selection_range = self.get_selection_range();
             if self.reuse_items {
                 let reusable_items = &mut self.reusable_items;
-                self.items.retain_visible_with(|v| {
-                    reusable_items.push(v);
+                self.items.retain_visible_with(|v: WidgetItem| {
+                    reusable_items.entry(v.template).or_default().push(v);
                 });
             } else if let Some((start, end)) = selection_range {
                 self.items
@@ -1091,12 +1085,12 @@ impl PortalList {
                     if occ.get().template == template {
                         (occ.get().widget.clone(), true)
                     } else {
-                        let widget_ref = if let Some(pos) = self
+                        let widget_ref = if let Some(reused) = self
                             .reusable_items
-                            .iter()
-                            .position(|v| v.template == template)
+                            .get_mut(&template)
+                            .and_then(|pool| pool.pop())
                         {
-                            let widget_ref = self.reusable_items.remove(pos).widget;
+                            let widget_ref = reused.widget;
                             // Reused items must be reset to template defaults, otherwise
                             // stale instance/animator state (e.g. selected) can leak to a new entry.
                             cx.with_vm(|vm| {
@@ -1125,12 +1119,12 @@ impl PortalList {
                     }
                 }
                 Entry::Vacant(vac) => {
-                    let widget_ref = if let Some(pos) = self
+                    let widget_ref = if let Some(reused) = self
                         .reusable_items
-                        .iter()
-                        .position(|v| v.template == template)
+                        .get_mut(&template)
+                        .and_then(|pool| pool.pop())
                     {
-                        let widget_ref = self.reusable_items.remove(pos).widget;
+                        let widget_ref = reused.widget;
                         // Reused items must be reset to template defaults, otherwise
                         // stale instance/animator state (e.g. selected) can leak to a new entry.
                         cx.with_vm(|vm| {
@@ -1169,6 +1163,13 @@ impl PortalList {
         self.items
             .get(&entry_id)
             .map(|item| (item.template, item.widget.clone()))
+    }
+
+    /// Returns the current in-use items in this PortalList, keyed by entry id.
+    ///
+    /// This excludes widgets in the reusable pool.
+    pub fn items(&self) -> &ComponentMap<usize, WidgetItem> {
+        &self.items
     }
 
     pub fn set_item_range(&mut self, cx: &mut Cx, range_start: usize, range_end: usize) {
@@ -1341,10 +1342,18 @@ impl PortalList {
         // When first_scroll is very negative, items with target_id > first_id
         // can still be above the viewport.
         let scroll_direction: f64 = if let Some(item_top) = item_top {
-            if item_top < 0.0 { 1.0 } else { -1.0 }
+            if item_top < 0.0 {
+                1.0
+            } else {
+                -1.0
+            }
         } else {
             // Height tree unavailable; fall back to index comparison.
-            if target_id > self.first_id { -1.0 } else { 1.0 }
+            if target_id > self.first_id {
+                -1.0
+            } else {
+                1.0
+            }
         };
 
         let starting_id: Option<usize>;
@@ -1799,10 +1808,22 @@ impl Widget for PortalList {
         );
         if self.suppress_child_events || is_scroll_animating {
             match event {
-                Event::TouchUpdate(_) | Event::MouseDown(_)
-                | Event::MouseMove(_) | Event::MouseUp(_) => {
+                // Suppress in-progress interactions so children don't react to
+                // a gesture that the list is handling as part of a "scroll" action.
+                Event::MouseDown(_) | Event::MouseMove(_) => {
                     pass_through_to_children = false;
                 }
+                // Don't suppress touch events if a touch-stop occurred (finger was released).
+                // Without this, a child widget in this list that captured `FingerDown`
+                // (e.g. a button that has been pressed/hovered) will never see the FingerUp,
+                // meaning it'll get stuck in that old pressed/hovered state.
+                Event::TouchUpdate(e) => {
+                    let has_release = e.touches.iter().any(|t| matches!(t.state, TouchState::Stop));
+                    if !has_release {
+                        pass_through_to_children = false;
+                    }
+                }
+                // Note: MouseUp should pass through just like "touch stop" (finger releases) above.
                 _ => {}
             }
         }
@@ -1945,7 +1966,8 @@ impl Widget for PortalList {
                             self.first_id = target_id;
                         }
 
-                        if let ScrollState::ScrollingTo { next_frame, .. } = &mut self.scroll_state {
+                        if let ScrollState::ScrollingTo { next_frame, .. } = &mut self.scroll_state
+                        {
                             *next_frame = cx.new_next_frame();
                         }
                         self.delta_top_scroll(cx, delta_val, true, false);
@@ -2209,8 +2231,9 @@ impl Widget for PortalList {
                             self.update_item_selections(cx);
                         }
                     } else {
-                        // Don't override cursor when over interactive items (they set their own)
-                        if !self.point_hits_interactive_item(cx, e.abs) {
+                        // Only update cursor for mouse — skip the expensive
+                        // interactive-widget hit test for touch events entirely.
+                        if !e.device.is_touch() && !self.point_hits_interactive_item(cx, e.abs) {
                             cx.set_cursor(MouseCursor::Default);
                         }
                         if let ScrollState::Drag {
@@ -2223,9 +2246,7 @@ impl Widget for PortalList {
 
                             // Check if the drag threshold has been exceeded.
                             if !*committed {
-                                if (new_abs - *initial_abs).abs()
-                                    >= self.drag_scroll_threshold
-                                {
+                                if (new_abs - *initial_abs).abs() >= self.drag_scroll_threshold {
                                     *committed = true;
                                     self.suppress_child_events = true;
                                 } else {
@@ -2298,8 +2319,7 @@ impl Widget for PortalList {
                                 }
                             }
                             scaled_delta *= self.flick_scroll_scaling;
-                            if self.first_id == self.range_start && self.first_scroll > 0.0
-                            {
+                            if self.first_id == self.range_start && self.first_scroll > 0.0 {
                                 self.scroll_state = ScrollState::Pulldown {
                                     next_frame: cx.new_next_frame(),
                                 };

@@ -4,7 +4,8 @@ use crate::makepad_draw::text::{
     selection::{Cursor, Selection},
 };
 use crate::{
-    animator::*, makepad_derive_widget::*, makepad_draw::*, widget::*, widget_tree::CxWidgetExt,
+    animator::*, makepad_derive_widget::*, makepad_draw::shader::draw_text::TextOverflow,
+    makepad_draw::*, widget::*, widget_tree::CxWidgetExt,
 };
 use std::rc::Rc;
 
@@ -24,9 +25,78 @@ script_mod! {
         quote_bg_color: #222
         quote_fg_color: #aaa
         selection_color: #FF5C3966
+        table_header_bg_color: #FFFFFF22
+        table_border_color: #666
 
         space_1: uniform(4.0)
         space_2: uniform(8.0)
+
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            match self.block_type {
+                FlowBlockType.Quote => {
+                    sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
+                    sdf.fill(self.quote_bg_color)
+                    sdf.box(self.space_1 self.space_1 self.space_1 self.rect_size.y-self.space_2 1.5)
+                    sdf.fill(self.quote_fg_color)
+                    return sdf.result
+                }
+                FlowBlockType.Sep => {
+                    sdf.box(0. 1. self.rect_size.x-1. self.rect_size.y-2. 2.)
+                    sdf.fill(self.sep_color)
+                    return sdf.result
+                }
+                FlowBlockType.Code => {
+                    sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
+                    sdf.fill(self.code_color)
+                    return sdf.result
+                }
+                FlowBlockType.InlineCode => {
+                    sdf.box(1. 1. self.rect_size.x-2. self.rect_size.y-2. 2.)
+                    sdf.fill(self.code_color)
+                    return sdf.result
+                }
+                FlowBlockType.Underline => {
+                    sdf.box(0. self.rect_size.y-2. self.rect_size.x 2.0 0.5)
+                    sdf.fill(self.line_color)
+                    return sdf.result
+                }
+                FlowBlockType.Strikethrough => {
+                    sdf.box(0. self.rect_size.y * 0.45 self.rect_size.x 2.0 0.5)
+                    sdf.fill(self.line_color)
+                    return sdf.result
+                }
+                FlowBlockType.Selection => {
+                    return vec4(self.selection_color.rgb * self.selection_color.a, self.selection_color.a)
+                }
+                FlowBlockType.TableCell => {
+                    sdf.rect(0. 0. self.rect_size.x self.rect_size.y)
+                    sdf.fill(self.table_header_bg_color)
+                    // Draw the right/bottom 1px borders as hard-edged
+                    // lines rather than SDF rects, so they stay crisp and
+                    // fully opaque on low-DPI screens where a 1px SDF rect
+                    // gets AA'd across both edges and fades.
+                    //
+                    // Match whichever pixel actually sits in the rightmost
+                    // column / bottom row of the rasterized rect (pos > size - 1)
+                    // rather than a floor-snapped position. Cell dimensions
+                    // can be fractional (total table width isn't always a
+                    // multiple of the column count), and in that case the
+                    // last shaded pixel's local pos exceeds floor(size) by
+                    // a fraction — so floor-snapping would either leave a
+                    // seam at that pixel (gap) or place the line inside,
+                    // leaving a stub past the junction.
+                    let pos = self.pos * self.rect_size
+                    if pos.x > self.rect_size.x - 1.0
+                        || pos.y > self.rect_size.y - 1.0
+                    {
+                        return self.table_border_color
+                    }
+                    return sdf.result
+                }
+            }
+            return #f00
+        }
     }
 
     mod.widgets.FlowBlockType = FlowBlockType
@@ -145,6 +215,15 @@ script_mod! {
             margin: theme.mspace_v_1
         }
 
+        table_walk: Walk{width: Fill, height: Fit}
+        table_layout: Layout{flow: Flow.Down}
+        table_row_walk: Walk{width: Fill, height: Fit}
+        table_row_layout: Layout{flow: Flow.Right}
+        table_cell_layout: Layout{
+            flow: Flow.Right{wrap: true}
+            padding: Inset{left: 6, right: 6, top: 4, bottom: 4}
+        }
+
         link := mod.widgets.TextFlowLink{}
 
         draw_block +: {
@@ -154,49 +233,10 @@ script_mod! {
             quote_fg_color: theme.color_text
             code_color: theme.color_bg_highlight
             selection_color: theme.color_selection_focus
+            table_header_bg_color: theme.color_bg_highlight
+            table_border_color: theme.color_shadow
             space_1: uniform(theme.space_1)
             space_2: uniform(theme.space_2)
-            pixel: fn() {
-                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                match self.block_type {
-                    FlowBlockType.Quote => {
-                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
-                        sdf.fill(self.quote_bg_color)
-                        sdf.box(self.space_1 self.space_1 self.space_1 self.rect_size.y-self.space_2 1.5)
-                        sdf.fill(self.quote_fg_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Sep => {
-                        sdf.box(0. 1. self.rect_size.x-1. self.rect_size.y-2. 2.)
-                        sdf.fill(self.sep_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Code => {
-                        sdf.box(0. 0. self.rect_size.x self.rect_size.y 2.)
-                        sdf.fill(self.code_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.InlineCode => {
-                        sdf.box(1. 1. self.rect_size.x-2. self.rect_size.y-2. 2.)
-                        sdf.fill(self.code_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Underline => {
-                        sdf.box(0. self.rect_size.y-2. self.rect_size.x 2.0 0.5)
-                        sdf.fill(self.line_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Strikethrough => {
-                        sdf.box(0. self.rect_size.y * 0.45 self.rect_size.x 2.0 0.5)
-                        sdf.fill(self.line_color)
-                        return sdf.result
-                    }
-                    FlowBlockType.Selection => {
-                        return vec4(self.selection_color.rgb * self.selection_color.a, self.selection_color.a)
-                    }
-                }
-                return #f00
-            }
         }
     }
 }
@@ -212,6 +252,7 @@ pub enum FlowBlockType {
     Underline = 5,
     Strikethrough = 6,
     Selection = 7,
+    TableCell = 8,
 }
 
 #[derive(Script, ScriptHook)]
@@ -231,6 +272,10 @@ pub struct DrawFlowBlock {
     pub quote_fg_color: Vec4f,
     #[live]
     pub selection_color: Vec4f,
+    #[live]
+    pub table_header_bg_color: Vec4f,
+    #[live]
+    pub table_border_color: Vec4f,
     #[live]
     pub block_type: FlowBlockType,
 }
@@ -583,6 +628,14 @@ pub struct TextFlow {
     /// The default font color used for all text if not otherwise specified.
     #[live]
     pub font_color: Vec4f,
+
+    /// Maximum number of lines to display. 0 means unlimited (default).
+    /// Combined with `text_overflow: Ellipsis`, truncated text shows "…".
+    #[live(0usize)]
+    pub max_lines: usize,
+    /// Controls how text overflow is handled when text exceeds the container.
+    #[live]
+    pub text_overflow: TextOverflow,
     #[walk]
     walk: Walk,
 
@@ -590,6 +643,11 @@ pub struct TextFlow {
     area_stack: SmallVec<[Area; 4]>,
     #[rust]
     pub font_sizes: SmallVec<[f32; 8]>,
+    /// Per-run vertical baseline shifts, in multiples of the run's font size.
+    /// Positive values shift glyphs down; negative values shift them up.
+    /// Used to render `<sub>` / `<sup>` at a raised or lowered baseline.
+    #[rust]
+    pub y_shift_scales: SmallVec<[f32; 4]>,
     #[rust]
     pub font_colors: SmallVec<[Vec4f; 8]>,
     #[rust]
@@ -613,6 +671,13 @@ pub struct TextFlow {
     pub item_counter: u64,
     #[rust]
     pub first_thing_on_a_line: bool,
+    /// Number of visual lines drawn so far (across all text runs).
+    /// Used for widget-level `max_lines` tracking in rich text.
+    #[rust]
+    lines_drawn: usize,
+    /// Set when `lines_drawn >= max_lines`; further text draws are skipped.
+    #[rust]
+    content_truncated: bool,
 
     #[rust]
     pub areas_tracker: RectAreasTracker,
@@ -637,6 +702,33 @@ pub struct TextFlow {
     /// The spacing (in pixels) between the list item marker and the content text.
     #[live(5.0)]
     list_item_marker_pad: f64,
+
+    #[live]
+    table_walk: Walk,
+    #[live]
+    table_layout: Layout,
+    #[live]
+    table_row_walk: Walk,
+    #[live]
+    table_row_layout: Layout,
+    #[live]
+    table_cell_layout: Layout,
+    #[rust]
+    pub table_num_columns: usize,
+    /// Horizontal text alignment applied by the layouter within the
+    /// currently active table cell. Set by `begin_table_cell`, cleared
+    /// by `end_table_cell`. Outside a cell it is always 0.0 (left).
+    #[rust]
+    pub cell_text_align_x: f64,
+    #[rust]
+    pub in_table_header: bool,
+    #[rust]
+    table_row_cell_rects: Vec<Rect>,
+    #[rust]
+    pub table_row_is_header: bool,
+    #[rust]
+    table_is_first_row: bool,
+
     #[live]
     pub inline_code_padding: Inset,
     #[live]
@@ -919,7 +1011,7 @@ impl Widget for TextFlow {
                 }
                 // Update shader directly and request redraw for the area
                 self.draw_text.set_total_chars(cx, self.animated_chars);
-                self.draw_text.draw_vars.area.redraw(cx);
+                self.draw_text.redraw_areas(cx);
             }
 
             // Keep animation alive if streaming or not done fading
@@ -1012,7 +1104,10 @@ impl TextFlow {
         cx.begin_turtle(walk, self.layout);
         self.draw_state.set(DrawState::Drawing);
         self.draw_block.append_to_draw_call(cx);
+        self.draw_text.begin_deferred_slug_flush();
         self.clear_stacks();
+        self.lines_drawn = 0;
+        self.content_truncated = false;
         if self.selectable {
             self.selection_tracker.clear();
             self.widget_text_entries.clear();
@@ -1047,11 +1142,18 @@ impl TextFlow {
         self.strikethrough.clear();
         self.inline_code.clear();
         self.font_sizes.clear();
+        self.y_shift_scales.clear();
         self.font_colors.clear();
         self.area_stack.clear();
         self.combine_spaces.clear();
         self.ignore_newlines.clear();
         self.first_thing_on_a_line = true;
+        self.table_num_columns = 0;
+        self.in_table_header = false;
+        self.table_row_cell_rects.clear();
+        self.table_row_is_header = false;
+        self.table_is_first_row = false;
+        self.cell_text_align_x = 0.0;
     }
 
     pub fn push_size_rel_scale(&mut self, scale: f64) {
@@ -1064,6 +1166,8 @@ impl TextFlow {
     }
 
     pub fn end(&mut self, cx: &mut Cx2d) {
+        self.draw_text.end_deferred_slug_flush(cx);
+
         // Draw selection highlight before finishing the turtle
         self.draw_selection_rects(cx);
 
@@ -1368,6 +1472,114 @@ impl TextFlow {
         }
     }
 
+    pub fn begin_table(&mut self, cx: &mut Cx2d, num_columns: usize) {
+        self.table_num_columns = num_columns;
+        self.table_is_first_row = true;
+        cx.begin_turtle(self.table_walk, self.table_layout);
+    }
+
+    pub fn end_table(&mut self, cx: &mut Cx2d) {
+        cx.end_turtle();
+        self.table_num_columns = 0;
+        self.in_table_header = false;
+        if self.selectable {
+            self.selection_tracker.push_newline();
+        }
+    }
+
+    pub fn begin_table_header_row(&mut self, cx: &mut Cx2d) {
+        self.in_table_header = true;
+        self.table_row_is_header = true;
+        self.table_row_cell_rects.clear();
+        cx.begin_turtle(self.table_row_walk, self.table_row_layout);
+    }
+
+    pub fn begin_table_row(&mut self, cx: &mut Cx2d) {
+        self.table_row_is_header = false;
+        self.table_row_cell_rects.clear();
+        cx.begin_turtle(self.table_row_walk, self.table_row_layout);
+    }
+
+    pub fn end_table_row(&mut self, cx: &mut Cx2d) {
+        let row_rect = cx.end_turtle();
+        self.draw_row_cell_borders(cx, row_rect);
+        if self.selectable {
+            self.selection_tracker.push_newline();
+        }
+    }
+
+    /// Draw cell borders/backgrounds after the row has been laid out,
+    /// so all cells use the row's height for uniform borders.
+    fn draw_row_cell_borders(&mut self, cx: &mut Cx2d, row_rect: Rect) {
+        let row_height = row_rect.size.y;
+        let is_first_row = self.table_is_first_row;
+        let cell_count = self.table_row_cell_rects.len();
+        let saved_bg = self.draw_block.table_header_bg_color;
+        let transparent = Vec4f::default();
+        self.draw_block.block_type = FlowBlockType::TableCell;
+
+        for i in 0..cell_count {
+            let cell_rect = self.table_row_cell_rects[i];
+
+            self.draw_block.table_header_bg_color = if self.table_row_is_header {
+                saved_bg
+            } else {
+                transparent
+            };
+            self.draw_block.draw_abs(cx, Rect {
+                pos: cell_rect.pos,
+                size: dvec2(cell_rect.size.x, row_height),
+            });
+
+            if is_first_row {
+                self.draw_block.table_header_bg_color = transparent;
+                self.draw_block.draw_abs(cx, Rect {
+                    pos: cell_rect.pos,
+                    size: dvec2(cell_rect.size.x, 1.0),
+                });
+            }
+
+            if i == 0 {
+                self.draw_block.table_header_bg_color = transparent;
+                self.draw_block.draw_abs(cx, Rect {
+                    pos: cell_rect.pos,
+                    size: dvec2(1.0, row_height),
+                });
+            }
+        }
+        self.draw_block.table_header_bg_color = saved_bg;
+        self.table_is_first_row = false;
+    }
+
+    /// Begin a table cell with horizontal alignment of its contents.
+    ///
+    /// `align_x` follows `Layout::align.x` semantics: 0.0 = left, 0.5 = center,
+    /// 1.0 = right. For wrapped multi-row content, the whole content block is
+    /// shifted by the same amount (not aligned per-row).
+    pub fn begin_table_cell(&mut self, cx: &mut Cx2d, align_x: f64) {
+        let cell_width = if self.table_num_columns > 0 {
+            cx.turtle().inner_width() / self.table_num_columns as f64
+        } else {
+            100.0
+        };
+        let walk = Walk {
+            width: Size::Fixed(cell_width),
+            height: Size::Fit { min: None, max: None },
+            ..Walk::default()
+        };
+        let mut layout = self.table_cell_layout;
+        layout.align.x = align_x;
+        cx.begin_turtle(walk, layout);
+        self.first_thing_on_a_line = true;
+        self.cell_text_align_x = align_x;
+    }
+
+    pub fn end_table_cell(&mut self, cx: &mut Cx2d) {
+        let cell_rect = cx.end_turtle();
+        self.table_row_cell_rects.push(cell_rect);
+        self.cell_text_align_x = 0.0;
+    }
+
     pub fn draw_item_counted(&mut self, cx: &mut Cx2d, template: LiveId) -> LiveId {
         let entry_id = self.new_counted_id();
         let start_pos = if self.selectable {
@@ -1558,6 +1770,11 @@ impl TextFlow {
 
     pub fn draw_text(&mut self, cx: &mut Cx2d, text: &str) {
         if let Some(DrawState::Drawing) = self.draw_state.get() {
+            // If we've already exceeded max_lines, skip all further text.
+            if self.content_truncated {
+                return;
+            }
+
             if (text == " " || text == "") && self.first_thing_on_a_line {
                 return;
             }
@@ -1589,7 +1806,42 @@ impl TextFlow {
             let font_color = self.font_colors.last().unwrap_or(&self.font_color);
             self.draw_text.text_style.font_size = *font_size as _;
             self.draw_text.color = *font_color;
-            self.draw_text.temp_y_shift = top_drop;
+
+            let y_shift_scale = self.y_shift_scales.last().copied().unwrap_or(0.0);
+            self.draw_text.temp_y_shift = top_drop + y_shift_scale;
+            self.draw_text.layout_align = Align {
+                x: self.cell_text_align_x,
+                y: 0.0,
+            };
+
+            // Widget-level max_lines: compute how many layouter rows this run
+            // is allowed. A "continuation" run starts mid-line (turtle x > left
+            // edge), so its first row shares the current visual line.
+            let is_continuation = if self.max_lines > 0 {
+                let turtle_pos = cx.turtle().pos();
+                let turtle_rect = cx.turtle().inner_rect();
+                (turtle_pos.x - turtle_rect.pos.x) > 0.5
+            } else {
+                false
+            };
+
+            if self.max_lines > 0 {
+                let remaining_new_lines = self.max_lines.saturating_sub(self.lines_drawn);
+                if remaining_new_lines == 0 && !is_continuation {
+                    // No visual lines left and this run would start a new one.
+                    self.content_truncated = true;
+                    return;
+                }
+                // Continuation runs get +1 because their first row doesn't
+                // consume a new visual line (it shares the current one).
+                let run_max_rows = remaining_new_lines + if is_continuation { 1 } else { 0 };
+                self.draw_text.max_lines = run_max_rows;
+                self.draw_text.text_overflow = self.text_overflow;
+            } else {
+                self.draw_text.max_lines = 0;
+                self.draw_text.text_overflow = TextOverflow::Clip;
+            };
+
 
             let dt = &mut self.draw_text;
 
@@ -1605,7 +1857,10 @@ impl TextFlow {
                 } else {
                     None
                 };
-                let wrap = cx.turtle().layout().flow == Flow::right_wrap();
+                let wrap = matches!(
+                    cx.turtle().layout().flow,
+                    Flow::Right { wrap: true, .. }
+                );
 
                 let laidout_text = dt.layout(
                     cx,
@@ -1613,7 +1868,7 @@ impl TextFlow {
                     row_height,
                     max_width,
                     wrap,
-                    Align::default(),
+                    dt.layout_align,
                     text,
                 );
 
@@ -1622,21 +1877,31 @@ impl TextFlow {
             }
 
             let areas_tracker = &mut self.areas_tracker;
-            if self.inline_code.value() > 0 {
+            let (run_rows, run_truncated) = if self.inline_code.value() > 0 {
                 let db = &mut self.draw_block;
                 db.block_type = FlowBlockType::InlineCode;
                 if !self.first_thing_on_a_line {
                     let rect = TextFlow::walk_margin(cx, self.inline_code_margin.left);
                     areas_tracker.track_rect(cx, rect);
                 }
-                dt.draw_walk_resumable_with(cx, text, |cx, mut rect, _| {
+                let code_pad_h = (self.inline_code_padding.top
+                    + self.inline_code_padding.bottom
+                    + self.inline_code_margin.top
+                    + self.inline_code_margin.bottom) as f64;
+                let result = dt.draw_walk_resumable_with(cx, text, |cx, mut rect, _| {
                     rect.pos -= self.inline_code_padding.left_top();
                     rect.size += self.inline_code_padding.size();
                     db.draw_abs(cx, rect);
                     areas_tracker.track_rect(cx, rect);
                 });
+                // The inline_code padding/margin extends the visual rect
+                // beyond what draw_walk_resumable_with allocated in the
+                // turtle. Grow used_height so the next row starts below the
+                // padded area instead of overlapping it.
+                cx.turtle_mut().allocate_height(code_pad_h);
                 let rect = TextFlow::walk_margin(cx, self.inline_code_margin.right);
                 areas_tracker.track_rect(cx, rect);
+                result
             } else if self.strikethrough.value() > 0 {
                 let db = &mut self.draw_block;
                 db.line_color = *font_color;
@@ -1644,7 +1909,7 @@ impl TextFlow {
                 dt.draw_walk_resumable_with(cx, text, |cx, rect, _| {
                     db.draw_abs(cx, rect);
                     areas_tracker.track_rect(cx, rect);
-                });
+                })
             } else if self.underline.value() > 0 {
                 let db = &mut self.draw_block;
                 db.line_color = *font_color;
@@ -1652,11 +1917,21 @@ impl TextFlow {
                 dt.draw_walk_resumable_with(cx, text, |cx, rect, _| {
                     db.draw_abs(cx, rect);
                     areas_tracker.track_rect(cx, rect);
-                });
+                })
             } else {
                 dt.draw_walk_resumable_with(cx, text, |cx, rect, _| {
                     areas_tracker.track_rect(cx, rect);
-                });
+                })
+            };
+
+            // Update widget-level line tracking.
+            if self.max_lines > 0 {
+                let new_lines = run_rows.saturating_sub(if is_continuation { 1 } else { 0 });
+                self.lines_drawn += new_lines;
+                // If this run was truncated (ellipsis was appended), stop here.
+                if run_truncated {
+                    self.content_truncated = true;
+                }
             }
         }
         self.first_thing_on_a_line = false;

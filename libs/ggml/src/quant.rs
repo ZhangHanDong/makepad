@@ -2,6 +2,7 @@
 // All blocks quantize 32 elements (QK=32).
 
 pub const QK: usize = 32;
+pub const QK_NVFP4_SUB: usize = 16;
 
 /// Convert f16 (IEEE 754 half-precision) to f32.
 #[inline]
@@ -68,6 +69,30 @@ pub fn f32_to_f16(f: f32) -> u16 {
     let h_mant = (mant >> 13) as u16;
     sign | h_exp | h_mant
 }
+
+/// Convert bf16 to f32.
+#[inline]
+pub fn bf16_to_f32(b: u16) -> f32 {
+    f32::from_bits((b as u32) << 16)
+}
+
+/// Convert ggml's UE4M3 byte encoding to f32.
+#[inline]
+pub fn ue4m3_to_f32(x: u8) -> f32 {
+    if x == 0 || x == 0x7f || x == 0xff {
+        return 0.0;
+    }
+    let exp = ((x >> 3) & 0x0f) as i32;
+    let man = (x & 0x07) as i32;
+    let raw = if exp == 0 {
+        (man as f32) * 2f32.powi(-9)
+    } else {
+        (1.0 + man as f32 / 8.0) * 2f32.powi(exp - 7)
+    };
+    raw * 0.5
+}
+
+const MXFP4_VALUES_X2: [i8; 16] = [0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12];
 
 // ---- Dequantization for each block type ----
 
@@ -147,6 +172,198 @@ pub fn dequantize_q8_0(block: &[u8], out: &mut [f32]) {
     let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
     for j in 0..QK {
         out[j] = (block[2 + j] as i8) as f32 * d;
+    }
+}
+
+/// NVFP4: 4 UE4M3 sub-block scales + 32 packed 4-bit E2M1 values for 64 elements.
+pub fn dequantize_nvfp4(block: &[u8], out: &mut [f32]) {
+    debug_assert!(block.len() >= 36);
+    debug_assert!(out.len() >= QK_NVFP4);
+    let scales = &block[..QK_NVFP4 / QK_NVFP4_SUB];
+    let qs = &block[QK_NVFP4 / QK_NVFP4_SUB..36];
+    for (sub, &scale_byte) in scales.iter().enumerate() {
+        let d = ue4m3_to_f32(scale_byte);
+        let yb = &mut out[sub * QK_NVFP4_SUB..(sub + 1) * QK_NVFP4_SUB];
+        let qb = &qs[sub * (QK_NVFP4_SUB / 2)..(sub + 1) * (QK_NVFP4_SUB / 2)];
+        for (j, &packed) in qb.iter().enumerate() {
+            let v0 = MXFP4_VALUES_X2[(packed & 0x0f) as usize] as f32;
+            let v1 = MXFP4_VALUES_X2[(packed >> 4) as usize] as f32;
+            yb[j] = d * v0;
+            yb[j + QK_NVFP4_SUB / 2] = d * v1;
+        }
+    }
+}
+
+/// Dot product: one NVFP4 block (64 quantized values) dot 64 f32 values.
+pub fn vec_dot_nvfp4_f32(block: &[u8], v: &[f32]) -> f32 {
+    debug_assert!(block.len() >= 36);
+    debug_assert!(v.len() >= QK_NVFP4);
+    let scales = &block[..QK_NVFP4 / QK_NVFP4_SUB];
+    let qs = &block[QK_NVFP4 / QK_NVFP4_SUB..36];
+    let mut sum = 0.0f32;
+    for (sub, &scale_byte) in scales.iter().enumerate() {
+        let d = ue4m3_to_f32(scale_byte);
+        let xb = &v[sub * QK_NVFP4_SUB..(sub + 1) * QK_NVFP4_SUB];
+        let qb = &qs[sub * (QK_NVFP4_SUB / 2)..(sub + 1) * (QK_NVFP4_SUB / 2)];
+        let mut sub_sum = 0.0f32;
+        for (j, &packed) in qb.iter().enumerate() {
+            let v0 = MXFP4_VALUES_X2[(packed & 0x0f) as usize] as f32;
+            let v1 = MXFP4_VALUES_X2[(packed >> 4) as usize] as f32;
+            sub_sum += v0 * xb[j];
+            sub_sum += v1 * xb[j + QK_NVFP4_SUB / 2];
+        }
+        sum += d * sub_sum;
+    }
+    sum
+}
+
+/// Gather row-major GGML tensor rows into dequantized f32 output on CPU.
+pub fn get_rows_ggml_bytes_cpu(
+    src: &[u8],
+    src_ggml_type: u32,
+    n_cols: usize,
+    n_rows: usize,
+    row_indices: &[i32],
+) -> Option<Vec<f32>> {
+    if row_indices.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let row_bytes = match src_ggml_type {
+        GGML_TYPE_F32 => n_cols.checked_mul(4)?,
+        GGML_TYPE_F16 | GGML_TYPE_BF16 => n_cols.checked_mul(2)?,
+        GGML_TYPE_Q4_0 | GGML_TYPE_Q4_1 | GGML_TYPE_Q5_0 | GGML_TYPE_Q5_1 | GGML_TYPE_Q8_0
+        | GGML_TYPE_Q5_K | GGML_TYPE_NVFP4 => {
+            let block_elems = block_elements(src_ggml_type);
+            if n_cols % block_elems != 0 {
+                return None;
+            }
+            (n_cols / block_elems).checked_mul(block_size(src_ggml_type))?
+        }
+        _ => return None,
+    };
+
+    if src.len() != n_rows.checked_mul(row_bytes)? {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(n_cols.checked_mul(row_indices.len())?);
+    for &row in row_indices {
+        let row = usize::try_from(row).ok()?;
+        if row >= n_rows {
+            return None;
+        }
+        let row_src = &src[row * row_bytes..(row + 1) * row_bytes];
+        match src_ggml_type {
+            GGML_TYPE_F32 => {
+                for chunk in row_src.chunks_exact(4) {
+                    out.push(f32::from_le_bytes(chunk.try_into().unwrap()));
+                }
+            }
+            GGML_TYPE_F16 => {
+                for chunk in row_src.chunks_exact(2) {
+                    out.push(f16_to_f32(u16::from_le_bytes(chunk.try_into().unwrap())));
+                }
+            }
+            GGML_TYPE_BF16 => {
+                for chunk in row_src.chunks_exact(2) {
+                    out.push(bf16_to_f32(u16::from_le_bytes(chunk.try_into().unwrap())));
+                }
+            }
+            GGML_TYPE_Q4_0 => dequantize_row_blocks(row_src, n_cols, 18, dequantize_q4_0, &mut out),
+            GGML_TYPE_Q4_1 => dequantize_row_blocks(row_src, n_cols, 20, dequantize_q4_1, &mut out),
+            GGML_TYPE_Q5_0 => dequantize_row_blocks(row_src, n_cols, 22, dequantize_q5_0, &mut out),
+            GGML_TYPE_Q5_1 => dequantize_row_blocks(row_src, n_cols, 24, dequantize_q5_1, &mut out),
+            GGML_TYPE_Q8_0 => dequantize_row_blocks(row_src, n_cols, 34, dequantize_q8_0, &mut out),
+            GGML_TYPE_Q5_K => dequantize_row_q5_k(row_src, n_cols, &mut out),
+            GGML_TYPE_NVFP4 => {
+                dequantize_row_nvfp4(row_src, n_cols, &mut out);
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+fn dequantize_row_blocks(
+    row_src: &[u8],
+    n_cols: usize,
+    block_bytes: usize,
+    dequantize: fn(&[u8], &mut [f32]),
+    out: &mut Vec<f32>,
+) {
+    debug_assert_eq!(n_cols % QK, 0);
+    debug_assert_eq!(row_src.len(), (n_cols / QK) * block_bytes);
+    let mut block_out = [0.0f32; QK];
+    for block in row_src.chunks_exact(block_bytes) {
+        dequantize(block, &mut block_out);
+        out.extend_from_slice(&block_out);
+    }
+}
+
+fn dequantize_row_q5_k(row_src: &[u8], n_cols: usize, out: &mut Vec<f32>) {
+    debug_assert_eq!(n_cols % QK_K, 0);
+    debug_assert_eq!(row_src.len(), (n_cols / QK_K) * block_size(GGML_TYPE_Q5_K));
+
+    for block in row_src.chunks_exact(block_size(GGML_TYPE_Q5_K)) {
+        let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+        let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+        let scales = &block[4..16];
+        let qh = &block[16..48];
+        let qs = &block[48..176];
+
+        let mut is = 0usize;
+        let mut u1 = 1u8;
+        let mut u2 = 2u8;
+        let mut ql_offset = 0usize;
+        for _ in 0..4 {
+            let (sc1, m1) = get_scale_min_k4(is + 0, scales);
+            let (sc2, m2) = get_scale_min_k4(is + 1, scales);
+            let d1 = d * sc1 as f32;
+            let d2 = d * sc2 as f32;
+            let m1 = dmin * m1 as f32;
+            let m2 = dmin * m2 as f32;
+            let ql = &qs[ql_offset..ql_offset + 32];
+            for l in 0..32 {
+                out.push(
+                    d1 * (((ql[l] & 0x0F) as f32) + if (qh[l] & u1) != 0 { 16.0 } else { 0.0 })
+                        - m1,
+                );
+            }
+            for l in 0..32 {
+                out.push(
+                    d2 * (((ql[l] >> 4) as f32) + if (qh[l] & u2) != 0 { 16.0 } else { 0.0 }) - m2,
+                );
+            }
+            ql_offset += 32;
+            is += 2;
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+}
+
+fn dequantize_row_nvfp4(row_src: &[u8], n_cols: usize, out: &mut Vec<f32>) {
+    debug_assert_eq!(n_cols % QK_NVFP4, 0);
+    debug_assert_eq!(
+        row_src.len(),
+        (n_cols / QK_NVFP4) * block_size(GGML_TYPE_NVFP4)
+    );
+    let mut block_out = [0.0f32; QK_NVFP4];
+    for block in row_src.chunks_exact(block_size(GGML_TYPE_NVFP4)) {
+        dequantize_nvfp4(block, &mut block_out);
+        out.extend_from_slice(&block_out);
+    }
+}
+
+fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
+    if j < 4 {
+        (q[j] & 63, q[j + 4] & 63)
+    } else {
+        (
+            (q[j + 4] & 0x0F) | ((q[j - 4] >> 6) << 4),
+            (q[j + 4] >> 4) | ((q[j] >> 6) << 4),
+        )
     }
 }
 
@@ -595,6 +812,106 @@ pub fn quantize_f32_to_q8_0(input: &[f32]) -> Vec<u8> {
     let mut out = vec![0u8; nb * bs];
     for b in 0..nb {
         quantize_q8_0_block(&input[b * QK..], &mut out[b * bs..]);
+    }
+    out
+}
+
+/// Quantize a row of f32 values into one Q8_1 block (32 elements -> 36 bytes).
+pub fn quantize_q8_1_block(input: &[f32], out: &mut [u8]) {
+    debug_assert!(input.len() >= QK);
+    debug_assert!(out.len() >= block_size(GGML_TYPE_Q8_1));
+
+    let mut amax = 0.0f32;
+    for &value in &input[..QK] {
+        let abs = value.abs();
+        if abs > amax {
+            amax = abs;
+        }
+    }
+
+    let d = amax / 127.0;
+    let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+    let dh = f32_to_f16(d);
+    out[0] = dh as u8;
+    out[1] = (dh >> 8) as u8;
+
+    let mut sum = 0i32;
+    for j in 0..QK {
+        let v = (input[j] * id).round().clamp(-128.0, 127.0) as i8;
+        out[4 + j] = v as u8;
+        sum += v as i32;
+    }
+
+    let sh = f32_to_f16(sum as f32 * d);
+    out[2] = sh as u8;
+    out[3] = (sh >> 8) as u8;
+}
+
+/// Quantize a row of bf16 values into one Q8_1 block (32 elements -> 36 bytes).
+pub fn quantize_bf16_q8_1_block(input: &[u16], out: &mut [u8]) {
+    debug_assert!(input.len() >= QK);
+    debug_assert!(out.len() >= block_size(GGML_TYPE_Q8_1));
+
+    let mut amax = 0.0f32;
+    for &word in &input[..QK] {
+        let value = bf16_to_f32(word);
+        let abs = value.abs();
+        if abs > amax {
+            amax = abs;
+        }
+    }
+
+    let d = amax / 127.0;
+    let id = if d != 0.0 { 1.0 / d } else { 0.0 };
+    let dh = f32_to_f16(d);
+    out[0] = dh as u8;
+    out[1] = (dh >> 8) as u8;
+
+    let mut sum = 0i32;
+    for j in 0..QK {
+        let value = bf16_to_f32(input[j]);
+        let q = (value * id).round().clamp(-128.0, 127.0) as i8;
+        out[4 + j] = q as u8;
+        sum += q as i32;
+    }
+
+    let sh = f32_to_f16(sum as f32 * d);
+    out[2] = sh as u8;
+    out[3] = (sh >> 8) as u8;
+}
+
+/// Quantize an entire f32 slice to Q8_1 format. Length must be a multiple of QK(32).
+pub fn quantize_f32_to_q8_1(input: &[f32]) -> Vec<u8> {
+    let n = input.len();
+    assert_eq!(
+        n % QK,
+        0,
+        "quantize_f32_to_q8_1: length must be multiple of {}",
+        QK
+    );
+    let nb = n / QK;
+    let bs = block_size(GGML_TYPE_Q8_1);
+    let mut out = vec![0u8; nb * bs];
+    for b in 0..nb {
+        quantize_q8_1_block(&input[b * QK..], &mut out[b * bs..]);
+    }
+    out
+}
+
+/// Quantize an entire bf16 slice to Q8_1 format. Length must be a multiple of QK(32).
+pub fn quantize_bf16_to_q8_1(input: &[u16]) -> Vec<u8> {
+    let n = input.len();
+    assert_eq!(
+        n % QK,
+        0,
+        "quantize_bf16_to_q8_1: length must be multiple of {}",
+        QK
+    );
+    let nb = n / QK;
+    let bs = block_size(GGML_TYPE_Q8_1);
+    let mut out = vec![0u8; nb * bs];
+    for b in 0..nb {
+        quantize_bf16_q8_1_block(&input[b * QK..], &mut out[b * bs..]);
     }
     out
 }

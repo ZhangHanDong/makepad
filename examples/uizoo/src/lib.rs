@@ -4,6 +4,7 @@ pub mod demofiletree;
 pub mod layout_templates;
 
 pub mod tab_adaptiveview;
+pub mod tab_align_scroll;
 pub mod tab_button;
 pub mod tab_checkbox;
 pub mod tab_dropdown;
@@ -26,6 +27,7 @@ pub mod tab_rotatedimage;
 pub mod tab_scrollbar;
 pub mod tab_slider;
 pub mod tab_slidesview;
+pub mod tab_slug;
 pub mod tab_spinner;
 pub mod tab_stacknavigation;
 pub mod tab_textinput;

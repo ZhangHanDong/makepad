@@ -2344,7 +2344,7 @@ impl MatchEvent for App {
             .set_value(cx, DEFAULT_GLASS_OPACITY);
         self.ui
             .check_box(cx, ids!(thinking_toggle))
-            .set_active(cx, self.moonshot_thinking_enabled);
+            .set_active(cx, self.moonshot_thinking_enabled, Animate::No);
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
     }
 }
