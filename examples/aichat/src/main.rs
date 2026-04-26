@@ -1997,7 +1997,7 @@ impl App {
                 let thinking = std::env::var("MOONSHOT_THINKING")
                     .ok()
                     .filter(|mode| matches!(mode.as_str(), "enabled" | "disabled"))
-                    .unwrap_or_else(|| "enabled".to_string());
+                    .unwrap_or_else(|| "disabled".to_string());
                 Box::new(StatelessBackendAdapter::new(Box::new(OpenAiBackend::new(
                     BackendConfig::OpenAI {
                         api_key: key,

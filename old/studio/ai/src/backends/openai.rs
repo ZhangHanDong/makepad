@@ -516,11 +516,13 @@ impl AiBackend for OpenAiBackend {
                                 });
                             } else if !in_flight.reasoning_text.is_empty() {
                                 log!(
-                                    "OpenAI stream completed with thinking only; emitting fallback assistant text"
+                                    "OpenAI stream completed with thinking only; treating as provider error"
                                 );
-                                content_blocks.push(ContentBlock::Text {
-                                    text: "The model returned thinking but no final answer. Try again, set MOONSHOT_THINKING=disabled, or increase max_tokens.".to_string(),
+                                ai_events.push(AiEvent::Error {
+                                    request_id: in_flight.request_id,
+                                    error: "Model returned thinking but no final answer. Set MOONSHOT_THINKING=disabled or increase max_tokens.".to_string(),
                                 });
+                                continue;
                             }
 
                             for tc in in_flight.tool_calls {
