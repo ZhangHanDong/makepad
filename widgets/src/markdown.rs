@@ -530,6 +530,7 @@ fn draw_cached_image(cx: &mut Cx2d, tf: &mut TextFlow, key: u64, entry: ImageCac
 script_mod! {
     use mod.prelude.widgets_internal.*
     use mod.widgets.*
+    use mod.text.*
 
     mod.widgets.MarkdownLinkBase = #(MarkdownLink::register_widget(vm))
 
