@@ -81,6 +81,7 @@ struct InFlightRequest {
     tool_calls: Vec<ToolCallAccumulator>,
     usage: Option<OpenAiUsage>,
     finish_reason: Option<String>,
+    saw_done: bool,
     /// SSE event-stream buffer. TCP/HTTP chunks arrive at arbitrary byte
     /// boundaries, so a single `data: {...}\n\n` event may span multiple
     /// `process_stream_data` calls. Accumulate here, process only complete
@@ -334,6 +335,8 @@ impl OpenAiBackend {
             };
 
             if json_data == "[DONE]" {
+                in_flight.saw_done = true;
+                log!("OpenAI stream received [DONE]");
                 continue;
             }
 
@@ -456,6 +459,7 @@ impl AiBackend for OpenAiBackend {
                 tool_calls: vec![],
                 usage: None,
                 finish_reason: None,
+                saw_done: false,
                 sse_buffer: String::new(),
             },
         );
@@ -501,12 +505,23 @@ impl AiBackend for OpenAiBackend {
                         ai_events.extend(self.process_stream_data(request_id, "", true));
                         if let Some(in_flight) = self.in_flight.remove(&request_id) {
                             log!(
-                                "OpenAI stream complete: content_chars={} reasoning_chars={} finish_reason={:?} leftover_sse_chars={}",
+                                "OpenAI stream complete: content_chars={} reasoning_chars={} finish_reason={:?} saw_done={} leftover_sse_chars={}",
                                 in_flight.accumulated_text.chars().count(),
                                 in_flight.reasoning_text.chars().count(),
                                 in_flight.finish_reason,
+                                in_flight.saw_done,
                                 in_flight.sse_buffer.chars().count()
                             );
+                            if !in_flight.saw_done {
+                                ai_events.push(AiEvent::Error {
+                                    request_id: in_flight.request_id,
+                                    error: format!(
+                                        "Stream ended before [DONE]; partial response discarded ({} chars).",
+                                        in_flight.accumulated_text.chars().count()
+                                    ),
+                                });
+                                continue;
+                            }
                             // Build content blocks
                             let mut content_blocks = vec![];
 
