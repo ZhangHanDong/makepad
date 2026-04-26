@@ -895,6 +895,15 @@ script_mod! {
                                         draw_text.text_style.font_size: 11
                                     }
 
+                                    thinking_toggle := ToggleFlat {
+                                        text: "Thinking"
+                                        active: false
+                                        draw_text +: {
+                                            color: ai_cream_dim
+                                            text_style +: { font_size: 11 }
+                                        }
+                                    }
+
                                     View { width: Fill height: 1 }
 
                                     cancel_button := ButtonFlat {
@@ -1897,6 +1906,8 @@ pub struct App {
     active_backend: Option<BackendType>,
     #[rust]
     history_injected: bool,
+    #[rust]
+    moonshot_thinking_enabled: bool,
 }
 
 impl App {
@@ -1935,6 +1946,13 @@ impl App {
             available_backends.push(BackendType::Moonshot);
         }
         available_backends
+    }
+
+    fn initial_moonshot_thinking_enabled() -> bool {
+        std::env::var("MOONSHOT_THINKING")
+            .ok()
+            .as_deref()
+            == Some("enabled")
     }
 
     fn read_key_file(path: &str) -> Option<String> {
@@ -1996,11 +2014,13 @@ impl App {
                     std::env::var("MOONSHOT_MODEL").unwrap_or_else(|_| "kimi-k2.6".to_string());
                 let base_url = std::env::var("MOONSHOT_BASE_URL")
                     .unwrap_or_else(|_| "https://api.moonshot.ai/v1/chat/completions".to_string());
-                let thinking = std::env::var("MOONSHOT_THINKING")
-                    .ok()
-                    .filter(|mode| matches!(mode.as_str(), "enabled" | "disabled"))
-                    .unwrap_or_else(|| "disabled".to_string());
-                let thinking_enabled = thinking == "enabled";
+                let thinking_enabled = self.moonshot_thinking_enabled;
+                let thinking = if thinking_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+                .to_string();
                 let max_tokens = std::env::var("MOONSHOT_MAX_TOKENS")
                     .ok()
                     .and_then(|v| v.parse::<u32>().ok())
@@ -2028,6 +2048,14 @@ impl App {
         if self.active_backend == Some(backend) {
             return;
         }
+        self.activate_backend(cx, backend);
+    }
+
+    fn restart_backend(&mut self, cx: &mut Cx, backend: BackendType) {
+        self.activate_backend(cx, backend);
+    }
+
+    fn activate_backend(&mut self, cx: &mut Cx, backend: BackendType) {
         if let Some(agent) = self.create_agent(backend) {
             self.agent = Some(agent);
             self.active_backend = Some(backend);
@@ -2160,6 +2188,10 @@ impl App {
 
     fn update_status(&self, cx: &mut Cx) {
         let status = match self.active_backend {
+            Some(BackendType::Moonshot) if self.moonshot_thinking_enabled => {
+                "Active: Moonshot · Thinking on"
+            }
+            Some(BackendType::Moonshot) => "Active: Moonshot · Thinking off",
             Some(b) => b.status_label(),
             None => "No backend selected",
         };
@@ -2201,6 +2233,17 @@ impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         if let Some(opacity) = self.ui.slider(cx, ids!(opacity_slider)).slided(actions) {
             self.apply_glass_opacity(cx, opacity);
+        }
+        if let Some(enabled) = self.ui.check_box(cx, ids!(thinking_toggle)).changed(actions) {
+            self.moonshot_thinking_enabled = enabled;
+            if self.active_backend == Some(BackendType::Moonshot) {
+                if self.current_prompt.is_some() {
+                    self.cancel_request(cx);
+                }
+                self.restart_backend(cx, BackendType::Moonshot);
+            } else {
+                self.update_status(cx);
+            }
         }
 
         // Markdown link click — dispatch through robius-open for cross-platform
@@ -2299,6 +2342,9 @@ impl MatchEvent for App {
         self.ui
             .slider(cx, ids!(opacity_slider))
             .set_value(cx, DEFAULT_GLASS_OPACITY);
+        self.ui
+            .check_box(cx, ids!(thinking_toggle))
+            .set_active(cx, self.moonshot_thinking_enabled);
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
     }
 }
@@ -2314,6 +2360,7 @@ impl AppMain for App {
     fn after_new_from_script(_vm: &mut ScriptVm, app: &mut Self) {
         CHAT_DATA.write().unwrap().messages = ChatData::load_from_disk();
         app.available_backends = Self::detect_available_backends();
+        app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
