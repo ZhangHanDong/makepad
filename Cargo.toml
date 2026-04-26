@@ -188,6 +188,13 @@ windows-link = { path = "libs/windows/windows-link" }
 crunchy = { path = "libs/vulkan/crunchy" }
 zerocopy = { path = "libs/vulkan/zerocopy" }
 
+[patch."https://github.com/ZhangHanDong/makepad.git"]
+# External kits can depend on the fork's git `dev` branch, while this
+# workspace still builds against its local Makepad crates. Without this patch,
+# Cargo pulls a second makepad-widgets/makepad-script graph and widget types no
+# longer match the local app.
+makepad-widgets = { path = "widgets" }
+
 [profile.small]
 inherits = "release"
 #debug = true
