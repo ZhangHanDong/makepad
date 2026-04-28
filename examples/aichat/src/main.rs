@@ -58,12 +58,12 @@ script_mod! {
     }
 
     let ai_ink = #x06130F
-    let ai_panel = #x06251D
-    let ai_panel_deep = #x031510
+    let ai_panel = #x0A3A30
+    let ai_panel_deep = #x06251F
     let ai_cream = #xF3E3C7
-    let ai_cream_dim = #xCDBF9FAA
+    let ai_cream_dim = #xE0D2BACC
     let ai_cyan = #x72E4FF
-    let ai_cyan_soft = #x72E4FF55
+    let ai_cyan_soft = #x72E4FF77
     let ai_gold = #xF6BE63
     let ai_gold_soft = #xF6BE6388
 
@@ -128,6 +128,27 @@ script_mod! {
         draw_text.text_style.font_size: 11
     }
 
+    let ToolbarGlass = GlassPanel {
+        height: 38
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 8
+        padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+        draw_bg +: {
+            tint_color: #x06231C
+            tint_alpha: 0.88
+            border_color: #x72E4FF
+            border_alpha: 0.24
+            border_width: 1.0
+            corner_radius: 14.0
+            halo_strength: 0.0
+            halo_radius: 0.0
+            highlight_strength: 0.10
+            highlight_band_height: 18.0
+            noise_strength: 0.003
+        }
+    }
+
     let PillButton = ButtonFlat {
         height: 34
         padding: Inset{left: 14 right: 14 top: 0 bottom: 0}
@@ -136,11 +157,11 @@ script_mod! {
             text_style +: { font_size: 11 }
         }
         draw_bg +: {
-            color: #x0B241CCC
-            color_hover: #x12362ADD
-            border_color: #x72E4FF30
+            color: #x08251EB8
+            color_hover: #x123B31DD
+            border_color: #xEAD8B82D
             border_size: 1.0
-            border_radius: 17.0
+            border_radius: 10.0
         }
     }
 
@@ -153,11 +174,141 @@ script_mod! {
             text_style +: { font_size: 15 }
         }
         draw_bg +: {
-            color: #x0B241CAA
-            color_hover: #x174335DD
-            border_color: #x72E4FF26
+            color: #x08251EB0
+            color_hover: #x154337DD
+            border_color: #xEAD8B82A
             border_size: 1.0
-            border_radius: 18.0
+            border_radius: 10.0
+        }
+    }
+
+    let SendButton = ButtonFlat {
+        width: 44
+        height: 44
+        padding: 0
+        draw_text +: {
+            color: ai_ink
+            text_style +: { font_size: 26 }
+        }
+        draw_bg +: {
+            hover: instance(0.0)
+            down: instance(0.0)
+            focus: instance(0.0)
+            disabled: instance(0.0)
+            color: ai_gold
+            color_hover: #xFFD98B
+            border_color: #xFFF0D277
+            border_size: 1.0
+            border_radius: 10.0
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                let r = min(self.rect_size.x, self.rect_size.y) * 0.5 - 3.0
+                let center = self.rect_size * 0.5
+                let p = self.pos - vec2(0.5, 0.5)
+                let radial = clamp(length(p) * 2.0, 0.0, 1.0)
+                let top_highlight = clamp(1.0 - self.pos.y * 2.2, 0.0, 1.0)
+                let lower_shadow = smoothstep(0.35, 1.0, self.pos.y)
+                let paper_noise = (
+                    Math.random_2d(self.pos * self.rect_size * 0.42)
+                    + Math.random_2d(self.pos * self.rect_size * 1.3) * 0.35
+                    - 0.68
+                ) * 0.045
+                let fill = self.color
+                    .mix(self.color_focus, self.focus)
+                    .mix(self.color_hover, self.hover)
+                    .mix(self.color_down, self.down)
+                    .mix(self.color_disabled, self.disabled)
+                let glass_fill = vec4(
+                    fill.rgb
+                        + vec3(0.20, 0.13, 0.04) * top_highlight
+                        - vec3(0.18, 0.11, 0.04) * lower_shadow
+                        - vec3(0.06, 0.04, 0.02) * radial
+                        + paper_noise,
+                    fill.a
+                )
+
+                sdf.circle(center.x + 0.8, center.y + 1.4, r + 1.5)
+                sdf.fill(#x3A241370)
+
+                sdf.circle(center.x, center.y, r + 1.8)
+                sdf.fill_keep(#xA86F35)
+                sdf.stroke(#xF6D99A88, 1.0)
+
+                sdf.circle(center.x, center.y, r)
+                sdf.fill_keep(glass_fill)
+                sdf.stroke(#xF9D58AAA, 1.2)
+
+                sdf.circle(center.x - r * 0.18, center.y - r * 0.24, r * 0.46)
+                sdf.stroke(#xFFF3CF48, 0.8)
+                return sdf.result
+            }
+        }
+    }
+
+    let GlassSlider = SliderMinimal {
+        width: 170
+        height: 28
+        text: ""
+        min: 0.72
+        max: 0.98
+        step: 0.01
+        default: 0.90
+        precision: 2
+        label_walk: Walk{width: 0 height: 0}
+        text_input: TextInput{
+            width: 0
+            height: 0
+            is_read_only: true
+        }
+        draw_bg +: {
+            hover: instance(0.0)
+            focus: instance(0.0)
+            drag: instance(0.0)
+            disabled: instance(0.0)
+            border_size: 0.0
+            offset_y: 11.0
+            handle_size: 20.0
+            color: #x9CC9C24A
+            color_hover: #x9CC9C266
+            color_focus: #x9CC9C266
+            color_drag: #x9CC9C280
+            color_2: #x0A241EAA
+            color_2_hover: #x0E3028CC
+            color_2_focus: #x0E3028CC
+            color_2_drag: #x123C32DD
+            val_color: ai_gold
+            val_color_hover: #xFFD98B
+            val_color_focus: #xFFD98B
+            val_color_drag: #xFFE2A3
+            handle_color: ai_gold
+            handle_color_hover: #xFFF0D2
+            handle_color_focus: #xFFF0D2
+            handle_color_drag: #xFFF0D2
+            border_color: #x72E4FF44
+            border_color_2: #x00000055
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                let track_y = self.rect_size.y * 0.5 - 2.0
+                let track_h = 4.0
+                let handle_x = clamp(
+                    self.slide_pos * self.rect_size.x,
+                    8.0,
+                    self.rect_size.x - 8.0
+                )
+                let handle_r = 8.0 + self.hover * 1.0
+
+                sdf.box(0.0, track_y, self.rect_size.x, track_h, 2.0)
+                sdf.fill(#x6EA99E66)
+
+                sdf.box(0.0, track_y, handle_x, track_h, 2.0)
+                sdf.fill(self.val_color.mix(self.val_color_hover, self.hover))
+
+                sdf.circle(handle_x, self.rect_size.y * 0.5, handle_r)
+                sdf.fill_keep(self.handle_color.mix(self.handle_color_hover, self.hover))
+                sdf.stroke(#xFFF0D288, 1.0)
+
+                return sdf.result
+            }
         }
     }
 
@@ -468,12 +619,16 @@ script_mod! {
                 show_caption_bar: false
                 pass.clear_color: #00000000
                 window.transparent: true
-                window.macos: MacosWindowConfig{chrome: MacosWindowChrome.Borderless}
+                // window.backdrop: WindowBackdrop.Blur — disabled until
+                // platform bug fixed in macos_window.rs:532 (addSubview
+                // positioned arg must be NSWindowBelow/-1 or NSWindowAbove/1,
+                // not 0). See issues/aichat-liquid-glass-backdrop-platform-bug.md
+                window.macos: MacosWindowConfig{chrome: MacosWindowChrome.Borderless resizable: true}
                 window.inner_size: vec2(900, 700)
                 window.title: " "
                 body +: {
                     flow: Overlay
-                    padding: 12
+                    padding: 3
                     spacing: 0
                     draw_bg.color: #00000000
 
@@ -485,16 +640,19 @@ script_mod! {
                         padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
                         spacing: 0
                         draw_bg +: {
-                            tint_color: ai_panel
-                            tint_alpha: 0.90
+                            tint_color: #x0D4035
+                            tint_alpha: 0.66
                             border_color: ai_cyan
-                            border_alpha: 0.58
-                            border_width: 1.2
+                            border_alpha: 0.38
+                            border_width: 1.0
                             corner_radius: 30.0
-                            specular_strength: 0.30
-                            noise_strength: 0.010
-                            use_scene_blur: 1.0
-                            blur_amount: 0.10
+                            halo_color: ai_cyan
+                            halo_strength: 0.0
+                            halo_radius: 0.0
+                            highlight_strength: 0.28
+                            highlight_band_height: 58.0
+                            chroma_strength: 0.0
+                            noise_strength: 0.004
                         }
 
                     sidebar := GlassPanel {
@@ -505,16 +663,18 @@ script_mod! {
                         padding: Inset{left: 14 top: 14 right: 14 bottom: 14}
                         spacing: 10
                         draw_bg +: {
-                            tint_color: #x03130F
-                            tint_alpha: 1.0
+                            tint_color: #x0A3A30
+                            tint_alpha: 0.78
                             border_color: #xEAD8B8
-                            border_alpha: 0.0
+                            border_alpha: 0.20
                             border_width: 0.0
                             corner_radius: 0.0
-                            specular_strength: 0.0
+                            halo_strength: 0.0
+                            halo_radius: 0.0
+                            highlight_strength: 0.16
+                            highlight_band_height: 54.0
+                            chroma_strength: 0.0
                             noise_strength: 0.004
-                            use_scene_blur: 1.0
-                            blur_amount: 0.0
                         }
 
                         sidebar_header := View {
@@ -690,16 +850,18 @@ script_mod! {
                         padding: Inset{left: 34 top: 18 right: 34 bottom: 22}
                         spacing: 12
                         draw_bg +: {
-                            tint_color: #x061B16
-                            tint_alpha: 0.96
+                            tint_color: #x0B3B31
+                            tint_alpha: 0.70
                             border_color: #xEAD8B8
-                            border_alpha: 0.0
+                            border_alpha: 0.16
                             border_width: 0.0
                             corner_radius: 0.0
-                            specular_strength: 0.0
+                            halo_strength: 0.0
+                            halo_radius: 0.0
+                            highlight_strength: 0.16
+                            highlight_band_height: 56.0
+                            chroma_strength: 0.0
                             noise_strength: 0.004
-                            use_scene_blur: 1.0
-                            blur_amount: 0.0
                         }
 
                         top_bar := View {
@@ -716,79 +878,83 @@ script_mod! {
 
                             View { width: Fill height: 1 }
 
-                            ToolbarLabel {
-                                text: "Backend"
-                                margin: Inset{right: 8}
-                            }
+                            ToolbarGlass {
+                                width: 286
 
-                            backend_dropdown := DropDown {
-                                width: 168
-                                height: 34
-                                labels: ["Claude Code" "Claude Splash" "Claude (ACP)" "Claude (API)" "Gemini" "Gemini Splash" "OpenAI" "Moonshot"]
-                                draw_text +: {
-                                    color: ai_cream
-                                    text_style +: { font_size: 11 }
+                                ToolbarLabel {
+                                    text: "Backend"
+                                    width: 76
                                 }
-                                draw_bg +: {
-                                    color: #x0B241CCC
-                                    color_hover: #x12362ADD
-                                    border_color: #x72E4FF30
-                                    border_size: 1.0
-                                    border_radius: 17.0
-                                    arrow_color: ai_cream
-                                }
-                            }
 
-                            ToolbarLabel {
-                                text: "Glass"
-                                margin: Inset{left: 16 right: 8}
-                            }
-
-                            opacity_slider := SliderMinimalFlat {
-                                width: 170
-                                height: 26
-                                text: ""
-                                min: 0.72
-                                max: 0.98
-                                step: 0.01
-                                default: 0.90
-                                precision: 2
-                                label_walk: Walk{width: 0 height: 0}
-                                text_input: TextInput{
-                                    width: 0
-                                    height: 0
-                                    is_read_only: true
-                                }
-                                draw_bg +: {
-                                    color: #x07130F
-                                    color_hover: #x0E2118
-                                    color_focus: #x11281D
-                                    color_drag: #x153123
-                                    color_2: #x07130F
-                                    color_2_hover: #x0E2118
-                                    color_2_focus: #x11281D
-                                    color_2_drag: #x153123
-                                    val_color: ai_gold
-                                    val_color_hover: #xFFD98B
-                                    val_color_focus: #xFFD98B
-                                    val_color_drag: #xFFE2A3
-                                    handle_color: ai_gold
-                                    handle_color_hover: #xFFF0D2
-                                    handle_color_focus: #xFFF0D2
-                                    handle_color_drag: #xFFF0D2
-                                    border_color: ai_cyan_soft
-                                    border_color_2: #x00000066
-                                    offset_y: 10.0
-                                    handle_size: 16.0
+                                backend_dropdown := DropDown {
+                                    width: Fill
+                                    height: 30
+                                    popup_menu_position: PopupMenuPosition.BelowInput
+                                    labels: ["Claude Code" "Claude Splash" "Claude (ACP)" "Claude (API)" "Gemini" "Gemini Splash" "OpenAI" "Moonshot"]
+                                    popup_menu: PopupMenuFlat{
+                                        width: 170
+                                        padding: Inset{left: 4 right: 4 top: 4 bottom: 4}
+                                        draw_bg +: {
+                                            color: #x06231CF2
+                                            border_color: #x72E4FF38
+                                            border_size: 1.0
+                                            border_radius: 12.0
+                                        }
+                                        menu_item: PopupMenuItem{
+                                            height: 26
+                                            padding: Inset{left: 18 right: 10 top: 0 bottom: 0}
+                                            draw_text +: {
+                                                color: ai_cream
+                                                color_hover: #xFFF0D2
+                                                color_active: ai_cream
+                                                text_style +: { font_size: 11 }
+                                            }
+                                            draw_bg +: {
+                                                color: #x00000000
+                                                color_hover: #x123B31DD
+                                                color_active: #xEAD8B82D
+                                                border_color: #x00000000
+                                                border_color_hover: #x72E4FF22
+                                                border_color_active: #x72E4FF44
+                                                border_size: 1.0
+                                                border_radius: 6.0
+                                                mark_color_active: ai_gold
+                                            }
+                                        }
+                                    }
+                                    draw_text +: {
+                                        color: ai_cream
+                                        text_style +: { font_size: 11 }
+                                    }
+                                    draw_bg +: {
+                                        color: #x08251ED8
+                                        color_hover: #x12382FEE
+                                        border_color: #xEAD8B832
+                                        border_size: 1.0
+                                        border_radius: 10.0
+                                        arrow_color: ai_cream
+                                    }
                                 }
                             }
 
-                            opacity_value := Label {
-                                width: 40
-                                text: "90%"
-                                margin: Inset{left: 6}
-                                draw_text.color: ai_cream_dim
-                                draw_text.text_style.font_size: 11
+                            ToolbarGlass {
+                                width: 318
+                                margin: Inset{left: 12}
+
+                                ToolbarLabel {
+                                    text: "Glass"
+                                    width: 54
+                                }
+
+                                opacity_slider := GlassSlider {}
+
+                                opacity_value := Label {
+                                    width: 42
+                                    text: "90%"
+                                    margin: Inset{left: 4}
+                                    draw_text.color: ai_cream_dim
+                                    draw_text.text_style.font_size: 11
+                                }
                             }
                         }
 
@@ -833,22 +999,25 @@ script_mod! {
                                 padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
                                 spacing: 10
                                 draw_bg +: {
-                                    tint_color: ai_panel
-                                    tint_alpha: 0.98
+                                    tint_color: #x0B4035
+                                    tint_alpha: 0.76
                                     border_color: ai_cyan
-                                    border_alpha: 0.46
+                                    border_alpha: 0.54
                                     border_width: 1.2
                                     corner_radius: 24.0
-                                    specular_strength: 0.24
-                                    noise_strength: 0.010
-                                    use_scene_blur: 1.0
-                                    blur_amount: 0.08
+                                    halo_color: ai_cyan
+                                    halo_strength: 0.16
+                                    halo_radius: 7.0
+                                    highlight_strength: 0.34
+                                    highlight_band_height: 48.0
+                                    chroma_strength: 0.0
+                                    noise_strength: 0.004
                                 }
 
                                 input := TextInput {
                                     width: Fill
                                     height: 56
-                                    empty_text: "问 Codex 任何事。输入 @ 使用插件或提及文件"
+                                    empty_text: "问任何事。输入 @ 使用插件或提及文件"
                                     draw_bg +: {
                                         color: #00000000
                                         color_hover: #00000000
@@ -926,25 +1095,19 @@ script_mod! {
 
                                     clear_button := PillButton {
                                         text: "Clear"
-                                        width: 72
+                                        width: 78
+                                        height: 36
+                                        draw_bg +: {
+                                            color: #x08251EC8
+                                            color_hover: #x123B31EE
+                                            border_color: #xEAD8B83A
+                                            border_size: 1.0
+                                            border_radius: 10.0
+                                        }
                                     }
 
-                                    send_button := ButtonFlat {
+                                    send_button := SendButton {
                                         text: "↑"
-                                        width: 44
-                                        height: 44
-                                        padding: 0
-                                        draw_text +: {
-                                            color: ai_ink
-                                            text_style +: { font_size: 20 }
-                                        }
-                                        draw_bg +: {
-                                            color: ai_gold
-                                            color_hover: #xFFD98B
-                                            border_color: #xFFFFFF00
-                                            border_size: 0.0
-                                            border_radius: 22.0
-                                        }
                                     }
                                 }
                             }
@@ -956,7 +1119,7 @@ script_mod! {
                             text: "Initializing..."
                             margin: Inset{left: 92 right: 92 top: 0 bottom: 0}
                             draw_text.text_style.font_size: 10
-                            draw_text.color: #xCDBF9F88
+                            draw_text.color: #xE2D2B9AA
                         }
                     }
                     }
@@ -985,9 +1148,10 @@ pub static CHAT_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatD
     is_streaming: false,
 });
 
+// Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
-const MIN_GLASS_OPACITY: f64 = 0.72;
-const MAX_GLASS_OPACITY: f64 = 0.98;
+const MIN_GLASS_OPACITY: f64 = 0.10;
+const MAX_GLASS_OPACITY: f64 = 1.00;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GlassOpacity {
@@ -997,14 +1161,31 @@ struct GlassOpacity {
     composer: f32,
 }
 
-fn glass_opacity_values(opacity: f64) -> GlassOpacity {
-    let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
+// Map slider [0.10..1.00] to actual panel alpha. The earlier mapping only
+// moved alpha slightly, so the "Glass" control felt inert on a transparent
+// window. Keep layer ordering, but make the low/high ends visually obvious.
+fn glass_opacity_values(slider: f64) -> GlassOpacity {
+    let t = ((slider.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY) - MIN_GLASS_OPACITY)
+        / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY)) as f32;
+    let shell = 0.28 + t * 0.64;
     GlassOpacity {
-        app: opacity as f32,
-        sidebar: (opacity + 0.06).min(0.98) as f32,
-        main: (opacity + 0.04).min(0.97) as f32,
-        composer: (opacity + 0.03).min(0.98) as f32,
+        app: shell,
+        main: (shell + 0.05).min(0.99),
+        sidebar: (shell + 0.08).min(0.99),
+        composer: (shell + 0.11).min(0.99),
     }
+}
+
+fn should_start_window_drag(abs: DVec2, size: DVec2) -> bool {
+    const RESIZE_EDGE_MARGIN: f64 = 10.0;
+    const DRAG_STRIP_HEIGHT: f64 = 52.0;
+    const RIGHT_TOOLBAR_WIDTH: f64 = 260.0;
+
+    abs.y > RESIZE_EDGE_MARGIN
+        && abs.y < DRAG_STRIP_HEIGHT
+        && abs.x > RESIZE_EDGE_MARGIN
+        && abs.x < size.x - RESIZE_EDGE_MARGIN
+        && abs.x < size.x - RIGHT_TOOLBAR_WIDTH
 }
 
 /// Some LLMs, when asked "show me a markdown file demo with ... inside",
@@ -2231,7 +2412,11 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if let Some(opacity) = self.ui.slider(cx, ids!(opacity_slider)).slided(actions) {
+        let opacity_slider = self.ui.slider(cx, ids!(opacity_slider));
+        if let Some(opacity) = opacity_slider
+            .slided(actions)
+            .or_else(|| opacity_slider.end_slide(actions))
+        {
             self.apply_glass_opacity(cx, opacity);
         }
         if let Some(enabled) = self.ui.check_box(cx, ids!(thinking_toggle)).changed(actions) {
@@ -2367,8 +2552,7 @@ impl AppMain for App {
         if let Event::WindowDragQuery(dq) = event {
             if Some(dq.window_id) == self.ui.window(cx, ids!(main_window)).window_id() {
                 let size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
-                let top_drag_strip = dq.abs.y < 52.0 && dq.abs.x < size.x - 260.0;
-                if top_drag_strip {
+                if should_start_window_drag(dq.abs, size) {
                     dq.response.set(WindowDragQueryResponse::Caption);
                     cx.set_cursor(MouseCursor::Default);
                 }
@@ -2473,28 +2657,71 @@ impl AppMain for App {
 
 #[cfg(test)]
 mod tests {
+    use makepad_widgets::DVec2;
+
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, Agent, App, BackendType, ClaudeCodeCliAgent, DEFAULT_GLASS_OPACITY,
-        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        glass_opacity_values, should_start_window_drag, Agent, App, BackendType,
+        ClaudeCodeCliAgent, DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
     fn aichat_glass_opacity_slider_contract() {
+        // v2: slider is a position value; per-layer alpha is derived.
         assert!((DEFAULT_GLASS_OPACITY - 0.90).abs() < f64::EPSILON);
         let values = glass_opacity_values(DEFAULT_GLASS_OPACITY);
-        assert!((0.85..=0.92).contains(&(values.app as f64)));
-        assert!(values.sidebar >= values.app);
-        assert!(values.main >= values.app);
-        assert!(values.composer >= values.app);
+        // Layer stack must read shell < main < sidebar < composer
+        // so the wallpaper shows through more on the outer frame than on
+        // the inner panels.
+        assert!(values.app < values.main);
+        assert!(values.main < values.sidebar);
+        assert!(values.sidebar < values.composer);
+        // Default keeps the wallpaper visible, but is opaque enough for text.
+        assert!((0.82..0.87).contains(&values.app));
     }
 
     #[test]
     fn aichat_liquid_glass_shell_contract() {
+        // v2: layer-stack ordering must hold at every legal slider value,
+        // and no layer reaches alpha 1.0 at any slider <= 1.0.
         let low = glass_opacity_values(0.0);
         let high = glass_opacity_values(2.0);
-        assert!((low.app - MIN_GLASS_OPACITY as f32).abs() < f32::EPSILON);
-        assert!((high.app - MAX_GLASS_OPACITY as f32).abs() < f32::EPSILON);
+        // Slider is clamped: low.app uses MIN_GLASS_OPACITY, high.app uses MAX.
+        assert!(low.app < high.app);
+        assert!(high.app > 0.90);
+        assert!(high.app <= 1.0);
+        // Ordering preserved across the range.
+        for &slider in &[
+            MIN_GLASS_OPACITY,
+            0.30_f64,
+            0.60,
+            DEFAULT_GLASS_OPACITY,
+            MAX_GLASS_OPACITY,
+        ] {
+            let v = glass_opacity_values(slider);
+            assert!(v.app < v.main, "slider={}", slider);
+            assert!(v.main <= v.sidebar, "slider={}", slider);
+            assert!(v.sidebar <= v.composer, "slider={}", slider);
+        }
+    }
+
+    #[test]
+    fn aichat_drag_strip_preserves_resize_edges() {
+        let size = DVec2 { x: 900.0, y: 700.0 };
+        assert!(should_start_window_drag(
+            DVec2 { x: 120.0, y: 24.0 },
+            size
+        ));
+        assert!(!should_start_window_drag(DVec2 { x: 4.0, y: 24.0 }, size));
+        assert!(!should_start_window_drag(DVec2 { x: 120.0, y: 4.0 }, size));
+        assert!(!should_start_window_drag(
+            DVec2 { x: 880.0, y: 24.0 },
+            size
+        ));
+        assert!(!should_start_window_drag(
+            DVec2 { x: 700.0, y: 24.0 },
+            size
+        ));
     }
 
     #[test]
