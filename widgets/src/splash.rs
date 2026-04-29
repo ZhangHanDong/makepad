@@ -1,5 +1,38 @@
 use crate::{makepad_derive_widget::*, makepad_draw::*, view::View, widget::*};
 
+#[derive(Clone, Debug, Default)]
+pub enum SplashAction {
+    Notify {
+        event_id: String,
+        payload: String,
+    },
+    #[default]
+    None,
+}
+
+pub fn register_agent_module(vm: &mut ScriptVm) {
+    let agent = vm.new_module(id!(agent));
+    vm.add_method(
+        agent,
+        id_lut!(notify),
+        script_args_def!(event = NIL, payload = NIL),
+        |vm, args| {
+            let event_value = script_value!(vm, args.event);
+            let payload_value = script_value!(vm, args.payload);
+
+            let mut event_id = String::new();
+            vm.bx.heap.cast_to_string(event_value, &mut event_id);
+
+            let mut payload = String::new();
+            vm.bx.heap.to_json_inner(payload_value, &mut payload);
+
+            Cx::post_action(SplashAction::Notify { event_id, payload });
+            NIL
+        },
+    );
+    vm.set_injected_global(id!(agent), agent.into());
+}
+
 script_mod! {
     use mod.prelude.widgets_internal.*
     use mod.widgets.*

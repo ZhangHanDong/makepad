@@ -704,17 +704,17 @@ script_mod! {
                                 }
                             }
 
-                            Label {
+                            sidebar_subtitle := Label {
                                 text: "Diagram workspace"
                                 draw_text.color: ai_cream_dim
                                 draw_text.text_style.font_size: 11
                             }
                         }
 
-                        nav_new := ButtonFlat {
+                        nav_chat := ButtonFlat {
                             width: Fill
                             height: 38
-                            text: "+  新对话"
+                            text: "●  会话"
                             align: Align{x: 0.0 y: 0.5}
                             padding: Inset{left: 14 right: 12}
                             draw_text +: {
@@ -725,6 +725,25 @@ script_mod! {
                                 color: #x0B6B67AA
                                 color_hover: #x108E88CC
                                 border_color: #x72E4FF66
+                                border_size: 1.0
+                                border_radius: 10.0
+                            }
+                        }
+
+                        nav_appgen := ButtonFlat {
+                            width: Fill
+                            height: 38
+                            text: "◇  App 生成"
+                            align: Align{x: 0.0 y: 0.5}
+                            padding: Inset{left: 14 right: 12}
+                            draw_text +: {
+                                color: ai_cream_dim
+                                text_style +: { font_size: 12 }
+                            }
+                            draw_bg +: {
+                                color: #x00000000
+                                color_hover: #xEAD8B814
+                                border_color: #x00000000
                                 border_size: 1.0
                                 border_radius: 10.0
                             }
@@ -870,7 +889,7 @@ script_mod! {
                             flow: Right
                             align: Align{y: 0.5}
 
-                            Label {
+                            workspace_title := Label {
                                 text: "AI Chat"
                                 draw_text.color: ai_cream
                                 draw_text.text_style.font_size: 14
@@ -970,13 +989,13 @@ script_mod! {
                                 align: Align{x: 0.5 y: 0.46}
                                 spacing: 18
 
-                                Label {
+                                empty_title := Label {
                                     text: "我们该做什么？"
                                     draw_text.color: #xF3E3C7
                                     draw_text.text_style.font_size: 27
                                 }
 
-                                Label {
+                                empty_subtitle := Label {
                                     text: "输入自然语言，生成可交互的 Makepad diagram。"
                                     draw_text.color: #xCDBF9FAA
                                     draw_text.text_style.font_size: 12
@@ -1140,6 +1159,32 @@ script_mod! {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ActiveWorkspace {
+    #[default]
+    Chat,
+    AppGen,
+}
+
+impl ActiveWorkspace {
+    fn save_path(self) -> &'static str {
+        match self {
+            Self::Chat => CHAT_SAVE_PATH,
+            Self::AppGen => APP_GEN_SAVE_PATH,
+        }
+    }
+
+    fn prompt_section(self) -> &'static str {
+        match self {
+            Self::Chat => "User",
+            Self::AppGen => "App Generation Request",
+        }
+    }
+}
+
+pub static ACTIVE_WORKSPACE: std::sync::RwLock<ActiveWorkspace> =
+    std::sync::RwLock::new(ActiveWorkspace::Chat);
+
 // Global chat state accessible to ChatList widget
 pub static CHAT_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatData {
     messages: Vec::new(),
@@ -1147,6 +1192,23 @@ pub static CHAT_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatD
     thinking_text: String::new(),
     is_streaming: false,
 });
+
+pub static APP_GEN_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatData {
+    messages: Vec::new(),
+    streaming_text: String::new(),
+    thinking_text: String::new(),
+    is_streaming: false,
+});
+
+pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> =
+    std::sync::RwLock::new(AppDemoState {
+        count: 0,
+        timer: TimerDemoState {
+            duration_seconds: 25 * 60,
+            remaining_seconds: 25 * 60,
+            is_running: false,
+        },
+    });
 
 // Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
@@ -1338,7 +1400,389 @@ fn assistant_message_is_safe_for_history(text: &str) -> bool {
 }
 
 const CHAT_SAVE_PATH: &str = "aichat_history.json";
+const APP_GEN_SAVE_PATH: &str = "aichat_appgen_history.json";
+const APP_STATE_SAVE_PATH: &str = "aichat_app_state.json";
 const MAX_STATELESS_HISTORY_MESSAGES: usize = 12;
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct AppDemoState {
+    count: i64,
+    timer: TimerDemoState,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct TimerDemoState {
+    duration_seconds: i64,
+    remaining_seconds: i64,
+    is_running: bool,
+}
+
+impl Default for AppDemoState {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            timer: TimerDemoState::default(),
+        }
+    }
+}
+
+impl Default for TimerDemoState {
+    fn default() -> Self {
+        Self {
+            duration_seconds: 25 * 60,
+            remaining_seconds: 25 * 60,
+            is_running: false,
+        }
+    }
+}
+
+impl AppDemoState {
+    fn load_from_disk() -> Self {
+        std::fs::read_to_string(APP_STATE_SAVE_PATH)
+            .ok()
+            .and_then(|s| Self::deserialize_json(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_to_disk(&self) {
+        let _ = std::fs::write(APP_STATE_SAVE_PATH, self.serialize_json());
+    }
+
+    fn prompt_json(&self) -> String {
+        format!(
+            "{{\n  \"count\": {},\n  \"timer\": {{\n    \"duration_seconds\": {},\n    \"remaining_seconds\": {},\n    \"display\": \"{}\",\n    \"is_running\": {},\n    \"button_label\": \"{}\"\n  }}\n}}",
+            self.count,
+            self.timer.duration_seconds,
+            self.timer.remaining_seconds,
+            self.timer.display(),
+            self.timer.is_running,
+            self.timer.button_label()
+        )
+    }
+}
+
+impl TimerDemoState {
+    fn display(&self) -> String {
+        let total = self.remaining_seconds.max(0);
+        format!("{:02}:{:02}", total / 60, total % 60)
+    }
+
+    fn button_label(&self) -> &'static str {
+        if self.is_running {
+            "Pause"
+        } else {
+            "Start"
+        }
+    }
+
+    fn reset(&mut self) {
+        self.remaining_seconds = self.duration_seconds.max(60);
+        self.is_running = false;
+    }
+}
+
+fn state_template_value(state: &AppDemoState, path: &str) -> Option<String> {
+    match path {
+        "count" => Some(state.count.to_string()),
+        "timer.duration_seconds" => Some(state.timer.duration_seconds.to_string()),
+        "timer.remaining_seconds" => Some(state.timer.remaining_seconds.to_string()),
+        "timer.display" => Some(state.timer.display()),
+        "timer.is_running" => Some(state.timer.is_running.to_string()),
+        "timer.button_label" => Some(state.timer.button_label().to_string()),
+        _ => None,
+    }
+}
+
+fn render_state_templates(raw: &str, state: &AppDemoState) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+
+    while let Some(start) = rest.find("{{state.") {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + "{{state.".len()..];
+
+        let Some(end) = after_open.find("}}") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+
+        let path = after_open[..end].trim();
+        if let Some(value) = state_template_value(state, path) {
+            out.push_str(&value);
+        } else {
+            log!("[render_state_templates] unknown path: {}", path);
+            out.push_str("{{state.");
+            out.push_str(path);
+            out.push_str("}}");
+        }
+
+        rest = &after_open[end + "}}".len()..];
+    }
+
+    out.push_str(rest);
+    out
+}
+
+fn prompt_with_state(section: &str, body: &str) -> String {
+    let state = APP_DEMO_STATE.read().unwrap();
+    format!(
+        "[Current app state]\n{}\n\n[{}]\n{}",
+        state.prompt_json(),
+        section,
+        body
+    )
+}
+
+fn app_generation_prompt_with_state(body: &str) -> String {
+    let state = APP_DEMO_STATE.read().unwrap();
+    let capability = AppCapability::detect(body);
+    let title = body
+        .lines()
+        .next()
+        .unwrap_or("Generated App")
+        .chars()
+        .take(48)
+        .collect::<String>()
+        .replace('"', "'");
+    format!(
+        r#"[Current app state]
+{}
+
+[App Generation Request]
+{}
+
+[Host-selected capability]
+{}
+
+{}
+
+[Plan contract]
+First output exactly one ```appplan json fenced block using this plan as the source of truth:
+```appplan json
+{}
+```
+
+[UI output contract]
+After the appplan block, output exactly one ```runsplash fenced block.
+Do not return diagrams, JSX, React, JavaScript, handler source files, or companion logic.
+Use only the state paths and agent.notify actions listed in the capability manifest.
+Use Makepad Splash syntax, for example:
+```runsplash
+RoundedView{{
+    width: Fill height: Fit
+    flow: Down spacing: 12 padding: 16
+    Label{{ text: "Count: {{{{state.count}}}}" }}
+    Button{{ text: "+1" on_click: || agent.notify("inc", {{}}) }}
+}}
+```
+Use {{{{state.count}}}} for displayed counter state when the UI has a count.
+The payload for listed demo actions must be an empty object.
+If a required control is listed in the manifest, it must be visible in the UI."#,
+        state.prompt_json(),
+        body,
+        capability.app_type(),
+        capability.manifest(),
+        capability.app_plan_json(&title)
+    )
+}
+
+fn app_generation_session_system_prompt() -> String {
+    let splash_md_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../splash.md");
+    let splash_md = std::fs::read_to_string(&splash_md_path)
+        .unwrap_or_else(|_| include_str!("../../../splash.md").to_string());
+    format!(
+        r#"You are an app-generation agent for Makepad aichat.
+
+Your job is to generate live, clickable app UI using Makepad Splash.
+
+Hard output rules:
+- For app UI requests, return one ```appplan json fenced block followed by one ```runsplash fenced block.
+- Do not return ```diagram, JSX, React, JavaScript, TypeScript, handler source files, or companion logic.
+- Do not explain the code before, between, or after those fenced blocks.
+- Use only the capability manifest supplied in the user message. Do not invent host actions.
+- `use mod.prelude.widgets.*` is automatically prepended. Do not include imports.
+- Do not wrap content in Root{{}} or Window{{}}. The content is inserted into an existing container.
+
+Interactive generated UI can notify the host from button callbacks:
+
+Button{{ text: "+1" on_click: || agent.notify("inc", {{}}) }}
+
+The user message supplies the current capability manifest. For example, counter apps may use:
+
+agent.notify("inc", {{}})
+agent.notify("dec", {{}})
+agent.notify("reset", {{}})
+agent.notify("ask_ai", {{}})
+
+Timer apps may use:
+
+agent.notify("timer.start", {{}})
+agent.notify("timer.pause", {{}})
+agent.notify("timer.toggle", {{}})
+agent.notify("timer.reset", {{}})
+agent.notify("timer.add_minute", {{}})
+agent.notify("timer.subtract_minute", {{}})
+
+Only use actions listed in the current capability manifest.
+
+Display host state with markdown-layer placeholders inside string literals:
+
+Label{{ text: "Count: {{{{state.count}}}}" }}
+Label{{ text: "{{{{state.timer.display}}}}" }}
+
+Here is the Splash scripting manual. Follow it exactly:
+
+{splash_md}"#
+    )
+}
+
+fn chat_data_for_workspace(workspace: ActiveWorkspace) -> &'static std::sync::RwLock<ChatData> {
+    match workspace {
+        ActiveWorkspace::Chat => &CHAT_DATA,
+        ActiveWorkspace::AppGen => &APP_GEN_DATA,
+    }
+}
+
+fn active_workspace() -> ActiveWorkspace {
+    *ACTIVE_WORKSPACE.read().unwrap()
+}
+
+fn active_chat_data() -> &'static std::sync::RwLock<ChatData> {
+    chat_data_for_workspace(active_workspace())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppCapability {
+    Counter,
+    Timer,
+    Todo,
+    Generic,
+}
+
+impl AppCapability {
+    fn detect(request: &str) -> Self {
+        let text = request.to_lowercase();
+        if text.contains("番茄")
+            || text.contains("pomodoro")
+            || text.contains("timer")
+            || text.contains("倒计时")
+            || text.contains("时钟")
+        {
+            Self::Timer
+        } else if text.contains("todo")
+            || text.contains("待办")
+            || text.contains("任务")
+            || text.contains("清单")
+        {
+            Self::Todo
+        } else if text.contains("counter") || text.contains("计数") || text.contains("count") {
+            Self::Counter
+        } else {
+            Self::Generic
+        }
+    }
+
+    fn app_type(self) -> &'static str {
+        match self {
+            Self::Counter => "counter",
+            Self::Timer => "timer",
+            Self::Todo => "todo",
+            Self::Generic => "generic",
+        }
+    }
+
+    fn app_plan_json(self, title: &str) -> String {
+        match self {
+            Self::Counter => format!(
+                r#"{{"app_type":"counter","title":"{}","state_paths":["count"],"actions":["inc","dec","reset"],"required_controls":["increment","decrement","reset"]}}"#,
+                title
+            ),
+            Self::Timer => format!(
+                r#"{{"app_type":"timer","title":"{}","state_paths":["timer.display","timer.is_running","timer.button_label"],"actions":["timer.start","timer.pause","timer.toggle","timer.reset","timer.add_minute","timer.subtract_minute"],"required_controls":["visible start or pause","reset","optional duration adjustment"]}}"#,
+                title
+            ),
+            Self::Todo => format!(
+                r#"{{"app_type":"todo","title":"{}","state_paths":[],"actions":[],"required_controls":["list","add item","toggle item","delete item"],"status":"planned but not implemented in host runtime yet"}}"#,
+                title
+            ),
+            Self::Generic => format!(
+                r#"{{"app_type":"generic","title":"{}","state_paths":["count"],"actions":["ask_ai"],"required_controls":["primary interaction"],"status":"host runtime has only generic ask_ai plus counter/timer capabilities"}}"#,
+                title
+            ),
+        }
+    }
+
+    fn manifest(self) -> &'static str {
+        match self {
+            Self::Counter => {
+                r#"[Available state paths]
+{{state.count}}
+
+[Available actions]
+agent.notify("inc", {})
+agent.notify("dec", {})
+agent.notify("reset", {})
+agent.notify("ask_ai", {})
+
+[Required controls]
+- A visible +1 button
+- A visible -1 button
+- A visible Reset button"#
+            }
+            Self::Timer => {
+                r#"[Available state paths]
+{{state.timer.display}}              // formatted MM:SS
+{{state.timer.duration_seconds}}     // total configured seconds
+{{state.timer.remaining_seconds}}    // remaining seconds
+{{state.timer.is_running}}           // "true" or "false"
+{{state.timer.button_label}}         // "Start" or "Pause"
+
+[Available actions]
+agent.notify("timer.start", {})
+agent.notify("timer.pause", {})
+agent.notify("timer.toggle", {})
+agent.notify("timer.reset", {})
+agent.notify("timer.add_minute", {})
+agent.notify("timer.subtract_minute", {})
+agent.notify("ask_ai", {})
+
+[Required controls]
+- A clearly visible Start/Pause control using {{state.timer.button_label}} and timer.toggle, or separate Start and Pause buttons
+- A visible Reset button
+- Optional +1 minute and -1 minute buttons"#
+            }
+            Self::Todo => {
+                r#"[Available state paths]
+Todo state is not implemented yet in this demo runtime.
+
+[Available actions]
+agent.notify("ask_ai", {})
+
+[Required controls]
+- Render a static todo mockup or ask for Todo runtime support.
+- Do not invent unimplemented todo.add/todo.delete actions."#
+            }
+            Self::Generic => {
+                r#"[Available state paths]
+{{state.count}}
+{{state.timer.display}}
+{{state.timer.button_label}}
+
+[Available actions]
+agent.notify("ask_ai", {})
+agent.notify("inc", {})
+agent.notify("dec", {})
+agent.notify("reset", {})
+agent.notify("timer.toggle", {})
+agent.notify("timer.reset", {})
+
+[Required controls]
+- Use only the actions listed above.
+- If the app needs unavailable host behavior, show a static mockup and include an Ask AI button."#
+            }
+        }
+    }
+}
 
 fn stateless_history_messages(messages: &[ChatMessage]) -> Vec<Message> {
     let mut history = Vec::new();
@@ -1730,7 +2174,7 @@ pub struct ChatData {
 }
 
 impl ChatData {
-    pub fn save_to_disk(&self) {
+    pub fn save_to_disk(&self, path: &str) {
         let saved = SavedHistory {
             messages: self
                 .messages
@@ -1744,11 +2188,11 @@ impl ChatData {
                 })
                 .collect(),
         };
-        let _ = std::fs::write(CHAT_SAVE_PATH, saved.serialize_json());
+        let _ = std::fs::write(path, saved.serialize_json());
     }
 
-    pub fn load_from_disk() -> Vec<ChatMessage> {
-        std::fs::read_to_string(CHAT_SAVE_PATH)
+    pub fn load_from_disk(path: &str) -> Vec<ChatMessage> {
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|s| SavedHistory::deserialize_json(&s).ok())
             .map(|saved| {
@@ -1780,7 +2224,7 @@ pub struct ChatList {
 
 impl Widget for ChatList {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        let data = CHAT_DATA.read().unwrap();
+        let data = active_chat_data().read().unwrap();
 
         while let Some(item) = self.view.draw_walk(cx, scope, walk).step() {
             if let Some(mut list) = item.as_portal_list().borrow_mut() {
@@ -1844,7 +2288,15 @@ impl Widget for ChatList {
                         // wrap_bare_latex wraps `\cmd{…}` with `$…$` so
                         // MathView can render them.
                         let unwrapped = unwrap_outer_markdown_fence(&msg.text);
-                        let rendered = wrap_bare_latex(unwrapped);
+                        let state_rendered;
+                        let display_text = if msg.role == ChatRole::Assistant {
+                            let state = APP_DEMO_STATE.read().unwrap();
+                            state_rendered = render_state_templates(unwrapped, &state);
+                            state_rendered.as_str()
+                        } else {
+                            unwrapped
+                        };
+                        let rendered = wrap_bare_latex(display_text);
                         markdown.set_text(cx, &rendered);
                         if is_animating {
                             markdown.stop_streaming_animation();
@@ -1869,7 +2321,7 @@ impl Widget for ChatList {
                 for (item_id, item) in list.items_with_actions(actions) {
                     let copy_btn = item.button(cx, ids!(copy_button));
                     if copy_btn.clicked(actions) {
-                        let data = CHAT_DATA.read().unwrap();
+                        let data = active_chat_data().read().unwrap();
                         if let Some(msg) = data.messages.get(item_id) {
                             cx.copy_to_clipboard(&msg.text);
                         }
@@ -1940,6 +2392,22 @@ You can answer questions normally using markdown. But when it makes sense to sho
 IMPORTANT: `use mod.prelude.widgets.*` is automatically prepended to every runsplash block — do NOT include it yourself. All widget names (View, Label, Button, etc.) are already in scope.
 
 The block content is Splash script. It gets evaluated and rendered as a live widget tree. Do NOT wrap it in Root{{}} or Window{{}} — the content is placed directly inside a container.
+
+Interactive generated UI can notify the host from button callbacks:
+
+Button{{ text: "+1" on_click: || agent.notify("inc", {{}}) }}
+
+Supported demo actions are `inc`, `dec`, `reset`, and `ask_ai`. For the D1 counter, always use an empty object payload:
+
+agent.notify("inc", {{}})
+agent.notify("dec", {{}})
+agent.notify("reset", {{}})
+
+To display host state in D1, use the markdown-layer placeholder `{{{{state.count}}}}` inside string literals:
+
+Label{{ text: "Count: {{{{state.count}}}}" }}
+
+Do not hardcode mutable state when the UI should reflect host state.
 
 Here is the complete Splash scripting manual. Follow it exactly:
 
@@ -2078,17 +2546,27 @@ pub struct App {
     #[rust]
     agent: Option<Box<dyn Agent>>,
     #[rust]
-    session_id: Option<SessionId>,
+    chat_session_id: Option<SessionId>,
+    #[rust]
+    appgen_session_id: Option<SessionId>,
     #[rust]
     current_prompt: Option<PromptId>,
+    #[rust]
+    current_prompt_workspace: Option<ActiveWorkspace>,
+    #[rust]
+    active_workspace: ActiveWorkspace,
     #[rust]
     available_backends: Vec<BackendType>,
     #[rust]
     active_backend: Option<BackendType>,
     #[rust]
-    history_injected: bool,
+    chat_history_injected: bool,
+    #[rust]
+    appgen_history_injected: bool,
     #[rust]
     moonshot_thinking_enabled: bool,
+    #[rust]
+    app_state_timer: Timer,
 }
 
 impl App {
@@ -2225,6 +2703,104 @@ impl App {
         }
     }
 
+    fn is_history_injected(&self, workspace: ActiveWorkspace) -> bool {
+        match workspace {
+            ActiveWorkspace::Chat => self.chat_history_injected,
+            ActiveWorkspace::AppGen => self.appgen_history_injected,
+        }
+    }
+
+    fn set_history_injected(&mut self, workspace: ActiveWorkspace, injected: bool) {
+        match workspace {
+            ActiveWorkspace::Chat => self.chat_history_injected = injected,
+            ActiveWorkspace::AppGen => self.appgen_history_injected = injected,
+        }
+    }
+
+    fn session_id_for(&self, workspace: ActiveWorkspace) -> Option<SessionId> {
+        match workspace {
+            ActiveWorkspace::Chat => self.chat_session_id,
+            ActiveWorkspace::AppGen => self.appgen_session_id,
+        }
+    }
+
+    fn set_session_id_for(&mut self, workspace: ActiveWorkspace, session_id: Option<SessionId>) {
+        match workspace {
+            ActiveWorkspace::Chat => self.chat_session_id = session_id,
+            ActiveWorkspace::AppGen => self.appgen_session_id = session_id,
+        }
+    }
+
+    fn reset_all_history_injected(&mut self) {
+        self.chat_history_injected = false;
+        self.appgen_history_injected = false;
+    }
+
+    fn update_workspace_ui(&self, cx: &mut Cx) {
+        match self.active_workspace {
+            ActiveWorkspace::Chat => {
+                self.ui
+                    .label(cx, ids!(sidebar_subtitle))
+                    .set_text(cx, "Chat workspace");
+                self.ui
+                    .label(cx, ids!(workspace_title))
+                    .set_text(cx, "AI Chat");
+                self.ui
+                    .label(cx, ids!(empty_title))
+                    .set_text(cx, "我们该做什么？");
+                self.ui
+                    .label(cx, ids!(empty_subtitle))
+                    .set_text(cx, "输入自然语言，生成可交互的 Makepad diagram。");
+                self.ui
+                    .text_input(cx, ids!(input))
+                    .set_empty_text(cx, "问任何事。输入 @ 使用插件或提及文件".to_string());
+                self.ui.widget(cx, ids!(nav_chat)).set_text(cx, "●  会话");
+                self.ui
+                    .widget(cx, ids!(nav_appgen))
+                    .set_text(cx, "◇  App 生成");
+            }
+            ActiveWorkspace::AppGen => {
+                self.ui
+                    .label(cx, ids!(sidebar_subtitle))
+                    .set_text(cx, "App generation workspace");
+                self.ui
+                    .label(cx, ids!(workspace_title))
+                    .set_text(cx, "App 生成");
+                self.ui
+                    .label(cx, ids!(empty_title))
+                    .set_text(cx, "生成一个可点击的 App");
+                self.ui
+                    .label(cx, ids!(empty_subtitle))
+                    .set_text(cx, "这个 tab 的 prompt、历史和普通会话隔离。");
+                self.ui
+                    .text_input(cx, ids!(input))
+                    .set_empty_text(cx, "描述要生成的 app，例如：画一个计数器".to_string());
+                self.ui.widget(cx, ids!(nav_chat)).set_text(cx, "○  会话");
+                self.ui
+                    .widget(cx, ids!(nav_appgen))
+                    .set_text(cx, "◆  App 生成");
+            }
+        }
+    }
+
+    fn switch_workspace(&mut self, cx: &mut Cx, workspace: ActiveWorkspace) {
+        if self.active_workspace == workspace {
+            return;
+        }
+        self.active_workspace = workspace;
+        *ACTIVE_WORKSPACE.write().unwrap() = workspace;
+        self.update_workspace_ui(cx);
+        self.update_empty_state_visibility(cx);
+        self.ui.redraw(cx);
+    }
+
+    fn prompt_for_workspace(&self, workspace: ActiveWorkspace, text: &str) -> String {
+        match workspace {
+            ActiveWorkspace::Chat => prompt_with_state(workspace.prompt_section(), text),
+            ActiveWorkspace::AppGen => app_generation_prompt_with_state(text),
+        }
+    }
+
     fn switch_backend(&mut self, cx: &mut Cx, backend: BackendType) {
         if self.active_backend == Some(backend) {
             return;
@@ -2237,42 +2813,57 @@ impl App {
     }
 
     fn activate_backend(&mut self, cx: &mut Cx, backend: BackendType) {
-        if let Some(agent) = self.create_agent(backend) {
-            self.agent = Some(agent);
-            self.active_backend = Some(backend);
-            self.session_id = None;
-            self.current_prompt = None;
-            self.history_injected = false;
-
-            let config = SessionConfig {
+        if let Some(mut agent) = self.create_agent(backend) {
+            let chat_config = SessionConfig {
                 system_prompt: Some(backend.system_prompt()),
                 ..Default::default()
             };
-            if let Some(agent) = &mut self.agent {
-                self.session_id = Some(agent.create_session(cx, config));
-            }
+            let appgen_config = SessionConfig {
+                system_prompt: Some(app_generation_session_system_prompt()),
+                ..Default::default()
+            };
+            let chat_session_id = agent.create_session(cx, chat_config);
+            let appgen_session_id = agent.create_session(cx, appgen_config);
+
+            self.agent = Some(agent);
+            self.active_backend = Some(backend);
+            self.chat_session_id = Some(chat_session_id);
+            self.appgen_session_id = Some(appgen_session_id);
+            self.current_prompt = None;
+            self.current_prompt_workspace = None;
+            self.reset_all_history_injected();
             self.update_status(cx);
         }
     }
 
     fn clear_chat(&mut self, cx: &mut Cx) {
+        let workspace = self.active_workspace;
         {
-            let mut data = CHAT_DATA.write().unwrap();
+            let mut data = chat_data_for_workspace(workspace).write().unwrap();
             data.messages.clear();
             data.streaming_text.clear();
             data.thinking_text.clear();
             data.is_streaming = false;
-            data.save_to_disk();
+            data.save_to_disk(workspace.save_path());
         }
-        self.history_injected = false;
+        self.set_history_injected(workspace, false);
 
-        if let Some(agent) = &mut self.agent {
+        let new_session_id = if let Some(agent) = &mut self.agent {
             let backend = self.active_backend.unwrap_or(BackendType::Gemini);
+            let system_prompt = match workspace {
+                ActiveWorkspace::Chat => backend.system_prompt(),
+                ActiveWorkspace::AppGen => app_generation_session_system_prompt(),
+            };
             let config = SessionConfig {
-                system_prompt: Some(backend.system_prompt()),
+                system_prompt: Some(system_prompt),
                 ..Default::default()
             };
-            self.session_id = Some(agent.create_session(cx, config));
+            Some(agent.create_session(cx, config))
+        } else {
+            None
+        };
+        if let Some(session_id) = new_session_id {
+            self.set_session_id_for(workspace, Some(session_id));
         }
         self.update_empty_state_visibility(cx);
         self.ui.redraw(cx);
@@ -2280,12 +2871,85 @@ impl App {
 
     fn update_empty_state_visibility(&self, cx: &mut Cx) {
         let show_empty_state = {
-            let data = CHAT_DATA.read().unwrap();
+            let data = chat_data_for_workspace(self.active_workspace)
+                .read()
+                .unwrap();
             data.messages.is_empty() && !data.is_streaming
         };
         self.ui
             .view(cx, ids!(empty_state))
             .set_visible(cx, show_empty_state);
+    }
+
+    fn send_prompt_to_agent(
+        &mut self,
+        cx: &mut Cx,
+        workspace: ActiveWorkspace,
+        display_text: String,
+        prompt_text: String,
+    ) {
+        if display_text.trim().is_empty() || prompt_text.trim().is_empty() {
+            return;
+        }
+
+        if self.agent.is_none() || self.session_id_for(workspace).is_none() {
+            return;
+        }
+
+        let items_len = {
+            let mut data = chat_data_for_workspace(workspace).write().unwrap();
+            data.messages.push(ChatMessage {
+                role: ChatRole::User,
+                text: display_text,
+            });
+            data.streaming_text.clear();
+            data.thinking_text.clear();
+            data.is_streaming = true;
+            data.messages.len() + 1
+        };
+        self.update_empty_state_visibility(cx);
+
+        let session_id = self.session_id_for(workspace).unwrap();
+
+        // Inject history on first prompt for stateless backends
+        let history_to_inject = if !self.is_history_injected(workspace)
+            && self.agent.as_ref().unwrap().is_stateless()
+        {
+            let data = chat_data_for_workspace(workspace).read().unwrap();
+            let history = stateless_history_messages(&data.messages[..data.messages.len() - 1]);
+            drop(data);
+            self.set_history_injected(workspace, true);
+            (!history.is_empty()).then_some(history)
+        } else {
+            None
+        };
+
+        // ACP doesn't support system prompts via the protocol, so for ClaudeSplash
+        // we prepend the splash system prompt context to each user message.
+        let prompt_text = if self.active_backend == Some(BackendType::ClaudeSplash) {
+            let system = match workspace {
+                ActiveWorkspace::Chat => BackendType::ClaudeSplash.system_prompt(),
+                ActiveWorkspace::AppGen => app_generation_session_system_prompt(),
+            };
+            format!("<system>\n{system}\n</system>\n\n{prompt_text}")
+        } else {
+            prompt_text
+        };
+        let agent = self.agent.as_mut().unwrap();
+        if let Some(history) = history_to_inject {
+            agent.inject_history(session_id, history);
+        }
+        self.current_prompt = Some(agent.send_prompt(cx, session_id, &prompt_text));
+        self.current_prompt_workspace = Some(workspace);
+        self.ui.view(cx, ids!(cancel_button)).set_visible(cx, true);
+
+        if self.active_workspace == workspace {
+            let chat_list = self.ui.widget(cx, ids!(chat_list));
+            let list = chat_list.portal_list(cx, ids!(list));
+            list.set_tail_range(true);
+            list.set_first_id_and_scroll(items_len.saturating_sub(1), 0.0);
+        }
+        self.ui.redraw(cx);
     }
 
     fn send_message(&mut self, cx: &mut Cx) {
@@ -2295,61 +2959,160 @@ impl App {
             return;
         }
 
-        if self.agent.is_none() || self.session_id.is_none() {
-            return;
-        }
-
-        let items_len = {
-            let mut data = CHAT_DATA.write().unwrap();
-            data.messages.push(ChatMessage {
-                role: ChatRole::User,
-                text: text.clone(),
-            });
-            data.streaming_text.clear();
-            data.thinking_text.clear();
-            data.is_streaming = true;
-            data.messages.len() + 1
-        };
         input.set_text(cx, "");
-        self.update_empty_state_visibility(cx);
+        let workspace = self.active_workspace;
+        let prompt_text = self.prompt_for_workspace(workspace, &text);
+        self.send_prompt_to_agent(cx, workspace, text, prompt_text);
+    }
 
-        let session_id = self.session_id.unwrap();
-        let agent = self.agent.as_mut().unwrap();
+    fn mutate_demo_count<F>(&self, f: F)
+    where
+        F: FnOnce(i64) -> i64,
+    {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        state.count = f(state.count);
+        state.save_to_disk();
+    }
 
-        // Inject history on first prompt for stateless backends
-        if !self.history_injected && agent.is_stateless() {
-            let data = CHAT_DATA.read().unwrap();
-            let history = stateless_history_messages(&data.messages[..data.messages.len() - 1]);
-            drop(data);
-            if !history.is_empty() {
-                agent.inject_history(session_id, history);
-            }
-            self.history_injected = true;
+    fn mutate_timer<F>(&self, f: F)
+    where
+        F: FnOnce(&mut TimerDemoState),
+    {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        f(&mut state.timer);
+        state.save_to_disk();
+    }
+
+    fn tick_timer_state(&self) -> bool {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        if !state.timer.is_running {
+            return false;
         }
+        if state.timer.remaining_seconds > 0 {
+            state.timer.remaining_seconds -= 1;
+        }
+        if state.timer.remaining_seconds <= 0 {
+            state.timer.remaining_seconds = 0;
+            state.timer.is_running = false;
+        }
+        state.save_to_disk();
+        true
+    }
 
-        // ACP doesn't support system prompts via the protocol, so for ClaudeSplash
-        // we prepend the splash system prompt context to each user message.
-        let prompt_text = if self.active_backend == Some(BackendType::ClaudeSplash) {
-            let system = BackendType::ClaudeSplash.system_prompt();
-            format!("<system>\n{system}\n</system>\n\n{text}")
-        } else {
-            text
+    fn refresh_visible_state_templates(&self, cx: &mut Cx) {
+        let messages: Vec<(usize, String)> = {
+            let data = chat_data_for_workspace(self.active_workspace).read().unwrap();
+            data.messages
+                .iter()
+                .enumerate()
+                .filter_map(|(index, msg)| {
+                    (msg.role == ChatRole::Assistant).then(|| (index, msg.text.clone()))
+                })
+                .collect()
         };
-        self.current_prompt = Some(agent.send_prompt(cx, session_id, &prompt_text));
-        self.ui.view(cx, ids!(cancel_button)).set_visible(cx, true);
-
+        let state = APP_DEMO_STATE.read().unwrap();
         let chat_list = self.ui.widget(cx, ids!(chat_list));
         let list = chat_list.portal_list(cx, ids!(list));
-        list.set_tail_range(true);
-        list.set_first_id_and_scroll(items_len.saturating_sub(1), 0.0);
-        self.ui.redraw(cx);
+
+        for (item_id, text) in messages {
+            let Some((_, item)) = list.get_item(item_id) else {
+                continue;
+            };
+            let unwrapped = unwrap_outer_markdown_fence(&text);
+            let state_rendered = render_state_templates(unwrapped, &state);
+            let rendered = wrap_bare_latex(&state_rendered);
+            let mut markdown = item.markdown(cx, ids!(selectable));
+            markdown.set_text(cx, &rendered);
+        }
+        cx.redraw_all();
+    }
+
+    fn handle_splash_event(&mut self, cx: &mut Cx, event_id: &str, payload: &str) {
+        match event_id {
+            "inc" => {
+                self.mutate_demo_count(|count| count + 1);
+                self.refresh_visible_state_templates(cx);
+            }
+            "dec" => {
+                self.mutate_demo_count(|count| count - 1);
+                self.refresh_visible_state_templates(cx);
+            }
+            "reset" => {
+                self.mutate_demo_count(|_| 0);
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.start" => {
+                self.mutate_timer(|timer| {
+                    if timer.remaining_seconds <= 0 {
+                        timer.remaining_seconds = timer.duration_seconds.max(60);
+                    }
+                    timer.is_running = true;
+                });
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.pause" => {
+                self.mutate_timer(|timer| {
+                    timer.is_running = false;
+                });
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.toggle" => {
+                self.mutate_timer(|timer| {
+                    if timer.is_running {
+                        timer.is_running = false;
+                    } else {
+                        if timer.remaining_seconds <= 0 {
+                            timer.remaining_seconds = timer.duration_seconds.max(60);
+                        }
+                        timer.is_running = true;
+                    }
+                });
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.reset" => {
+                self.mutate_timer(|timer| timer.reset());
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.add_minute" => {
+                self.mutate_timer(|timer| {
+                    timer.duration_seconds += 60;
+                    timer.remaining_seconds += 60;
+                });
+                self.refresh_visible_state_templates(cx);
+            }
+            "timer.subtract_minute" => {
+                self.mutate_timer(|timer| {
+                    timer.duration_seconds = (timer.duration_seconds - 60).max(60);
+                    timer.remaining_seconds = (timer.remaining_seconds - 60).max(0);
+                    if timer.remaining_seconds == 0 {
+                        timer.is_running = false;
+                    }
+                });
+                self.refresh_visible_state_templates(cx);
+            }
+            "ask_ai" => {
+                let workspace = self.active_workspace;
+                let body = format!("User clicked \"ask_ai\" with payload: {}", payload);
+                let prompt_text = self.prompt_for_workspace(workspace, &body);
+                self.send_prompt_to_agent(cx, workspace, body, prompt_text);
+            }
+            "" => {
+                log!("[splash] ignored empty agent.notify event");
+            }
+            other => {
+                log!("[splash] unknown event: {}", other);
+            }
+        }
     }
 
     fn cancel_request(&mut self, cx: &mut Cx) {
         if let (Some(agent), Some(prompt_id)) = (&mut self.agent, self.current_prompt.take()) {
             agent.cancel_prompt(cx, prompt_id);
 
-            let mut data = CHAT_DATA.write().unwrap();
+            let workspace = self
+                .current_prompt_workspace
+                .unwrap_or(self.active_workspace);
+            let mut data = chat_data_for_workspace(workspace).write().unwrap();
             let text = std::mem::take(&mut data.streaming_text);
             data.thinking_text.clear();
             if !text.is_empty() {
@@ -2361,6 +3124,7 @@ impl App {
             data.is_streaming = false;
             drop(data);
 
+            self.current_prompt_workspace = None;
             self.update_empty_state_visibility(cx);
             self.ui.view(cx, ids!(cancel_button)).set_visible(cx, false);
             self.ui.redraw(cx);
@@ -2412,6 +3176,12 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        for action in actions {
+            if let SplashAction::Notify { event_id, payload } = action.cast() {
+                self.handle_splash_event(cx, &event_id, &payload);
+            }
+        }
+
         let opacity_slider = self.ui.slider(cx, ids!(opacity_slider));
         if let Some(opacity) = opacity_slider
             .slided(actions)
@@ -2477,6 +3247,12 @@ impl MatchEvent for App {
         if self.ui.button(cx, ids!(clear_button)).clicked(actions) {
             self.clear_chat(cx);
         }
+        if self.ui.button(cx, ids!(nav_chat)).clicked(actions) {
+            self.switch_workspace(cx, ActiveWorkspace::Chat);
+        }
+        if self.ui.button(cx, ids!(nav_appgen)).clicked(actions) {
+            self.switch_workspace(cx, ActiveWorkspace::AppGen);
+        }
         if self
             .ui
             .text_input(cx, ids!(input))
@@ -2503,18 +3279,23 @@ impl MatchEvent for App {
         let list = chat_list.portal_list(cx, ids!(list));
         for (item_id, item) in list.items_with_actions(actions) {
             if item.button(cx, ids!(delete_button)).pressed(actions) {
-                let mut data = CHAT_DATA.write().unwrap();
+                let workspace = self.active_workspace;
+                let mut data = chat_data_for_workspace(workspace).write().unwrap();
                 if item_id < data.messages.len() {
                     data.messages.remove(item_id);
-                    data.save_to_disk();
+                    data.save_to_disk(workspace.save_path());
                 }
                 drop(data);
+                self.update_empty_state_visibility(cx);
                 self.ui.redraw(cx);
             }
         }
     }
 
     fn handle_startup(&mut self, cx: &mut Cx) {
+        self.active_workspace = ActiveWorkspace::Chat;
+        *ACTIVE_WORKSPACE.write().unwrap() = self.active_workspace;
+        self.app_state_timer = cx.start_interval(1.0);
         let default_backend = Self::default_backend(&self.available_backends);
         if let Some(backend) = default_backend {
             self.switch_backend(cx, backend);
@@ -2523,6 +3304,7 @@ impl MatchEvent for App {
                 .set_selected_item(cx, backend.to_index());
         }
         self.update_status(cx);
+        self.update_workspace_ui(cx);
         self.update_empty_state_visibility(cx);
         self.ui
             .slider(cx, ids!(opacity_slider))
@@ -2532,18 +3314,27 @@ impl MatchEvent for App {
             .set_active(cx, self.moonshot_thinking_enabled, Animate::No);
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
     }
+
+    fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
+        if self.app_state_timer.is_timer(event).is_some() && self.tick_timer_state() {
+            self.refresh_visible_state_templates(cx);
+        }
+    }
 }
 
 impl AppMain for App {
     fn script_mod(vm: &mut ScriptVm) -> ScriptValue {
         crate::makepad_widgets::script_mod(vm);
+        crate::makepad_widgets::register_agent_module(vm);
         crate::makepad_code_editor::script_mod(vm);
         crate::makepad_diagram_kit::script_mod(vm);
         self::script_mod(vm)
     }
 
     fn after_new_from_script(_vm: &mut ScriptVm, app: &mut Self) {
-        CHAT_DATA.write().unwrap().messages = ChatData::load_from_disk();
+        CHAT_DATA.write().unwrap().messages = ChatData::load_from_disk(CHAT_SAVE_PATH);
+        APP_GEN_DATA.write().unwrap().messages = ChatData::load_from_disk(APP_GEN_SAVE_PATH);
+        *APP_DEMO_STATE.write().unwrap() = AppDemoState::load_from_disk();
         app.available_backends = Self::detect_available_backends();
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
     }
@@ -2575,22 +3366,30 @@ impl AppMain for App {
                     }
                     AgentEvent::TextDelta { text, .. } => {
                         log!("aichat UI text delta chars={}", text.chars().count());
+                        let workspace = self
+                            .current_prompt_workspace
+                            .unwrap_or(self.active_workspace);
                         let item_id = {
-                            let mut data = CHAT_DATA.write().unwrap();
+                            let mut data = chat_data_for_workspace(workspace).write().unwrap();
                             data.streaming_text.push_str(&text);
                             data.messages.len()
                         };
-                        let chat_list = self.ui.widget(cx, ids!(chat_list));
-                        let list = chat_list.portal_list(cx, ids!(list));
-                        if let Some((_, item)) = list.get_item(item_id) {
-                            item.widget(cx, ids!(splash_view)).redraw(cx);
+                        if self.active_workspace == workspace {
+                            let chat_list = self.ui.widget(cx, ids!(chat_list));
+                            let list = chat_list.portal_list(cx, ids!(list));
+                            if let Some((_, item)) = list.get_item(item_id) {
+                                item.widget(cx, ids!(splash_view)).redraw(cx);
+                            }
                         }
                         cx.redraw_all();
                     }
                     AgentEvent::ThinkingDelta { text, .. } => {
                         log!("aichat UI thinking delta chars={}", text.chars().count());
+                        let workspace = self
+                            .current_prompt_workspace
+                            .unwrap_or(self.active_workspace);
                         {
-                            let mut data = CHAT_DATA.write().unwrap();
+                            let mut data = chat_data_for_workspace(workspace).write().unwrap();
                             data.thinking_text.push_str(&text);
                         }
                         self.ui
@@ -2599,7 +3398,10 @@ impl AppMain for App {
                         cx.redraw_all();
                     }
                     AgentEvent::TurnComplete { .. } => {
-                        let mut data = CHAT_DATA.write().unwrap();
+                        let workspace = self
+                            .current_prompt_workspace
+                            .unwrap_or(self.active_workspace);
+                        let mut data = chat_data_for_workspace(workspace).write().unwrap();
                         let text = std::mem::take(&mut data.streaming_text);
                         log!(
                             "aichat UI turn complete content_chars={}",
@@ -2620,27 +3422,32 @@ impl AppMain for App {
                             }
                         }
                         data.is_streaming = false;
-                        data.save_to_disk();
+                        data.save_to_disk(workspace.save_path());
                         drop(data);
 
                         self.current_prompt = None;
+                        self.current_prompt_workspace = None;
                         self.ui.view(cx, ids!(cancel_button)).set_visible(cx, false);
                         self.update_empty_state_visibility(cx);
                         cx.redraw_all();
                     }
                     AgentEvent::PromptError { error, .. } => {
                         log!("aichat UI prompt error: {}", error);
+                        let workspace = self
+                            .current_prompt_workspace
+                            .unwrap_or(self.active_workspace);
                         {
-                            let mut data = CHAT_DATA.write().unwrap();
+                            let mut data = chat_data_for_workspace(workspace).write().unwrap();
                             data.messages.push(ChatMessage {
                                 role: ChatRole::Assistant,
                                 text: format!("Error: {error}"),
                             });
                             data.is_streaming = false;
                             data.thinking_text.clear();
-                            data.save_to_disk();
+                            data.save_to_disk(workspace.save_path());
                         }
                         self.current_prompt = None;
+                        self.current_prompt_workspace = None;
                         self.ui.view(cx, ids!(cancel_button)).set_visible(cx, false);
                         self.update_empty_state_visibility(cx);
                         self.ui
@@ -2661,8 +3468,9 @@ mod tests {
 
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, should_start_window_drag, Agent, App, BackendType,
-        ClaudeCodeCliAgent, DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        glass_opacity_values, render_state_templates, should_start_window_drag, Agent, App,
+        AppDemoState, BackendType, ClaudeCodeCliAgent, DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -2740,6 +3548,50 @@ mod tests {
     #[test]
     fn aichat_create_claude_code_agent() {
         let _agent: Box<dyn Agent> = Box::new(ClaudeCodeCliAgent::new());
+    }
+
+    #[test]
+    fn state_templates_render_count() {
+        let mut state = AppDemoState::default();
+        state.count = 7;
+        assert_eq!(
+            render_state_templates("Count: {{state.count}}", &state),
+            "Count: 7"
+        );
+    }
+
+    #[test]
+    fn state_templates_preserve_unknown_path() {
+        let mut state = AppDemoState::default();
+        state.count = 7;
+        assert_eq!(
+            render_state_templates("Count: {{state.cont}}", &state),
+            "Count: {{state.cont}}"
+        );
+    }
+
+    #[test]
+    fn state_templates_render_multiple_count_placeholders() {
+        let mut state = AppDemoState::default();
+        state.count = -2;
+        assert_eq!(
+            render_state_templates("{{state.count}} / {{state.count}}", &state),
+            "-2 / -2"
+        );
+    }
+
+    #[test]
+    fn state_templates_render_timer_paths() {
+        let mut state = AppDemoState::default();
+        state.timer.remaining_seconds = 65;
+        state.timer.is_running = true;
+        assert_eq!(
+            render_state_templates(
+                "{{state.timer.display}} {{state.timer.button_label}} {{state.timer.is_running}}",
+                &state,
+            ),
+            "01:05 Pause true"
+        );
     }
 
     #[test]
