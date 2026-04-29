@@ -140,7 +140,7 @@ script_mod! {
             border_color: #x72E4FF
             border_alpha: 0.24
             border_width: 1.0
-            corner_radius: 14.0
+            corner_radius: 18.0
             halo_strength: 0.0
             halo_radius: 0.0
             highlight_strength: 0.10
@@ -931,7 +931,7 @@ script_mod! {
                                         color_hover: #x12382FEE
                                         border_color: #xEAD8B832
                                         border_size: 1.0
-                                        border_radius: 10.0
+                                        border_radius: 15.0
                                         arrow_color: ai_cream
                                     }
                                 }
@@ -999,19 +999,19 @@ script_mod! {
                                 padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
                                 spacing: 10
                                 draw_bg +: {
-                                    tint_color: #x0B4035
-                                    tint_alpha: 0.76
-                                    border_color: ai_cyan
-                                    border_alpha: 0.54
-                                    border_width: 1.2
+                                    tint_color: #x082E27
+                                    tint_alpha: 0.82
+                                    border_color: #xEAD8B8
+                                    border_alpha: 0.24
+                                    border_width: 0.8
                                     corner_radius: 24.0
-                                    halo_color: ai_cyan
-                                    halo_strength: 0.16
-                                    halo_radius: 7.0
-                                    highlight_strength: 0.34
-                                    highlight_band_height: 48.0
+                                    halo_color: #xA8F0FF
+                                    halo_strength: 0.045
+                                    halo_radius: 5.0
+                                    highlight_strength: 0.24
+                                    highlight_band_height: 34.0
                                     chroma_strength: 0.0
-                                    noise_strength: 0.004
+                                    noise_strength: 0.003
                                 }
 
                                 input := TextInput {
