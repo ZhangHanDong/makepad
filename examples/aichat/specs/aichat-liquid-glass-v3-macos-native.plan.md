@@ -36,12 +36,13 @@ Non-goals:
 
 ## Phase MN-1: Validate on Supported macOS
 
-Run `makepad-example-aichat-macos-native` on a macOS runtime that exposes `NSGlassEffectView`.
+Run `makepad-example-aichat-macos-native-auto` on a macOS runtime that exposes `NSGlassEffectView`.
+Use `makepad-example-aichat-macos-native` and `makepad-example-aichat-macos-native-clear` for explicit Regular/Clear style comparison after the auto smoke test passes.
 
 Expected success logs:
 
 ```text
-[liquid-glass] state=4 substrate=macos-native style=Regular
+[liquid-glass] state=4 substrate=macos-native style=regular
 [liquid-glass] app-substrate=macos-native state=Installed reason=installed-on-proofed-hierarchy
 ```
 

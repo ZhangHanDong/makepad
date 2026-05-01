@@ -52,6 +52,13 @@ impl MacosNativeGlassStyle {
         }
     }
 
+    fn log_name(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Clear => "clear",
+        }
+    }
+
     fn to_event_style(self) -> WindowNativeSubstrateStyle {
         match self {
             Self::Regular => WindowNativeSubstrateStyle::MacosGlassRegular,
@@ -179,8 +186,8 @@ impl MacosWindow {
         unsafe {
             if self.native_substrate_view != nil {
                 crate::log!(
-                    "[liquid-glass] state=4 substrate=macos-native style={:?}",
-                    style
+                    "[liquid-glass] state=4 substrate=macos-native style={}",
+                    style.log_name()
                 );
                 return self.native_substrate_resolved_event(
                     WindowNativeSubstrateState::Installed,
@@ -287,8 +294,8 @@ impl MacosWindow {
             }
             self.native_substrate_view = glass_view;
             crate::log!(
-                "[liquid-glass] state=4 substrate=macos-native style={:?}",
-                style
+                "[liquid-glass] state=4 substrate=macos-native style={}",
+                style.log_name()
             );
             self.native_substrate_resolved_event(
                 WindowNativeSubstrateState::Installed,
