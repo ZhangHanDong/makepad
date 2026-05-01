@@ -1,5 +1,12 @@
 # Plan: aichat liquid-glass v3 — real backdrop blur + refraction
 
+Status: split into focused follow-up plans.
+
+- Cross-platform shader backdrop work now lives in [aichat-liquid-glass-v3-shader-backdrop.plan.md](aichat-liquid-glass-v3-shader-backdrop.plan.md).
+- macOS native substrate hardening now lives in [aichat-liquid-glass-v3-macos-native.plan.md](aichat-liquid-glass-v3-macos-native.plan.md).
+
+Keep this document as historical research only. Do not use it as the active implementation plan.
+
 Supersedes: [aichat-liquid-glass-v2.plan.md](aichat-liquid-glass-v2.plan.md)
 Issue context: [aichat-liquid-glass-not-real-glass.md](../issues/aichat-liquid-glass-not-real-glass.md), [aichat-liquid-glass-backdrop-platform-bug.md](../issues/aichat-liquid-glass-backdrop-platform-bug.md)
 References:
