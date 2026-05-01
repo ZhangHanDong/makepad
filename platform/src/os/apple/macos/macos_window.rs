@@ -21,8 +21,36 @@ use {
             WindowBackdrop, WindowId, WindowVisuals,
         },
     },
-    std::{cell::Cell, os::raw::c_void, rc::Rc},
+    std::{
+        cell::Cell,
+        os::raw::{c_char, c_void},
+        rc::Rc,
+    },
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MacosNativeGlassStyle {
+    Regular,
+    Clear,
+}
+
+impl MacosNativeGlassStyle {
+    fn as_ns_style(self) -> i64 {
+        match self {
+            // Runtime values follow the Swift declaration order:
+            // NSGlassEffectView.Style.regular, then .clear.
+            Self::Regular => 0,
+            Self::Clear => 1,
+        }
+    }
+
+    fn tint_alpha(self) -> f64 {
+        match self {
+            Self::Regular => 0.22,
+            Self::Clear => 0.08,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct MacosWindow {
@@ -37,6 +65,7 @@ pub struct MacosWindow {
     pub(crate) is_popup: bool,
     pub(crate) macos_config: MacosWindowConfig,
     pub(crate) visual_effect_view: ObjcId,
+    pub(crate) native_substrate_view: ObjcId,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
     window_delegate: ObjcId,
@@ -74,6 +103,14 @@ impl MacosWindow {
             }
 
             let bounds: NSRect = msg_send![self.container_view, bounds];
+            let container_layer: ObjcId = msg_send![self.container_view, layer];
+            if container_layer != nil {
+                let () = msg_send![
+                    container_layer,
+                    setBackgroundColor: CGColorCreateGenericRGB(1.0, 0.0, 1.0, 1.0)
+                ];
+            }
+
             let proof_view: ObjcId = msg_send![class!(NSView), alloc];
             let proof_view: ObjcId = msg_send![proof_view, initWithFrame: bounds];
             let () = msg_send![
@@ -101,6 +138,95 @@ impl MacosWindow {
         }
     }
 
+    fn native_glass_effect_view_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(
+                b"NSGlassEffectView\0".as_ptr() as *const c_char
+            ) as ObjcId
+        }
+    }
+
+    pub(crate) fn native_glass_substrate_available() -> bool {
+        !Self::native_glass_effect_view_class().is_null()
+    }
+
+    pub(crate) fn install_native_glass_substrate(&mut self, style: MacosNativeGlassStyle) -> bool {
+        unsafe {
+            if self.native_substrate_view != nil {
+                return true;
+            }
+
+            let glass_class = Self::native_glass_effect_view_class();
+            if glass_class.is_null() {
+                crate::log!(
+                    "[liquid-glass] NSGlassEffectView unavailable; native substrate skipped"
+                );
+                return false;
+            }
+
+            let bounds: NSRect = msg_send![self.container_view, bounds];
+            let container_layer: ObjcId = msg_send![self.container_view, layer];
+            if container_layer != nil {
+                let () = msg_send![container_layer, setOpaque: NO];
+                let () = msg_send![
+                    container_layer,
+                    setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)
+                ];
+            }
+
+            let glass_view: ObjcId = msg_send![glass_class, alloc];
+            let glass_view: ObjcId = msg_send![glass_view, initWithFrame: bounds];
+            if glass_view == nil {
+                crate::log!("[liquid-glass] failed to initialize NSGlassEffectView");
+                return false;
+            }
+
+            let () = msg_send![
+                glass_view,
+                setAutoresizingMask: Self::NS_VIEW_WIDTH_SIZABLE | Self::NS_VIEW_HEIGHT_SIZABLE
+            ];
+
+            let set_style_sel = sel!(setStyle:);
+            let can_set_style: BOOL = msg_send![glass_view, respondsToSelector: set_style_sel];
+            if can_set_style == YES {
+                let () = msg_send![glass_view, setStyle: style.as_ns_style()];
+            }
+
+            let set_tint_sel = sel!(setTintColor:);
+            let can_set_tint: BOOL = msg_send![glass_view, respondsToSelector: set_tint_sel];
+            if can_set_tint == YES {
+                let tint: ObjcId = msg_send![
+                    class!(NSColor),
+                    colorWithSRGBRed: 0.06f64
+                    green: 0.08f64
+                    blue: 0.12f64
+                    alpha: style.tint_alpha()
+                ];
+                let () = msg_send![glass_view, setTintColor: tint];
+            }
+
+            let set_corner_radius_sel = sel!(setCornerRadius:);
+            let can_set_corner_radius: BOOL =
+                msg_send![glass_view, respondsToSelector: set_corner_radius_sel];
+            if can_set_corner_radius == YES {
+                let () = msg_send![glass_view, setCornerRadius: 0.0f64];
+            }
+
+            let () = msg_send![
+                self.container_view,
+                addSubview: glass_view
+                positioned: -1i64
+                relativeTo: self.view
+            ];
+            self.native_substrate_view = glass_view;
+            crate::log!(
+                "[liquid-glass] NSGlassEffectView substrate installed: {:?}",
+                style
+            );
+            true
+        }
+    }
+
     fn alloc_window(window_class: *const Class, window_id: WindowId) -> MacosWindow {
         unsafe {
             let pool: ObjcId = msg_send![class!(NSAutoreleasePool), new];
@@ -117,6 +243,7 @@ impl MacosWindow {
                 is_popup: false,
                 macos_config: MacosWindowConfig::default(),
                 visual_effect_view: nil,
+                native_substrate_view: nil,
                 proof_substrate_view: nil,
                 container_view,
                 live_resize_timer: nil,

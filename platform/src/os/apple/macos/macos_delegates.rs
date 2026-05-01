@@ -743,6 +743,10 @@ pub fn define_cocoa_view_class() -> *const Class {
         cw.send_change_event();
     }
 
+    extern "C" fn no(_: &Object, _: Sel) -> BOOL {
+        NO
+    }
+
     extern "C" fn dragging_session_ended_at_point_operation(
         this: &Object,
         _: Sel,
@@ -1037,6 +1041,7 @@ pub fn define_cocoa_view_class() -> *const Class {
             sel!(displayLayer:),
             display_layer as extern "C" fn(&Object, Sel, ObjcId),
         );
+        decl.add_method(sel!(isOpaque), no as extern "C" fn(&Object, Sel) -> BOOL);
 
         #[cfg(target_os = "macos")]
         {

@@ -249,8 +249,8 @@ script_mod! {
         width: 170
         height: 28
         text: ""
-        min: 0.72
-        max: 0.98
+        min: 0.10
+        max: 1.00
         step: 0.01
         default: 0.90
         precision: 2
@@ -1358,7 +1358,29 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
 }
 
 fn native_glass_available_stub() -> bool {
-    false
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::raw::c_char;
+
+        unsafe {
+            !crate::makepad_widgets::makepad_platform::makepad_objc_sys::runtime::objc_getClass(
+                b"NSGlassEffectView\0".as_ptr() as *const c_char,
+            )
+            .is_null()
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn initial_glass_opacity() -> f64 {
+    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref() == Ok("magenta") {
+        MIN_GLASS_OPACITY
+    } else {
+        DEFAULT_GLASS_OPACITY
+    }
 }
 
 // Map slider [0.10..1.00] to actual panel alpha. The earlier mapping only
@@ -3497,15 +3519,16 @@ impl MatchEvent for App {
         self.update_status(cx);
         self.update_workspace_ui(cx);
         self.update_empty_state_visibility(cx);
+        let initial_glass_opacity = initial_glass_opacity();
         self.ui
             .slider(cx, ids!(opacity_slider))
-            .set_value(cx, DEFAULT_GLASS_OPACITY);
+            .set_value(cx, initial_glass_opacity);
         self.ui.check_box(cx, ids!(thinking_toggle)).set_active(
             cx,
             self.moonshot_thinking_enabled,
             Animate::No,
         );
-        self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
+        self.apply_glass_opacity(cx, initial_glass_opacity);
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {

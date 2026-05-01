@@ -4,12 +4,12 @@ use {
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
         draw_pass::CxDrawPassParent,
         event::{
+            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             video_playback::{
                 CameraPreviewMode, VideoBufferedRangesEvent, VideoDecodingErrorEvent,
                 VideoPlaybackPreparedEvent, VideoPlaybackResourcesReleasedEvent,
                 VideoSeekableRangesEvent, VideoTextureUpdatedEvent, VideoYuvTexturesReady,
             },
-            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             Event, GameInputEventChannel, MouseButton, MouseUpEvent, VideoSource, WindowGeom,
         },
         makepad_live_id::*,
@@ -25,7 +25,7 @@ use {
                 macos::{
                     macos_app::{init_macos_app_global, with_macos_app, MacosApp},
                     macos_event::MacosEvent,
-                    macos_window::MacosWindow,
+                    macos_window::{MacosNativeGlassStyle, MacosWindow},
                 },
             },
             apple_media::CxAppleMedia,
@@ -48,6 +48,21 @@ use {
         time::Instant,
     },
 };
+
+fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
+    match std::env::var("AICHAT_GLASS_BACKEND")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("macos-native") => Some(MacosNativeGlassStyle::Regular),
+        Some("macos-native-clear") => Some(MacosNativeGlassStyle::Clear),
+        Some("auto") if MacosWindow::native_glass_substrate_available() => {
+            Some(MacosNativeGlassStyle::Regular)
+        }
+        _ => None,
+    }
+}
 
 #[derive(Clone)]
 pub struct MetalWindow {
@@ -84,7 +99,8 @@ impl MetalWindow {
             let () = msg_send![ca_layer, setAutoresizingMask: (1 << 4) | (1 << 1)];
             let () = msg_send![ca_layer, setAllowsNextDrawableTimeout: NO];
             let () = msg_send![ca_layer, setDelegate: cocoa_window.view];
-            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0)];
+            let () = msg_send![ca_layer, setOpaque: NO];
+            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)];
 
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
@@ -125,7 +141,8 @@ impl MetalWindow {
             let () = msg_send![ca_layer, setAutoresizingMask: (1 << 4) | (1 << 1)];
             let () = msg_send![ca_layer, setAllowsNextDrawableTimeout: NO];
             let () = msg_send![ca_layer, setDelegate: cocoa_window.view];
-            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0)];
+            let () = msg_send![ca_layer, setOpaque: NO];
+            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)];
 
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
@@ -890,10 +907,12 @@ impl Cx {
                     let () = unsafe {
                         msg_send![metal_window.ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, layer_alpha)]
                     };
-                    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref()
-                        == Ok("magenta")
-                    {
+                    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref() == Ok("magenta") {
                         metal_window.cocoa_window.install_magenta_proof_substrate();
+                    } else if let Some(style) = requested_native_glass_style_from_env() {
+                        metal_window
+                            .cocoa_window
+                            .install_native_glass_substrate(style);
                     }
                     window.window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
