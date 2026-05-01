@@ -1200,15 +1200,14 @@ pub static APP_GEN_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(Ch
     is_streaming: false,
 });
 
-pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> =
-    std::sync::RwLock::new(AppDemoState {
-        count: 0,
-        timer: TimerDemoState {
-            duration_seconds: 25 * 60,
-            remaining_seconds: 25 * 60,
-            is_running: false,
-        },
-    });
+pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::new(AppDemoState {
+    count: 0,
+    timer: TimerDemoState {
+        duration_seconds: 25 * 60,
+        remaining_seconds: 25 * 60,
+        is_running: false,
+    },
+});
 
 // Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
@@ -1221,12 +1220,151 @@ struct GlassOpacity {
     sidebar: f32,
     main: f32,
     composer: f32,
+    border_scale: f32,
+    highlight_scale: f32,
+    noise_scale: f32,
+    halo_scale: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct ShaderBackdropConfig;
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum MacosGlassStyle {
+    #[default]
+    Regular,
+    Clear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum GlassSubstrate {
+    #[default]
+    ShaderOnly,
+    MacosNative {
+        style: MacosGlassStyle,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GlassAppearance {
+    substrate: GlassSubstrate,
+    backdrop: Option<ShaderBackdropConfig>,
+}
+
+impl Default for GlassAppearance {
+    fn default() -> Self {
+        Self {
+            substrate: GlassSubstrate::ShaderOnly,
+            backdrop: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum GlassPanelPreset {
+    #[default]
+    ShaderDefault,
+    NativeOverlay,
+    BackdropOverlay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum GlassBackendRequest {
+    Shader,
+    MacosNative(MacosGlassStyle),
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GlassConfigResolution {
+    appearance: GlassAppearance,
+    warning: Option<&'static str>,
+}
+
+impl GlassAppearance {
+    fn panel_preset(self) -> GlassPanelPreset {
+        match self.substrate {
+            GlassSubstrate::ShaderOnly => {
+                if self.backdrop.is_some() {
+                    GlassPanelPreset::BackdropOverlay
+                } else {
+                    GlassPanelPreset::ShaderDefault
+                }
+            }
+            GlassSubstrate::MacosNative { .. } => GlassPanelPreset::NativeOverlay,
+        }
+    }
+}
+
+fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'static str>) {
+    match value.map(str::trim).filter(|s| !s.is_empty()) {
+        None => (GlassBackendRequest::Shader, None),
+        Some("shader") => (GlassBackendRequest::Shader, None),
+        Some("macos-native") => (
+            GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
+            None,
+        ),
+        Some("macos-native-clear") => (
+            GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
+            None,
+        ),
+        Some("auto") => (GlassBackendRequest::Auto, None),
+        Some(_) => (
+            GlassBackendRequest::Shader,
+            Some("unknown AICHAT_GLASS_BACKEND value; falling back to shader"),
+        ),
+    }
+}
+
+fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> GlassConfigResolution {
+    let (request, parse_warning) = parse_glass_backend(value);
+    if let Some(warning) = parse_warning {
+        return GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: Some(warning),
+        };
+    }
+
+    match request {
+        GlassBackendRequest::Shader => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: None,
+        },
+        GlassBackendRequest::Auto if native_available => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::MacosNative {
+                    style: MacosGlassStyle::Regular,
+                },
+                backdrop: None,
+            },
+            warning: None,
+        },
+        GlassBackendRequest::Auto => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: None,
+        },
+        GlassBackendRequest::MacosNative(style) if native_available => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::MacosNative { style },
+                backdrop: None,
+            },
+            warning: None,
+        },
+        GlassBackendRequest::MacosNative(_) => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: Some("macOS native glass unavailable; falling back to shader"),
+        },
+    }
+}
+
+fn native_glass_available_stub() -> bool {
+    false
 }
 
 // Map slider [0.10..1.00] to actual panel alpha. The earlier mapping only
 // moved alpha slightly, so the "Glass" control felt inert on a transparent
 // window. Keep layer ordering, but make the low/high ends visually obvious.
-fn glass_opacity_values(slider: f64) -> GlassOpacity {
+fn shader_glass_opacity_values(slider: f64) -> GlassOpacity {
     let t = ((slider.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY) - MIN_GLASS_OPACITY)
         / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY)) as f32;
     let shell = 0.28 + t * 0.64;
@@ -1235,6 +1373,30 @@ fn glass_opacity_values(slider: f64) -> GlassOpacity {
         main: (shell + 0.05).min(0.99),
         sidebar: (shell + 0.08).min(0.99),
         composer: (shell + 0.11).min(0.99),
+        border_scale: 1.0,
+        highlight_scale: 1.0,
+        noise_scale: 1.0,
+        halo_scale: 1.0,
+    }
+}
+
+fn glass_opacity_values(slider: f64, preset: GlassPanelPreset) -> GlassOpacity {
+    let shader = shader_glass_opacity_values(slider);
+    match preset {
+        GlassPanelPreset::ShaderDefault | GlassPanelPreset::BackdropOverlay => shader,
+        GlassPanelPreset::NativeOverlay => {
+            let shader_default = shader_glass_opacity_values(DEFAULT_GLASS_OPACITY);
+            GlassOpacity {
+                app: shader.app * (0.30 / shader_default.app),
+                sidebar: shader.sidebar * (0.38 / shader_default.sidebar),
+                main: shader.main * (0.34 / shader_default.main),
+                composer: shader.composer * (0.44 / shader_default.composer),
+                border_scale: 0.6,
+                highlight_scale: 0.4,
+                noise_scale: 0.3,
+                halo_scale: 0.0,
+            }
+        }
     }
 }
 
@@ -1587,7 +1749,8 @@ If a required control is listed in the manifest, it must be visible in the UI."#
 }
 
 fn app_generation_session_system_prompt() -> String {
-    let splash_md_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../splash.md");
+    let splash_md_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../splash.md");
     let splash_md = std::fs::read_to_string(&splash_md_path)
         .unwrap_or_else(|_| include_str!("../../../splash.md").to_string());
     format!(
@@ -2069,12 +2232,8 @@ impl MermaidSvgView {
             }
             let world_font_size = (cmd.font_size as f64 * scale * PX_TO_PT).max(1.0);
             self.draw_text.text_style.font_size = world_font_size as f32;
-            self.draw_text.color = vec4(
-                cmd.color.0,
-                cmd.color.1,
-                cmd.color.2,
-                cmd.color.3.max(0.0),
-            );
+            self.draw_text.color =
+                vec4(cmd.color.0, cmd.color.1, cmd.color.2, cmd.color.3.max(0.0));
 
             let lines: Vec<&str> = cmd.text.split('\n').collect();
             let line_step_screen = world_font_size * 1.2;
@@ -2122,8 +2281,7 @@ impl MermaidSvgView {
         let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
         let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
         let dot_size = 10.0_f64;
-        let pulse =
-            0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
+        let pulse = 0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
 
         for (edge_index, edge) in edges.iter().enumerate() {
             if edge.points.len() < 2 {
@@ -2567,6 +2725,8 @@ pub struct App {
     moonshot_thinking_enabled: bool,
     #[rust]
     app_state_timer: Timer,
+    #[rust]
+    glass_appearance: GlassAppearance,
 }
 
 impl App {
@@ -2608,10 +2768,7 @@ impl App {
     }
 
     fn initial_moonshot_thinking_enabled() -> bool {
-        std::env::var("MOONSHOT_THINKING")
-            .ok()
-            .as_deref()
-            == Some("enabled")
+        std::env::var("MOONSHOT_THINKING").ok().as_deref() == Some("enabled")
     }
 
     fn read_key_file(path: &str) -> Option<String> {
@@ -3001,7 +3158,9 @@ impl App {
 
     fn refresh_visible_state_templates(&self, cx: &mut Cx) {
         let messages: Vec<(usize, String)> = {
-            let data = chat_data_for_workspace(self.active_workspace).read().unwrap();
+            let data = chat_data_for_workspace(self.active_workspace)
+                .read()
+                .unwrap();
             data.messages
                 .iter()
                 .enumerate()
@@ -3143,34 +3302,62 @@ impl App {
         self.ui.label(cx, ids!(status_label)).set_text(cx, status);
     }
 
-    fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
+    fn apply_glass_appearance(&self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
-        let glass = glass_opacity_values(opacity);
+        let glass = glass_opacity_values(opacity, appearance.panel_preset());
 
         let mut app_shell = self.ui.view(cx, ids!(app_shell));
         script_apply_eval!(cx, app_shell, {
-            draw_bg +: { tint_alpha: #(glass.app) }
+            draw_bg +: {
+                tint_alpha: #(glass.app)
+                border_alpha: #(0.38 * glass.border_scale)
+                highlight_strength: #(0.28 * glass.highlight_scale)
+                noise_strength: #(0.004 * glass.noise_scale)
+                halo_strength: #(0.0 * glass.halo_scale)
+            }
         });
 
         let mut sidebar = self.ui.view(cx, ids!(sidebar));
         script_apply_eval!(cx, sidebar, {
-            draw_bg +: { tint_alpha: #(glass.sidebar) }
+            draw_bg +: {
+                tint_alpha: #(glass.sidebar)
+                border_alpha: #(0.20 * glass.border_scale)
+                highlight_strength: #(0.16 * glass.highlight_scale)
+                noise_strength: #(0.004 * glass.noise_scale)
+                halo_strength: #(0.0 * glass.halo_scale)
+            }
         });
 
         let mut main_area = self.ui.view(cx, ids!(main_area));
         script_apply_eval!(cx, main_area, {
-            draw_bg +: { tint_alpha: #(glass.main) }
+            draw_bg +: {
+                tint_alpha: #(glass.main)
+                border_alpha: #(0.16 * glass.border_scale)
+                highlight_strength: #(0.16 * glass.highlight_scale)
+                noise_strength: #(0.004 * glass.noise_scale)
+                halo_strength: #(0.0 * glass.halo_scale)
+            }
         });
 
         let mut composer = self.ui.view(cx, ids!(composer));
         script_apply_eval!(cx, composer, {
-            draw_bg +: { tint_alpha: #(glass.composer) }
+            draw_bg +: {
+                tint_alpha: #(glass.composer)
+                border_alpha: #(0.24 * glass.border_scale)
+                highlight_strength: #(0.24 * glass.highlight_scale)
+                noise_strength: #(0.003 * glass.noise_scale)
+                halo_strength: #(0.045 * glass.halo_scale)
+            }
         });
 
         self.ui
             .label(cx, ids!(opacity_value))
             .set_text(cx, &format!("{:.0}%", opacity * 100.0));
         self.ui.redraw(cx);
+    }
+
+    fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
+        self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
 }
 
@@ -3189,7 +3376,11 @@ impl MatchEvent for App {
         {
             self.apply_glass_opacity(cx, opacity);
         }
-        if let Some(enabled) = self.ui.check_box(cx, ids!(thinking_toggle)).changed(actions) {
+        if let Some(enabled) = self
+            .ui
+            .check_box(cx, ids!(thinking_toggle))
+            .changed(actions)
+        {
             self.moonshot_thinking_enabled = enabled;
             if self.active_backend == Some(BackendType::Moonshot) {
                 if self.current_prompt.is_some() {
@@ -3309,9 +3500,11 @@ impl MatchEvent for App {
         self.ui
             .slider(cx, ids!(opacity_slider))
             .set_value(cx, DEFAULT_GLASS_OPACITY);
-        self.ui
-            .check_box(cx, ids!(thinking_toggle))
-            .set_active(cx, self.moonshot_thinking_enabled, Animate::No);
+        self.ui.check_box(cx, ids!(thinking_toggle)).set_active(
+            cx,
+            self.moonshot_thinking_enabled,
+            Animate::No,
+        );
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
     }
 
@@ -3337,6 +3530,13 @@ impl AppMain for App {
         *APP_DEMO_STATE.write().unwrap() = AppDemoState::load_from_disk();
         app.available_backends = Self::detect_available_backends();
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
+        let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
+        let glass =
+            resolve_glass_appearance(glass_backend.as_deref(), native_glass_available_stub());
+        if let Some(warning) = glass.warning {
+            log!("[liquid-glass] {}", warning);
+        }
+        app.glass_appearance = glass.appearance;
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
@@ -3468,16 +3668,17 @@ mod tests {
 
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, render_state_templates, should_start_window_drag, Agent, App,
-        AppDemoState, BackendType, ClaudeCodeCliAgent, DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY,
+        glass_opacity_values, parse_glass_backend, render_state_templates,
+        resolve_glass_appearance, should_start_window_drag, Agent, App, AppDemoState, BackendType,
+        ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
     fn aichat_glass_opacity_slider_contract() {
         // v2: slider is a position value; per-layer alpha is derived.
         assert!((DEFAULT_GLASS_OPACITY - 0.90).abs() < f64::EPSILON);
-        let values = glass_opacity_values(DEFAULT_GLASS_OPACITY);
+        let values = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::ShaderDefault);
         // Layer stack must read shell < main < sidebar < composer
         // so the wallpaper shows through more on the outer frame than on
         // the inner panels.
@@ -3492,8 +3693,8 @@ mod tests {
     fn aichat_liquid_glass_shell_contract() {
         // v2: layer-stack ordering must hold at every legal slider value,
         // and no layer reaches alpha 1.0 at any slider <= 1.0.
-        let low = glass_opacity_values(0.0);
-        let high = glass_opacity_values(2.0);
+        let low = glass_opacity_values(0.0, GlassPanelPreset::ShaderDefault);
+        let high = glass_opacity_values(2.0, GlassPanelPreset::ShaderDefault);
         // Slider is clamped: low.app uses MIN_GLASS_OPACITY, high.app uses MAX.
         assert!(low.app < high.app);
         assert!(high.app > 0.90);
@@ -3506,7 +3707,7 @@ mod tests {
             DEFAULT_GLASS_OPACITY,
             MAX_GLASS_OPACITY,
         ] {
-            let v = glass_opacity_values(slider);
+            let v = glass_opacity_values(slider, GlassPanelPreset::ShaderDefault);
             assert!(v.app < v.main, "slider={}", slider);
             assert!(v.main <= v.sidebar, "slider={}", slider);
             assert!(v.sidebar <= v.composer, "slider={}", slider);
@@ -3514,22 +3715,89 @@ mod tests {
     }
 
     #[test]
+    fn aichat_glass_backend_env_contract() {
+        assert_eq!(
+            parse_glass_backend(None),
+            (GlassBackendRequest::Shader, None)
+        );
+        assert_eq!(
+            parse_glass_backend(Some("shader")),
+            (GlassBackendRequest::Shader, None)
+        );
+        assert_eq!(
+            parse_glass_backend(Some("macos-native")),
+            (
+                GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
+                None
+            )
+        );
+        assert_eq!(
+            parse_glass_backend(Some("macos-native-clear")),
+            (
+                GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
+                None
+            )
+        );
+        assert_eq!(
+            parse_glass_backend(Some("auto")),
+            (GlassBackendRequest::Auto, None)
+        );
+        assert!(parse_glass_backend(Some("native")).1.is_some());
+    }
+
+    #[test]
+    fn aichat_glass_resolution_fallback_contract() {
+        let unsupported = resolve_glass_appearance(Some("macos-native"), false);
+        assert_eq!(unsupported.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert!(unsupported.warning.is_some());
+
+        let auto_unsupported = resolve_glass_appearance(Some("auto"), false);
+        assert_eq!(
+            auto_unsupported.appearance.substrate,
+            GlassSubstrate::ShaderOnly
+        );
+        assert!(auto_unsupported.warning.is_none());
+
+        let supported = resolve_glass_appearance(Some("macos-native-clear"), true);
+        assert_eq!(
+            supported.appearance.substrate,
+            GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear
+            }
+        );
+        assert!(supported.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_native_overlay_preset_is_lower_and_monotonic() {
+        let shader = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::ShaderDefault);
+        let native = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+
+        assert!(native.app < shader.app);
+        assert!(native.main < shader.main);
+        assert!(native.sidebar < shader.sidebar);
+        assert!(native.composer < shader.composer);
+        assert_eq!(native.border_scale, 0.6);
+        assert_eq!(native.highlight_scale, 0.4);
+        assert_eq!(native.noise_scale, 0.3);
+        assert_eq!(native.halo_scale, 0.0);
+
+        let low = glass_opacity_values(MIN_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+        let high = glass_opacity_values(MAX_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+        assert!(low.app < high.app);
+        assert!(low.main < high.main);
+        assert!(low.sidebar < high.sidebar);
+        assert!(low.composer < high.composer);
+    }
+
+    #[test]
     fn aichat_drag_strip_preserves_resize_edges() {
         let size = DVec2 { x: 900.0, y: 700.0 };
-        assert!(should_start_window_drag(
-            DVec2 { x: 120.0, y: 24.0 },
-            size
-        ));
+        assert!(should_start_window_drag(DVec2 { x: 120.0, y: 24.0 }, size));
         assert!(!should_start_window_drag(DVec2 { x: 4.0, y: 24.0 }, size));
         assert!(!should_start_window_drag(DVec2 { x: 120.0, y: 4.0 }, size));
-        assert!(!should_start_window_drag(
-            DVec2 { x: 880.0, y: 24.0 },
-            size
-        ));
-        assert!(!should_start_window_drag(
-            DVec2 { x: 700.0, y: 24.0 },
-            size
-        ));
+        assert!(!should_start_window_drag(DVec2 { x: 880.0, y: 24.0 }, size));
+        assert!(!should_start_window_drag(DVec2 { x: 700.0, y: 24.0 }, size));
     }
 
     #[test]
