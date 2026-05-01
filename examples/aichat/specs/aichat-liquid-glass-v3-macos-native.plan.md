@@ -42,7 +42,7 @@ Use `makepad-example-aichat-macos-native` and `makepad-example-aichat-macos-nati
 Expected success logs:
 
 ```text
-[liquid-glass] state=4 substrate=macos-native style=regular
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
 [liquid-glass] app-substrate=macos-native state=Installed reason=installed-on-proofed-hierarchy
 ```
 
@@ -62,6 +62,15 @@ The current runtime implementation uses integer style values:
 Regular -> 0
 Clear   -> 1
 ```
+
+For validation only, these raw values can be overridden without rebuilding:
+
+```text
+AICHAT_MACOS_GLASS_STYLE_REGULAR_RAW=<NSInteger>
+AICHAT_MACOS_GLASS_STYLE_CLEAR_RAW=<NSInteger>
+```
+
+If either override is set, the platform logs a `style-override` line before applying `setStyle:`. Invalid override values are ignored and logged as `style-override-invalid`.
 
 Before calling this production-ready, verify these values against a macOS SDK/runtime that exposes `NSGlassEffectView.Style`.
 

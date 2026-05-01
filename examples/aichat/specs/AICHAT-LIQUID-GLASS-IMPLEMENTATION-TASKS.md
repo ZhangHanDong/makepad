@@ -566,6 +566,18 @@ auto               -> Regular when available
 
 The integer values must be sourced from LG-1.5.2 RFC, not invented at implementation time.
 
+During validation on a supported macOS runtime, the implementation may expose
+temporary raw-value overrides:
+
+```text
+AICHAT_MACOS_GLASS_STYLE_REGULAR_RAW=<NSInteger>
+AICHAT_MACOS_GLASS_STYLE_CLEAR_RAW=<NSInteger>
+```
+
+These are diagnostic escape hatches only. They must log `style-override` when
+used and must not be treated as a replacement for confirming SDK/runtime
+values before release.
+
 #### LG-2.5 Integrate with aichat Appearance
 
 Use the result state from LG-2.7 to decide `GlassAppearance`. Do not assume class lookup success implies visibility.
@@ -629,7 +641,7 @@ Platform layer logs must use a stable structured tag so users and CI can grep:
 [liquid-glass] state=1 reason=class-missing
 [liquid-glass] state=2 reason=alloc-failed detail=...
 [liquid-glass] state=3 reason=visibility-unverified detail=...
-[liquid-glass] state=4 substrate=macos-native style=regular
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
 ```
 
 This is required for the failure-path validation matrix (Validation Policy section).

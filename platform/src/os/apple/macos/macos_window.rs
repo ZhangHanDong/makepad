@@ -36,12 +36,40 @@ pub(crate) enum MacosNativeGlassStyle {
 }
 
 impl MacosNativeGlassStyle {
-    fn as_ns_style(self) -> i64 {
+    fn default_ns_style_raw(self) -> i64 {
         match self {
             // Runtime values follow the Swift declaration order:
             // NSGlassEffectView.Style.regular, then .clear.
             Self::Regular => 0,
             Self::Clear => 1,
+        }
+    }
+
+    fn style_override_env_var(self) -> &'static str {
+        match self {
+            Self::Regular => "AICHAT_MACOS_GLASS_STYLE_REGULAR_RAW",
+            Self::Clear => "AICHAT_MACOS_GLASS_STYLE_CLEAR_RAW",
+        }
+    }
+
+    fn ns_style_raw(self) -> i64 {
+        let var = self.style_override_env_var();
+        match std::env::var(var) {
+            Ok(value) => match value.trim().parse::<i64>() {
+                Ok(raw) => {
+                    crate::log!("[liquid-glass] style-override var={} value={}", var, raw);
+                    raw
+                }
+                Err(_) => {
+                    crate::log!(
+                        "[liquid-glass] style-override-invalid var={} value={}",
+                        var,
+                        value
+                    );
+                    self.default_ns_style_raw()
+                }
+            },
+            Err(_) => self.default_ns_style_raw(),
         }
     }
 
@@ -181,9 +209,11 @@ impl MacosWindow {
     ) -> WindowNativeSubstrateResolvedEvent {
         unsafe {
             if self.native_substrate_view != nil {
+                let style_raw = style.ns_style_raw();
                 crate::log!(
-                    "[liquid-glass] state=4 substrate=macos-native style={}",
-                    style.log_name()
+                    "[liquid-glass] state=4 substrate=macos-native style={} style_raw={}",
+                    style.log_name(),
+                    style_raw
                 );
                 return self.native_substrate_resolved_event(
                     WindowNativeSubstrateState::Installed,
@@ -241,8 +271,9 @@ impl MacosWindow {
 
             let set_style_sel = sel!(setStyle:);
             let can_set_style: BOOL = msg_send![glass_view, respondsToSelector: set_style_sel];
+            let style_raw = style.ns_style_raw();
             if can_set_style == YES {
-                let () = msg_send![glass_view, setStyle: style.as_ns_style()];
+                let () = msg_send![glass_view, setStyle: style_raw];
             } else {
                 crate::log!("[liquid-glass] state=2 reason=missing-setStyle");
                 return self.native_substrate_resolved_event(
@@ -290,8 +321,9 @@ impl MacosWindow {
             }
             self.native_substrate_view = glass_view;
             crate::log!(
-                "[liquid-glass] state=4 substrate=macos-native style={}",
-                style.log_name()
+                "[liquid-glass] state=4 substrate=macos-native style={} style_raw={}",
+                style.log_name(),
+                style_raw
             );
             self.native_substrate_resolved_event(
                 WindowNativeSubstrateState::Installed,
