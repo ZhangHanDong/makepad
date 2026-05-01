@@ -53,14 +53,15 @@ let RunRelease = RunItem{
     }
 }
 
-let RunAichatMacosNative = RunItem{
+let RunAichatMacosGlass = RunItem{
+    backend: "macos-native"
     on_run: fn(id){
         hub.run(
             {
                 "STUDIO_HOST": hub.studio_local_host()
                 "STUDIO_BUILD": id.to_string()
                 "STUDIO_CRATE": "makepad-example-aichat"
-                "AICHAT_GLASS_BACKEND": "macos-native"
+                "AICHAT_GLASS_BACKEND": self.backend
                 "AICHAT_NATIVE_SUBSTRATE_PROOF": ""
             },
             "cargo",
@@ -100,7 +101,8 @@ hub.set_run_items([
     RunStudioRelease{name: "makepad-example-todo"}
     RunStudioRelease{name: "makepad-example-aichat"}
     RunRelease{name: "makepad-example-aichat-native", run: "makepad-example-aichat"}
-    RunAichatMacosNative{name: "makepad-example-aichat-macos-native"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
     RunStudio{name: "makepad-studio"} 
     RunStudioExt{name: "makepad-studio-ext"} 
     RunStudioRelease{name: "makepad-example-xr"}

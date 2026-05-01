@@ -877,6 +877,7 @@ As of the `aichat-liquid-glass-phase1` branch:
 - Studio framebuffer runs cannot validate AppKit-native substrates. Native substrate validation must use the external-window runnable.
 - `makepad-example-aichat-native` launches a real macOS window for proof testing.
 - `makepad-example-aichat-macos-native` launches a real macOS window with `AICHAT_GLASS_BACKEND=macos-native` and clears the magenta proof override.
+- `makepad-example-aichat-macos-native-clear` launches the same external-window path with `AICHAT_GLASS_BACKEND=macos-native-clear` for style comparison on supported macOS.
 - Platform Phase 2 has an initial runtime lookup path for `NSGlassEffectView`. On the current validation machine the class is unavailable, so the expected result is a structured State 1 log and no crash:
   `[liquid-glass] state=1 reason=class-missing detail=NSGlassEffectView`.
 - LG-2.7.A uses T1 event transport. The platform emits `Event::WindowNativeSubstrateResolved(WindowNativeSubstrateResolvedEvent)` after startup substrate creation. aichat starts in ShaderOnly and only switches to `MacosNative + NativeOverlay` when the event reports `WindowNativeSubstrateState::Installed`.
