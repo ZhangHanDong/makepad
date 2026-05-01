@@ -57,9 +57,7 @@ fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
     {
         Some("macos-native") => Some(MacosNativeGlassStyle::Regular),
         Some("macos-native-clear") => Some(MacosNativeGlassStyle::Clear),
-        Some("auto") if MacosWindow::native_glass_substrate_available() => {
-            Some(MacosNativeGlassStyle::Regular)
-        }
+        Some("auto") => Some(MacosNativeGlassStyle::Regular),
         _ => None,
     }
 }

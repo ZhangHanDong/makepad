@@ -161,10 +161,6 @@ impl MacosWindow {
         }
     }
 
-    pub(crate) fn native_glass_substrate_available() -> bool {
-        !Self::native_glass_effect_view_class().is_null()
-    }
-
     fn native_substrate_resolved_event(
         &self,
         state: WindowNativeSubstrateState,

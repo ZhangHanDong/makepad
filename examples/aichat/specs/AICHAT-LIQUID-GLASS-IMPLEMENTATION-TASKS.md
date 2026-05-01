@@ -876,7 +876,7 @@ As of the `aichat-liquid-glass-phase1` branch:
 - LG-1.5.3 proof path passes in a real macOS window: `AICHAT_NATIVE_SUBSTRATE_PROOF=magenta` is visible behind Makepad content when launched without `--stdin-loop`.
 - Studio framebuffer runs cannot validate AppKit-native substrates. Native substrate validation must use the external-window runnable.
 - `makepad-example-aichat-native` launches a real macOS window for proof testing.
-- `makepad-example-aichat-macos-native-auto` launches the same external-window path with `AICHAT_GLASS_BACKEND=auto`; this is the recommended smoke test on a new macOS machine because it chooses native only if the platform reports LG-2.7 State 4.
+- `makepad-example-aichat-macos-native-auto` launches the same external-window path with `AICHAT_GLASS_BACKEND=auto`; this is the recommended smoke test on a new macOS machine because it attempts the native path, emits the LG-2.7 result state, and aichat chooses native only if the platform reports State 4.
 - `makepad-example-aichat-macos-native` launches a real macOS window with `AICHAT_GLASS_BACKEND=macos-native` and clears the magenta proof override.
 - `makepad-example-aichat-macos-native-clear` launches the same external-window path with `AICHAT_GLASS_BACKEND=macos-native-clear` for style comparison on supported macOS.
 - Platform Phase 2 has an initial runtime lookup path for `NSGlassEffectView`. On the current validation machine the class is unavailable, so the expected result is a structured State 1 log and no crash:
