@@ -27,6 +27,7 @@ use {
 #[derive(Clone)]
 pub struct MacosWindow {
     pub(crate) window_id: WindowId,
+    pub(crate) container_view: ObjcId,
     pub(crate) view: ObjcId,
     pub(crate) window: ObjcId,
     pub(crate) ime_spot: Vec2d,
@@ -36,6 +37,7 @@ pub struct MacosWindow {
     pub(crate) is_popup: bool,
     pub(crate) macos_config: MacosWindowConfig,
     pub(crate) visual_effect_view: ObjcId,
+    pub(crate) proof_substrate_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
     window_delegate: ObjcId,
     live_resize_timer: ObjcId,
@@ -43,12 +45,69 @@ pub struct MacosWindow {
 }
 
 impl MacosWindow {
+    const NS_VIEW_WIDTH_SIZABLE: i64 = 1 << 1;
+    const NS_VIEW_HEIGHT_SIZABLE: i64 = 1 << 4;
+
+    unsafe fn init_container_view(&mut self, rect: NSRect) {
+        let autoresize = Self::NS_VIEW_WIDTH_SIZABLE | Self::NS_VIEW_HEIGHT_SIZABLE;
+
+        let () = msg_send![self.container_view, initWithFrame: rect];
+        let () = msg_send![self.container_view, setAutoresizingMask: autoresize];
+        let () = msg_send![self.container_view, setWantsLayer: YES];
+        let layer: ObjcId = msg_send![self.container_view, layer];
+        if layer != nil {
+            let () = msg_send![layer, setOpaque: NO];
+            let () = msg_send![
+                layer,
+                setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)
+            ];
+        }
+
+        let () = msg_send![self.view, setFrame: rect];
+        let () = msg_send![self.view, setAutoresizingMask: autoresize];
+    }
+
+    pub fn install_magenta_proof_substrate(&mut self) {
+        unsafe {
+            if self.proof_substrate_view != nil {
+                return;
+            }
+
+            let bounds: NSRect = msg_send![self.container_view, bounds];
+            let proof_view: ObjcId = msg_send![class!(NSView), alloc];
+            let proof_view: ObjcId = msg_send![proof_view, initWithFrame: bounds];
+            let () = msg_send![
+                proof_view,
+                setAutoresizingMask: Self::NS_VIEW_WIDTH_SIZABLE | Self::NS_VIEW_HEIGHT_SIZABLE
+            ];
+            let () = msg_send![proof_view, setWantsLayer: YES];
+            let layer: ObjcId = msg_send![proof_view, layer];
+            if layer != nil {
+                let () = msg_send![layer, setOpaque: YES];
+                let () = msg_send![
+                    layer,
+                    setBackgroundColor: CGColorCreateGenericRGB(1.0, 0.0, 1.0, 1.0)
+                ];
+            }
+
+            let () = msg_send![
+                self.container_view,
+                addSubview: proof_view
+                positioned: -1i64
+                relativeTo: self.view
+            ];
+            self.proof_substrate_view = proof_view;
+            crate::log!("[liquid-glass] proof-substrate=magenta installed");
+        }
+    }
+
     fn alloc_window(window_class: *const Class, window_id: WindowId) -> MacosWindow {
         unsafe {
             let pool: ObjcId = msg_send![class!(NSAutoreleasePool), new];
 
             let window: ObjcId = msg_send![window_class, alloc];
             let window_delegate: ObjcId = msg_send![get_macos_class_global().window_delegate, new];
+            let container_view: ObjcId = msg_send![class!(NSView), alloc];
             let view: ObjcId = msg_send![get_macos_class_global().view, alloc];
 
             let () = msg_send![pool, drain];
@@ -58,6 +117,8 @@ impl MacosWindow {
                 is_popup: false,
                 macos_config: MacosWindowConfig::default(),
                 visual_effect_view: nil,
+                proof_substrate_view: nil,
+                container_view,
                 live_resize_timer: nil,
                 window_delegate: window_delegate,
                 window: window,
@@ -238,7 +299,13 @@ impl MacosWindow {
 
             let () = msg_send![self.view, setLayerContentsRedrawPolicy: 2];
 
-            let () = msg_send![self.window, setContentView: self.view];
+            let rect = NSRect {
+                origin: NSPoint { x: 0., y: 0. },
+                size: ns_size,
+            };
+            self.init_container_view(rect);
+            let () = msg_send![self.window, setContentView: self.container_view];
+            let () = msg_send![self.container_view, addSubview: self.view];
             let () = msg_send![self.window, makeFirstResponder: self.view];
             if self.is_nonactivating_panel() {
                 let () = msg_send![self.window, orderFront: nil];
@@ -246,10 +313,6 @@ impl MacosWindow {
                 let () = msg_send![self.window, makeKeyAndOrderFront: nil];
             }
 
-            let rect = NSRect {
-                origin: NSPoint { x: 0., y: 0. },
-                size: ns_size,
-            };
             let track: ObjcId = msg_send![class!(NSTrackingArea), alloc];
             let track: ObjcId = msg_send![
                 track,
@@ -338,7 +401,13 @@ impl MacosWindow {
 
             let () = msg_send![self.view, setLayerContentsRedrawPolicy: 2]; //duringViewResize
 
-            let () = msg_send![self.window, setContentView: self.view];
+            let rect = NSRect {
+                origin: NSPoint { x: 0., y: 0. },
+                size: ns_size,
+            };
+            self.init_container_view(rect);
+            let () = msg_send![self.window, setContentView: self.container_view];
+            let () = msg_send![self.container_view, addSubview: self.view];
             let () = msg_send![self.window, makeFirstResponder: self.view];
 
             // orderFront instead of makeKeyAndOrderFront to avoid stealing key focus initially
@@ -346,10 +415,6 @@ impl MacosWindow {
             let () = msg_send![self.window, orderFront: nil];
             let () = msg_send![self.window, makeKeyWindow];
 
-            let rect = NSRect {
-                origin: NSPoint { x: 0., y: 0. },
-                size: ns_size,
-            };
             let track: ObjcId = msg_send![class!(NSTrackingArea), alloc];
             let track: ObjcId = msg_send![
                 track,

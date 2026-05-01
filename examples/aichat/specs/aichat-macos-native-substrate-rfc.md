@@ -6,7 +6,7 @@ Source task: [AICHAT-LIQUID-GLASS-IMPLEMENTATION-TASKS.md](AICHAT-LIQUID-GLASS-I
 
 Draft RFC and code-grounded hierarchy audit.
 
-Phase 1.5 is **not passed** yet. The required magenta native-view visibility proof has not been implemented or validated through Studio.
+Phase 1.5 is **not passed** yet. The magenta native-view proof path is implemented behind an environment flag, but it has not been validated through Studio screenshots.
 
 ## Goal
 
@@ -280,6 +280,24 @@ layer.backgroundColor = #FF00FFFF
 inserted below MakepadView inside container_view
 ```
 
+Proof trigger:
+
+```text
+AICHAT_NATIVE_SUBSTRATE_PROOF=magenta
+```
+
+Current implementation:
+
+```text
+platform/src/os/apple/macos/macos_window.rs
+  MacosWindow.container_view
+  MacosWindow.proof_substrate_view
+  MacosWindow::install_magenta_proof_substrate()
+
+platform/src/os/apple/macos/macos.rs
+  CreateWindow checks AICHAT_NATIVE_SUBSTRATE_PROOF=magenta
+```
+
 Required visual setup:
 
 - aichat `pass.clear_color` alpha remains 0
@@ -347,10 +365,12 @@ Passed:
 - current hierarchy inspected
 - RFC strategy written
 - local SDK checked for `NSGlassEffectView` headers
+- container-view hierarchy implemented for macOS windows
+- magenta proof-substrate insertion path implemented behind `AICHAT_NATIVE_SUBSTRATE_PROOF=magenta`
 
 Blocked:
 
-- magenta native-view visibility proof not implemented
+- magenta native-view visibility proof not validated through Studio screenshot
 - Studio screenshot validation not run
 - `NSGlassEffectView.Style` integer values unavailable in local SDK
 

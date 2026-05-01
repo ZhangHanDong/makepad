@@ -890,6 +890,11 @@ impl Cx {
                     let () = unsafe {
                         msg_send![metal_window.ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, layer_alpha)]
                     };
+                    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref()
+                        == Ok("magenta")
+                    {
+                        metal_window.cocoa_window.install_magenta_proof_substrate();
+                    }
                     window.window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
                     window.is_created = true;
