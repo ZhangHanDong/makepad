@@ -1213,6 +1213,7 @@ pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
 const MIN_GLASS_OPACITY: f64 = 0.10;
 const MAX_GLASS_OPACITY: f64 = 1.00;
+const INACTIVE_GLASS_MULTIPLIER: f64 = 0.70;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GlassOpacity {
@@ -1224,6 +1225,21 @@ struct GlassOpacity {
     highlight_scale: f32,
     noise_scale: f32,
     halo_scale: f32,
+}
+
+impl GlassOpacity {
+    fn with_inactive_multiplier(mut self, multiplier: f64) -> Self {
+        let multiplier = multiplier.clamp(0.0, 1.0) as f32;
+        self.app *= multiplier;
+        self.sidebar *= multiplier;
+        self.main *= multiplier;
+        self.composer *= multiplier;
+        self.border_scale *= multiplier;
+        self.highlight_scale *= multiplier;
+        self.noise_scale *= multiplier;
+        self.halo_scale *= multiplier;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -2740,6 +2756,8 @@ pub struct App {
     app_state_timer: Timer,
     #[rust]
     glass_appearance: GlassAppearance,
+    #[rust]
+    glass_inactive_multiplier: f64,
 }
 
 impl App {
@@ -3317,7 +3335,8 @@ impl App {
 
     fn apply_glass_appearance(&self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
-        let glass = glass_opacity_values(opacity, appearance.panel_preset());
+        let glass = glass_opacity_values(opacity, appearance.panel_preset())
+            .with_inactive_multiplier(self.glass_inactive_multiplier);
 
         let mut app_shell = self.ui.view(cx, ids!(app_shell));
         script_apply_eval!(cx, app_shell, {
@@ -3370,6 +3389,25 @@ impl App {
     }
 
     fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
+        self.apply_glass_appearance(cx, self.glass_appearance, opacity);
+    }
+
+    fn handle_glass_window_focus(&mut self, cx: &mut Cx, window_id: WindowId, active: bool) {
+        let main_window_id = self.ui.window(cx, ids!(main_window)).window_id();
+        if main_window_id.is_some() && main_window_id != Some(window_id) {
+            return;
+        }
+
+        self.glass_inactive_multiplier = if active {
+            1.0
+        } else {
+            INACTIVE_GLASS_MULTIPLIER
+        };
+        let opacity = self
+            .ui
+            .slider(cx, ids!(opacity_slider))
+            .value()
+            .unwrap_or(DEFAULT_GLASS_OPACITY);
         self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
 
@@ -3601,6 +3639,7 @@ impl AppMain for App {
         *APP_DEMO_STATE.write().unwrap() = AppDemoState::load_from_disk();
         app.available_backends = Self::detect_available_backends();
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
+        app.glass_inactive_multiplier = 1.0;
         let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
         let glass = resolve_startup_glass_appearance(glass_backend.as_deref());
         if let Some(warning) = glass.warning {
@@ -3622,6 +3661,16 @@ impl AppMain for App {
 
         if let Event::WindowNativeSubstrateResolved(event) = event {
             self.handle_native_substrate_resolved(cx, event);
+        }
+
+        match event {
+            Event::WindowGotFocus(window_id) => {
+                self.handle_glass_window_focus(cx, *window_id, true);
+            }
+            Event::WindowLostFocus(window_id) => {
+                self.handle_glass_window_focus(cx, *window_id, false);
+            }
+            _ => {}
         }
 
         self.match_event(cx, event);
@@ -3746,7 +3795,7 @@ mod tests {
         resolve_glass_appearance, resolve_startup_glass_appearance, should_start_window_drag,
         Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent, GlassBackendRequest,
         GlassPanelPreset, GlassSubstrate, MacosGlassStyle, DEFAULT_GLASS_OPACITY,
-        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -3878,6 +3927,33 @@ mod tests {
         assert!(low.main < high.main);
         assert!(low.sidebar < high.sidebar);
         assert!(low.composer < high.composer);
+    }
+
+    #[test]
+    fn aichat_inactive_glass_multiplier_dims_all_decorations() {
+        let active = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::ShaderDefault);
+        let inactive = active.with_inactive_multiplier(INACTIVE_GLASS_MULTIPLIER);
+
+        assert!(inactive.app < active.app);
+        assert!(inactive.sidebar < active.sidebar);
+        assert!(inactive.main < active.main);
+        assert!(inactive.composer < active.composer);
+        assert_eq!(
+            inactive.border_scale,
+            active.border_scale * INACTIVE_GLASS_MULTIPLIER as f32
+        );
+        assert_eq!(
+            inactive.highlight_scale,
+            active.highlight_scale * INACTIVE_GLASS_MULTIPLIER as f32
+        );
+        assert_eq!(
+            inactive.noise_scale,
+            active.noise_scale * INACTIVE_GLASS_MULTIPLIER as f32
+        );
+        assert_eq!(
+            inactive.halo_scale,
+            active.halo_scale * INACTIVE_GLASS_MULTIPLIER as f32
+        );
     }
 
     #[test]

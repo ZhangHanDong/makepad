@@ -881,3 +881,4 @@ As of the `aichat-liquid-glass-phase1` branch:
   `[liquid-glass] state=1 reason=class-missing detail=NSGlassEffectView`.
 - LG-2.7.A uses T1 event transport. The platform emits `Event::WindowNativeSubstrateResolved(WindowNativeSubstrateResolvedEvent)` after startup substrate creation. aichat starts in ShaderOnly and only switches to `MacosNative + NativeOverlay` when the event reports `WindowNativeSubstrateState::Installed`.
 - Explicit native requests therefore fall back to ShaderOnly on old macOS without ever applying `NativeOverlay` against a missing native substrate.
+- Phase 4 inactive tint is implemented as Makepad-only panel tuning: `WindowLostFocus` applies a `0.7` decoration multiplier and `WindowGotFocus` restores `1.0`. No AppKit overlay view is introduced.
