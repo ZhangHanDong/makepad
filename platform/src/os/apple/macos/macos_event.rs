@@ -4,6 +4,7 @@ use crate::{
         DragEvent, DropEvent, GameInputConnectedEvent, KeyEvent, MouseDownEvent, MouseMoveEvent,
         MouseUpEvent, ScrollEvent, TextClipboardEvent, TextInputEvent, TimerEvent,
         WindowCloseRequestedEvent, WindowClosedEvent, WindowDragQueryEvent, WindowGeomChangeEvent,
+        WindowNativeSubstrateResolvedEvent,
     },
     makepad_live_id::*,
     permission::PermissionResult,
@@ -18,6 +19,7 @@ pub enum MacosEvent {
     WindowResizeLoopStart(WindowId),
     WindowResizeLoopStop(WindowId),
     WindowGeomChange(WindowGeomChangeEvent),
+    WindowNativeSubstrateResolved(WindowNativeSubstrateResolvedEvent),
     WindowClosed(WindowClosedEvent),
     Paint,
 

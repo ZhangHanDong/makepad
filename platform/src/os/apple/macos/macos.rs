@@ -638,6 +638,9 @@ impl Cx {
                 // ok lets not redraw all, just this window
                 self.call_event_handler(&Event::WindowGeomChange(re));
             }
+            MacosEvent::WindowNativeSubstrateResolved(event) => {
+                self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
+            }
             MacosEvent::WindowClosed(wc) => {
                 // lets remove the window from the set
                 let window_id = wc.window_id;
@@ -889,17 +892,26 @@ impl Cx {
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
-                    let window = &mut self.windows[window_id];
+                    let (inner_size, position, title, is_fullscreen, macos_config, visuals) = {
+                        let window = &self.windows[window_id];
+                        (
+                            window.create_inner_size.unwrap_or(dvec2(800., 600.)),
+                            window.create_position,
+                            window.create_title.clone(),
+                            window.is_fullscreen,
+                            window.macos,
+                            window.window_visuals(),
+                        )
+                    };
                     let mut metal_window = MetalWindow::new(
                         window_id,
                         &metal_cx,
-                        window.create_inner_size.unwrap_or(dvec2(800., 600.)),
-                        window.create_position,
-                        &window.create_title,
-                        window.is_fullscreen,
-                        window.macos,
+                        inner_size,
+                        position,
+                        &title,
+                        is_fullscreen,
+                        macos_config,
                     );
-                    let visuals = window.window_visuals();
                     metal_window.cocoa_window.set_window_visuals(visuals);
                     let layer_opaque = if visuals.transparent { NO } else { YES };
                     let layer_alpha = if visuals.transparent { 0.0 } else { 1.0 };
@@ -910,13 +922,14 @@ impl Cx {
                     if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref() == Ok("magenta") {
                         metal_window.cocoa_window.install_magenta_proof_substrate();
                     } else if let Some(style) = requested_native_glass_style_from_env() {
-                        metal_window
+                        let event = metal_window
                             .cocoa_window
                             .install_native_glass_substrate(style);
+                        self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
                     }
-                    window.window_geom = metal_window.window_geom.clone();
+                    self.windows[window_id].window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
-                    window.is_created = true;
+                    self.windows[window_id].is_created = true;
                 }
                 CxOsOp::CreatePopupWindow {
                     window_id,

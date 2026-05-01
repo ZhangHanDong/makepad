@@ -1316,6 +1316,7 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> GlassConfigResolution {
     let (request, parse_warning) = parse_glass_backend(value);
     if let Some(warning) = parse_warning {
@@ -1357,21 +1358,11 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
     }
 }
 
-fn native_glass_available_stub() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::raw::c_char;
-
-        unsafe {
-            !crate::makepad_widgets::makepad_platform::makepad_objc_sys::runtime::objc_getClass(
-                b"NSGlassEffectView\0".as_ptr() as *const c_char,
-            )
-            .is_null()
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
+fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolution {
+    let (_, parse_warning) = parse_glass_backend(value);
+    GlassConfigResolution {
+        appearance: GlassAppearance::default(),
+        warning: parse_warning,
     }
 }
 
@@ -3381,6 +3372,63 @@ impl App {
     fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
         self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
+
+    fn handle_native_substrate_resolved(
+        &mut self,
+        cx: &mut Cx,
+        event: &WindowNativeSubstrateResolvedEvent,
+    ) {
+        let main_window_id = self.ui.window(cx, ids!(main_window)).window_id();
+        if main_window_id.is_some() && main_window_id != Some(event.window_id) {
+            return;
+        }
+
+        self.glass_appearance = match (event.state, event.style) {
+            (
+                WindowNativeSubstrateState::Installed,
+                Some(WindowNativeSubstrateStyle::MacosGlassRegular),
+            ) => GlassAppearance {
+                substrate: GlassSubstrate::MacosNative {
+                    style: MacosGlassStyle::Regular,
+                },
+                backdrop: None,
+            },
+            (
+                WindowNativeSubstrateState::Installed,
+                Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            ) => GlassAppearance {
+                substrate: GlassSubstrate::MacosNative {
+                    style: MacosGlassStyle::Clear,
+                },
+                backdrop: None,
+            },
+            _ => GlassAppearance::default(),
+        };
+
+        match self.glass_appearance.substrate {
+            GlassSubstrate::MacosNative { .. } => {
+                log!(
+                    "[liquid-glass] app-substrate=macos-native state={:?} reason={}",
+                    event.state,
+                    event.reason
+                );
+            }
+            GlassSubstrate::ShaderOnly => {
+                log!(
+                    "[liquid-glass] app-substrate=shader state={:?} reason={}",
+                    event.state,
+                    event.reason
+                );
+            }
+        }
+
+        let opacity = self
+            .ui
+            .slider(cx, ids!(opacity_slider))
+            .value()
+            .unwrap_or(DEFAULT_GLASS_OPACITY);
+        self.apply_glass_appearance(cx, self.glass_appearance, opacity);
+    }
 }
 
 impl MatchEvent for App {
@@ -3554,8 +3602,7 @@ impl AppMain for App {
         app.available_backends = Self::detect_available_backends();
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
         let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
-        let glass =
-            resolve_glass_appearance(glass_backend.as_deref(), native_glass_available_stub());
+        let glass = resolve_startup_glass_appearance(glass_backend.as_deref());
         if let Some(warning) = glass.warning {
             log!("[liquid-glass] {}", warning);
         }
@@ -3571,6 +3618,10 @@ impl AppMain for App {
                     cx.set_cursor(MouseCursor::Default);
                 }
             }
+        }
+
+        if let Event::WindowNativeSubstrateResolved(event) = event {
+            self.handle_native_substrate_resolved(cx, event);
         }
 
         self.match_event(cx, event);
@@ -3692,9 +3743,10 @@ mod tests {
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, parse_glass_backend, render_state_templates,
-        resolve_glass_appearance, should_start_window_drag, Agent, App, AppDemoState, BackendType,
-        ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        resolve_glass_appearance, resolve_startup_glass_appearance, should_start_window_drag,
+        Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent, GlassBackendRequest,
+        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, DEFAULT_GLASS_OPACITY,
+        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -3789,6 +3841,21 @@ mod tests {
             }
         );
         assert!(supported.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_startup_glass_resolution_waits_for_platform_result() {
+        let pending = resolve_startup_glass_appearance(Some("macos-native"));
+        assert_eq!(pending.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert!(pending.warning.is_none());
+
+        let auto = resolve_startup_glass_appearance(Some("auto"));
+        assert_eq!(auto.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert!(auto.warning.is_none());
+
+        let invalid = resolve_startup_glass_appearance(Some("native"));
+        assert_eq!(invalid.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert!(invalid.warning.is_some());
     }
 
     #[test]

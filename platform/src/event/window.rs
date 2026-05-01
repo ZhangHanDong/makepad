@@ -80,6 +80,28 @@ pub struct WindowClosedEvent {
     pub window_id: WindowId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowNativeSubstrateStyle {
+    MacosGlassRegular,
+    MacosGlassClear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowNativeSubstrateState {
+    ClassMissing,
+    PreflightFailed,
+    VisibilityUnverified,
+    Installed,
+}
+
+#[derive(Clone, Debug)]
+pub struct WindowNativeSubstrateResolvedEvent {
+    pub window_id: WindowId,
+    pub state: WindowNativeSubstrateState,
+    pub style: Option<WindowNativeSubstrateStyle>,
+    pub reason: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub enum PopupDismissReason {
     FocusLost,

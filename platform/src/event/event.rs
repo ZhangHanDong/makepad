@@ -152,6 +152,7 @@ pub enum Event {
     WindowClosed(WindowClosedEvent),
     PopupDismissed(PopupDismissedEvent),
     WindowGeomChange(WindowGeomChangeEvent),
+    WindowNativeSubstrateResolved(WindowNativeSubstrateResolvedEvent),
     VirtualKeyboard(VirtualKeyboardEvent),
     ClearAtlasses,
 
@@ -338,6 +339,7 @@ impl Event {
             61 => "PopupDismissed",
             62 => "SelectionHandleDrag",
             66 => "ScriptReapply",
+            67 => "WindowNativeSubstrateResolved",
             _ => panic!(),
         }
     }
@@ -365,6 +367,7 @@ impl Event {
             Self::WindowCloseRequested(_) => 15,
             Self::WindowClosed(_) => 16,
             Self::WindowGeomChange(_) => 17,
+            Self::WindowNativeSubstrateResolved(_) => 67,
             Self::VirtualKeyboard(_) => 18,
             Self::ClearAtlasses => 19,
             Self::PopupDismissed(_) => 61,

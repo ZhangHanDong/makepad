@@ -5,7 +5,8 @@ use {
             finger::MouseButton, DragItem, KeyModifiers, MouseDownEvent, MouseMoveEvent,
             MouseUpEvent, ScrollEvent, TextInputEvent, WindowCloseRequestedEvent,
             WindowClosedEvent, WindowDragQueryEvent, WindowDragQueryResponse, WindowGeom,
-            WindowGeomChangeEvent,
+            WindowGeomChangeEvent, WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
+            WindowNativeSubstrateStyle,
         },
         makepad_math::{Rect, Vec2d},
         os::{
@@ -48,6 +49,13 @@ impl MacosNativeGlassStyle {
         match self {
             Self::Regular => 0.22,
             Self::Clear => 0.08,
+        }
+    }
+
+    fn to_event_style(self) -> WindowNativeSubstrateStyle {
+        match self {
+            Self::Regular => WindowNativeSubstrateStyle::MacosGlassRegular,
+            Self::Clear => WindowNativeSubstrateStyle::MacosGlassClear,
         }
     }
 }
@@ -150,18 +158,45 @@ impl MacosWindow {
         !Self::native_glass_effect_view_class().is_null()
     }
 
-    pub(crate) fn install_native_glass_substrate(&mut self, style: MacosNativeGlassStyle) -> bool {
+    fn native_substrate_resolved_event(
+        &self,
+        state: WindowNativeSubstrateState,
+        style: Option<MacosNativeGlassStyle>,
+        reason: &'static str,
+    ) -> WindowNativeSubstrateResolvedEvent {
+        WindowNativeSubstrateResolvedEvent {
+            window_id: self.window_id,
+            state,
+            style: style.map(MacosNativeGlassStyle::to_event_style),
+            reason,
+        }
+    }
+
+    pub(crate) fn install_native_glass_substrate(
+        &mut self,
+        style: MacosNativeGlassStyle,
+    ) -> WindowNativeSubstrateResolvedEvent {
         unsafe {
             if self.native_substrate_view != nil {
-                return true;
+                crate::log!(
+                    "[liquid-glass] state=4 substrate=macos-native style={:?}",
+                    style
+                );
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::Installed,
+                    Some(style),
+                    "already-installed",
+                );
             }
 
             let glass_class = Self::native_glass_effect_view_class();
             if glass_class.is_null() {
-                crate::log!(
-                    "[liquid-glass] NSGlassEffectView unavailable; native substrate skipped"
+                crate::log!("[liquid-glass] state=1 reason=class-missing detail=NSGlassEffectView");
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::ClassMissing,
+                    None,
+                    "class-missing",
                 );
-                return false;
             }
 
             let bounds: NSRect = msg_send![self.container_view, bounds];
@@ -174,11 +209,26 @@ impl MacosWindow {
                 ];
             }
 
+            let can_init: BOOL =
+                msg_send![glass_class, instancesRespondToSelector: sel!(initWithFrame:)];
+            if can_init != YES {
+                crate::log!("[liquid-glass] state=2 reason=missing-initWithFrame");
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::PreflightFailed,
+                    Some(style),
+                    "missing-initWithFrame",
+                );
+            }
+
             let glass_view: ObjcId = msg_send![glass_class, alloc];
             let glass_view: ObjcId = msg_send![glass_view, initWithFrame: bounds];
             if glass_view == nil {
-                crate::log!("[liquid-glass] failed to initialize NSGlassEffectView");
-                return false;
+                crate::log!("[liquid-glass] state=2 reason=alloc-init-failed");
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::PreflightFailed,
+                    Some(style),
+                    "alloc-init-failed",
+                );
             }
 
             let () = msg_send![
@@ -190,6 +240,13 @@ impl MacosWindow {
             let can_set_style: BOOL = msg_send![glass_view, respondsToSelector: set_style_sel];
             if can_set_style == YES {
                 let () = msg_send![glass_view, setStyle: style.as_ns_style()];
+            } else {
+                crate::log!("[liquid-glass] state=2 reason=missing-setStyle");
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::PreflightFailed,
+                    Some(style),
+                    "missing-setStyle",
+                );
             }
 
             let set_tint_sel = sel!(setTintColor:);
@@ -218,12 +275,26 @@ impl MacosWindow {
                 positioned: -1i64
                 relativeTo: self.view
             ];
+            let superview: ObjcId = msg_send![glass_view, superview];
+            if superview != self.container_view {
+                let () = msg_send![glass_view, removeFromSuperview];
+                crate::log!("[liquid-glass] state=3 reason=attach-unverified");
+                return self.native_substrate_resolved_event(
+                    WindowNativeSubstrateState::VisibilityUnverified,
+                    Some(style),
+                    "attach-unverified",
+                );
+            }
             self.native_substrate_view = glass_view;
             crate::log!(
-                "[liquid-glass] NSGlassEffectView substrate installed: {:?}",
+                "[liquid-glass] state=4 substrate=macos-native style={:?}",
                 style
             );
-            true
+            self.native_substrate_resolved_event(
+                WindowNativeSubstrateState::Installed,
+                Some(style),
+                "installed-on-proofed-hierarchy",
+            )
         }
     }
 
