@@ -1273,6 +1273,19 @@ impl GlassOpacity {
         self.noise_scale *= 0.70;
         self
     }
+
+    fn transparent() -> Self {
+        Self {
+            app: 0.0,
+            sidebar: 0.0,
+            main: 0.0,
+            composer: 0.0,
+            border_scale: 0.0,
+            highlight_scale: 0.0,
+            noise_scale: 0.0,
+            halo_scale: 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1416,10 +1429,36 @@ fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolutio
 }
 
 fn initial_glass_opacity() -> f64 {
-    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref() == Ok("magenta") {
+    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF")
+        .map(|value| matches!(value.as_str(), "magenta" | "stripes"))
+        .unwrap_or(false)
+        || native_compositing_proof_transparent_overlay()
+    {
         MIN_GLASS_OPACITY
     } else {
         DEFAULT_GLASS_OPACITY
+    }
+}
+
+fn native_compositing_proof_transparent_overlay() -> bool {
+    native_compositing_proof_transparent_overlay_from_value(
+        std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF").ok().as_deref(),
+    )
+}
+
+fn native_compositing_proof_transparent_overlay_from_value(value: Option<&str>) -> bool {
+    value == Some("transparent-overlay")
+}
+
+fn glass_opacity_with_native_compositing_proof(
+    glass: GlassOpacity,
+    use_native_panels: bool,
+    proof: Option<&str>,
+) -> GlassOpacity {
+    if use_native_panels && native_compositing_proof_transparent_overlay_from_value(proof) {
+        GlassOpacity::transparent()
+    } else {
+        glass
     }
 }
 
@@ -3591,6 +3630,17 @@ impl App {
         ) {
             glass = glass.with_native_clear_multiplier();
         }
+        let compositing_proof = std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF").ok();
+        glass = glass_opacity_with_native_compositing_proof(
+            glass,
+            use_native_panels,
+            compositing_proof.as_deref(),
+        );
+        if use_native_panels
+            && native_compositing_proof_transparent_overlay_from_value(compositing_proof.as_deref())
+        {
+            log!("[liquid-glass] compositing-proof=transparent-overlay");
+        }
 
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
@@ -4061,11 +4111,13 @@ mod tests {
 
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, guard_native_splash_opaque_roots, parse_glass_backend,
-        render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
-        should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        glass_opacity_values, glass_opacity_with_native_compositing_proof,
+        guard_native_splash_opaque_roots, native_compositing_proof_transparent_overlay_from_value,
+        parse_glass_backend, render_state_templates, resolve_glass_appearance,
+        resolve_startup_glass_appearance, should_start_window_drag, Agent, App, AppDemoState,
+        BackendType, ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -4262,6 +4314,41 @@ mod tests {
         assert!(clear.highlight_scale < regular.highlight_scale);
         assert!(clear.noise_scale < regular.noise_scale);
         assert_eq!(clear.halo_scale, regular.halo_scale);
+    }
+
+    #[test]
+    fn aichat_native_compositing_proof_transparent_overlay_zeros_decoration() {
+        assert!(native_compositing_proof_transparent_overlay_from_value(Some(
+            "transparent-overlay"
+        )));
+        assert!(!native_compositing_proof_transparent_overlay_from_value(Some(
+            "stripes"
+        )));
+
+        let native = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+        let proof = glass_opacity_with_native_compositing_proof(
+            native,
+            true,
+            Some("transparent-overlay"),
+        );
+
+        assert_eq!(proof.app, 0.0);
+        assert_eq!(proof.sidebar, 0.0);
+        assert_eq!(proof.main, 0.0);
+        assert_eq!(proof.composer, 0.0);
+        assert_eq!(proof.border_scale, 0.0);
+        assert_eq!(proof.highlight_scale, 0.0);
+        assert_eq!(proof.noise_scale, 0.0);
+        assert_eq!(proof.halo_scale, 0.0);
+
+        assert_eq!(
+            glass_opacity_with_native_compositing_proof(
+                native,
+                false,
+                Some("transparent-overlay")
+            ),
+            native
+        );
     }
 
     #[test]

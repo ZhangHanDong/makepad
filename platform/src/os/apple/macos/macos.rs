@@ -917,9 +917,12 @@ impl Cx {
                     let () = unsafe {
                         msg_send![metal_window.ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, layer_alpha)]
                     };
-                    if std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF").as_deref() == Ok("magenta") {
-                        metal_window.cocoa_window.install_magenta_proof_substrate();
-                    } else if let Some(style) = requested_native_glass_style_from_env() {
+                    if let Ok(proof) = std::env::var("AICHAT_NATIVE_SUBSTRATE_PROOF") {
+                        if matches!(proof.as_str(), "magenta" | "stripes") {
+                            metal_window.cocoa_window.install_proof_substrate(&proof);
+                        }
+                    }
+                    if let Some(style) = requested_native_glass_style_from_env() {
                         let event = metal_window
                             .cocoa_window
                             .install_native_glass_substrate(style);

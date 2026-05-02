@@ -146,7 +146,7 @@ impl MacosWindow {
         let () = msg_send![self.view, setAutoresizingMask: autoresize];
     }
 
-    pub fn install_magenta_proof_substrate(&mut self) {
+    pub fn install_proof_substrate(&mut self, mode: &str) {
         unsafe {
             if self.proof_substrate_view != nil {
                 return;
@@ -155,9 +155,14 @@ impl MacosWindow {
             let bounds: NSRect = msg_send![self.container_view, bounds];
             let container_layer: ObjcId = msg_send![self.container_view, layer];
             if container_layer != nil {
+                let (red, green, blue) = if mode == "stripes" {
+                    (0.0, 0.0, 0.0)
+                } else {
+                    (1.0, 0.0, 1.0)
+                };
                 let () = msg_send![
                     container_layer,
-                    setBackgroundColor: CGColorCreateGenericRGB(1.0, 0.0, 1.0, 1.0)
+                    setBackgroundColor: CGColorCreateGenericRGB(red, green, blue, 1.0)
                 ];
             }
 
@@ -171,10 +176,60 @@ impl MacosWindow {
             let layer: ObjcId = msg_send![proof_view, layer];
             if layer != nil {
                 let () = msg_send![layer, setOpaque: YES];
+                let (red, green, blue) = if mode == "stripes" {
+                    (0.0, 0.0, 0.0)
+                } else {
+                    (1.0, 0.0, 1.0)
+                };
                 let () = msg_send![
                     layer,
-                    setBackgroundColor: CGColorCreateGenericRGB(1.0, 0.0, 1.0, 1.0)
+                    setBackgroundColor: CGColorCreateGenericRGB(red, green, blue, 1.0)
                 ];
+            }
+
+            if mode == "stripes" {
+                let colors = [
+                    (1.0, 0.08, 0.08),
+                    (0.08, 0.85, 0.18),
+                    (0.05, 0.32, 1.0),
+                    (1.0, 0.86, 0.08),
+                    (0.95, 0.08, 1.0),
+                    (0.05, 0.92, 0.95),
+                ];
+                let stripe_count = 12usize;
+                let stripe_width = (bounds.size.width / stripe_count as f64).max(1.0);
+                for index in 0..stripe_count {
+                    let stripe: ObjcId = msg_send![class!(NSView), alloc];
+                    let stripe_frame = NSRect {
+                        origin: NSPoint {
+                            x: index as f64 * stripe_width,
+                            y: 0.0,
+                        },
+                        size: NSSize {
+                            width: stripe_width + 1.0,
+                            height: bounds.size.height,
+                        },
+                    };
+                    let stripe: ObjcId = msg_send![stripe, initWithFrame: stripe_frame];
+                    if stripe == nil {
+                        continue;
+                    }
+                    let () = msg_send![
+                        stripe,
+                        setAutoresizingMask: Self::NS_VIEW_HEIGHT_SIZABLE
+                    ];
+                    let () = msg_send![stripe, setWantsLayer: YES];
+                    let stripe_layer: ObjcId = msg_send![stripe, layer];
+                    if stripe_layer != nil {
+                        let (red, green, blue) = colors[index % colors.len()];
+                        let () = msg_send![stripe_layer, setOpaque: YES];
+                        let () = msg_send![
+                            stripe_layer,
+                            setBackgroundColor: CGColorCreateGenericRGB(red, green, blue, 1.0)
+                        ];
+                    }
+                    let () = msg_send![proof_view, addSubview: stripe];
+                }
             }
 
             let () = msg_send![
@@ -184,7 +239,7 @@ impl MacosWindow {
                 relativeTo: self.view
             ];
             self.proof_substrate_view = proof_view;
-            crate::log!("[liquid-glass] proof-substrate=magenta installed");
+            crate::log!("[liquid-glass] proof-substrate={} installed", mode);
         }
     }
 

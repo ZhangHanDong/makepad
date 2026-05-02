@@ -55,6 +55,8 @@ let RunRelease = RunItem{
 
 let RunAichatMacosGlass = RunItem{
     backend: "macos-native"
+    proof: ""
+    compositing_proof: ""
     on_run: fn(id){
         hub.run(
             {
@@ -62,7 +64,8 @@ let RunAichatMacosGlass = RunItem{
                 "STUDIO_BUILD": id.to_string()
                 "STUDIO_CRATE": "makepad-example-aichat"
                 "AICHAT_GLASS_BACKEND": self.backend
-                "AICHAT_NATIVE_SUBSTRATE_PROOF": ""
+                "AICHAT_NATIVE_SUBSTRATE_PROOF": self.proof
+                "AICHAT_NATIVE_COMPOSITING_PROOF": self.compositing_proof
             },
             "cargo",
             ["run" "-p" "makepad-example-aichat" "--release" "--message-format=json" "--" "--message-format=json"],
@@ -104,6 +107,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-auto", backend: "auto"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-proof-stripes", backend: "macos-native-clear", proof: "stripes", compositing_proof: "transparent-overlay"}
     RunStudio{name: "makepad-studio"} 
     RunStudioExt{name: "makepad-studio-ext"} 
     RunStudioRelease{name: "makepad-example-xr"}
