@@ -125,3 +125,16 @@ After Step 11 tuning, both Studio targets were rerun through fresh release
 RunItems and still reached State 4 with four installed panels. The repeated
 native batch install log flood was no longer observed during the validation
 wait after startup.
+
+## Compositing Proof Update 2026-05-02
+
+`makepad-example-aichat-macos-native-clear-proof-stripes` reached State 4 with
+the striped proof substrate and transparent Makepad overlay enabled. The user
+confirmed that colored stripes were visible and that the stripe coverage followed
+window resizing after the proof substrate was widened.
+
+The user could not visually distinguish the interior as glass material; the
+result appeared as flat colored stripes. This means v4.1 proves native underlay
+visibility, but it does not prove complete Liquid Glass inside the panels. The
+current under-Metal model remains insufficient for full Liquid Glass and should
+feed into the v4.2 compositing design.

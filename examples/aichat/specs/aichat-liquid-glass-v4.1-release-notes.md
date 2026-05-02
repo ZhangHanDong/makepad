@@ -68,6 +68,15 @@ The Step 11 Studio rerun confirmed regular and clear native targets still reach
 State 4 after visual tuning. It also confirmed identical native glass batches no
 longer produce repeated install logs after startup.
 
+Step 12/13 added a striped native proof substrate and a transparent-overlay
+proof mode. The striped proof became visible and covered the window after
+resize, which confirms the native underlay is present and correctly layered.
+However, the user could not visually identify meaningful interior Liquid Glass
+treatment beyond the flat striped underlay. v4.1 should therefore be described
+as an Apple-native underlay/substrate proof, not complete Liquid Glass. Complete
+Liquid Glass requires a later compositing design that is not limited to native
+panels below the Makepad Metal layer.
+
 ## Known v4.1 Limitations
 
 v4.1 intentionally does not handle:
@@ -82,6 +91,8 @@ v4.1 intentionally does not handle:
 - native popup/modal windows
 - iOS/iPadOS native backend
 - native + shader backdrop mixing in one window
+- complete interior Liquid Glass treatment in the current under-Metal
+  compositing model
 
 ShaderBackdrop remains a separate future phase. It requires offscreen scene
 capture, blur/refraction passes, and panel sampling; it should not be mixed with

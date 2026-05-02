@@ -1230,6 +1230,8 @@ pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::
 
 static AICHAT_NATIVE_GLASS_ACTIVE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static AICHAT_NATIVE_COMPOSITING_PROOF_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
@@ -3638,6 +3640,10 @@ impl App {
         );
         if use_native_panels
             && native_compositing_proof_transparent_overlay_from_value(compositing_proof.as_deref())
+            && !AICHAT_NATIVE_COMPOSITING_PROOF_LOGGED.swap(
+                true,
+                std::sync::atomic::Ordering::Relaxed,
+            )
         {
             log!("[liquid-glass] compositing-proof=transparent-overlay");
         }
