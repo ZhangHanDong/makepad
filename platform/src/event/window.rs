@@ -1,5 +1,5 @@
 use {
-    crate::{makepad_math::*, window::WindowId}, //makepad_microserde::*,
+    crate::{makepad_live_id::LiveId, makepad_math::*, window::WindowId}, //makepad_microserde::*,
     std::cell::Cell,
     std::rc::Rc,
 };
@@ -102,6 +102,199 @@ pub struct WindowNativeSubstrateResolvedEvent {
     pub reason: &'static str,
 }
 
+pub const NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1: usize = 12;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NativeGlassShape {
+    RoundedRect { radius: f64 },
+    Capsule,
+}
+
+impl NativeGlassShape {
+    pub fn corner_radius_for_rect(self, rect: Rect) -> f64 {
+        match self {
+            Self::RoundedRect { radius } => radius,
+            Self::Capsule => rect.size.x.min(rect.size.y) * 0.5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassStyle {
+    Regular,
+    Clear,
+}
+
+impl NativeGlassStyle {
+    pub fn macos_raw_value(self) -> i64 {
+        match self {
+            Self::Regular => 0,
+            Self::Clear => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassHitTest {
+    Passthrough,
+    Interactive,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassPanelDescriptor {
+    pub id: LiveId,
+    pub rect: Rect,
+    pub shape: NativeGlassShape,
+    pub style: NativeGlassStyle,
+    pub tint: Option<Vec4f>,
+    pub hit_test: NativeGlassHitTest,
+    pub z_order: i32,
+    pub visible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassContainerDescriptor {
+    pub id: LiveId,
+    pub rect: Rect,
+    pub spacing: f64,
+    pub panels: Vec<NativeGlassPanelDescriptor>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassBatch {
+    pub window_id: WindowId,
+    pub containers: Vec<NativeGlassContainerDescriptor>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassBatchValidationError {
+    TooManyContainers {
+        count: usize,
+    },
+    TooManyVisiblePanels {
+        count: usize,
+        max: usize,
+    },
+    InteractiveHitTestUnsupported {
+        container_id: LiveId,
+        panel_id: LiveId,
+    },
+}
+
+impl NativeGlassBatch {
+    pub fn visible_panel_count(&self) -> usize {
+        self.containers
+            .iter()
+            .flat_map(|container| container.panels.iter())
+            .filter(|panel| panel.visible)
+            .count()
+    }
+
+    pub fn validate_v4_1(&self) -> Result<(), NativeGlassBatchValidationError> {
+        if self.containers.len() > 1 {
+            return Err(NativeGlassBatchValidationError::TooManyContainers {
+                count: self.containers.len(),
+            });
+        }
+
+        let visible_panel_count = self.visible_panel_count();
+        if visible_panel_count > NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1 {
+            return Err(NativeGlassBatchValidationError::TooManyVisiblePanels {
+                count: visible_panel_count,
+                max: NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1,
+            });
+        }
+
+        for container in &self.containers {
+            for panel in &container.panels {
+                if panel.hit_test == NativeGlassHitTest::Interactive {
+                    return Err(
+                        NativeGlassBatchValidationError::InteractiveHitTestUnsupported {
+                            container_id: container.id,
+                            panel_id: panel.id,
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassBackendState {
+    Unsupported,
+    Rejected,
+    Installed,
+    Partial,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassInstallState {
+    Skipped,
+    Rejected,
+    Failed,
+    Partial,
+    Installed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassBatchResult {
+    pub window_id: WindowId,
+    pub backend_state: NativeGlassBackendState,
+    pub containers: Vec<NativeGlassContainerResult>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassContainerResult {
+    pub id: LiveId,
+    pub state: NativeGlassInstallState,
+    pub reason: &'static str,
+    pub installed_panels: usize,
+    pub failed_panels: usize,
+    pub panels: Vec<NativeGlassPanelResult>,
+}
+
+impl NativeGlassContainerResult {
+    pub fn from_panel_results(
+        id: LiveId,
+        state: NativeGlassInstallState,
+        reason: &'static str,
+        panels: Vec<NativeGlassPanelResult>,
+    ) -> Self {
+        let installed_panels = panels
+            .iter()
+            .filter(|panel| panel.state == NativeGlassInstallState::Installed)
+            .count();
+        let failed_panels = panels
+            .iter()
+            .filter(|panel| {
+                matches!(
+                    panel.state,
+                    NativeGlassInstallState::Failed | NativeGlassInstallState::Rejected
+                )
+            })
+            .count();
+
+        Self {
+            id,
+            state,
+            reason,
+            installed_panels,
+            failed_panels,
+            panels,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassPanelResult {
+    pub id: LiveId,
+    pub state: NativeGlassInstallState,
+    pub reason: &'static str,
+}
+
 #[derive(Clone, Debug)]
 pub enum PopupDismissReason {
     FocusLost,
@@ -146,4 +339,146 @@ pub struct WindowDragQueryEvent {
     pub window_id: WindowId,
     pub abs: Vec2d,
     pub response: Rc<Cell<WindowDragQueryResponse>>,
+}
+
+#[cfg(test)]
+mod native_glass_tests {
+    use super::*;
+    use crate::makepad_live_id::LiveId;
+
+    fn panel(id: u64) -> NativeGlassPanelDescriptor {
+        NativeGlassPanelDescriptor {
+            id: LiveId(id),
+            rect: Rect {
+                pos: Vec2d { x: 0.0, y: 0.0 },
+                size: Vec2d { x: 100.0, y: 48.0 },
+            },
+            shape: NativeGlassShape::RoundedRect { radius: 12.0 },
+            style: NativeGlassStyle::Regular,
+            tint: None,
+            hit_test: NativeGlassHitTest::Passthrough,
+            z_order: id as i32,
+            visible: true,
+        }
+    }
+
+    fn batch_with_panels(panels: Vec<NativeGlassPanelDescriptor>) -> NativeGlassBatch {
+        NativeGlassBatch {
+            window_id: WindowId(1, 1),
+            containers: vec![NativeGlassContainerDescriptor {
+                id: LiveId(10),
+                rect: Rect {
+                    pos: Vec2d { x: 0.0, y: 0.0 },
+                    size: Vec2d { x: 800.0, y: 600.0 },
+                },
+                spacing: 20.0,
+                panels,
+            }],
+        }
+    }
+
+    #[test]
+    fn native_glass_batch_accepts_single_container_with_twelve_visible_panels() {
+        let panels = (0..NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1 as u64)
+            .map(panel)
+            .collect();
+        let batch = batch_with_panels(panels);
+
+        assert_eq!(batch.visible_panel_count(), 12);
+        assert_eq!(batch.validate_v4_1(), Ok(()));
+    }
+
+    #[test]
+    fn native_glass_batch_rejects_multiple_containers_in_v4_1() {
+        let mut batch = batch_with_panels(vec![panel(1)]);
+        batch.containers.push(NativeGlassContainerDescriptor {
+            id: LiveId(11),
+            rect: Rect::default(),
+            spacing: 0.0,
+            panels: vec![panel(2)],
+        });
+
+        assert_eq!(
+            batch.validate_v4_1(),
+            Err(NativeGlassBatchValidationError::TooManyContainers { count: 2 })
+        );
+    }
+
+    #[test]
+    fn native_glass_batch_rejects_more_than_twelve_visible_panels() {
+        let panels = (0..=NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1 as u64)
+            .map(panel)
+            .collect();
+        let batch = batch_with_panels(panels);
+
+        assert_eq!(
+            batch.validate_v4_1(),
+            Err(NativeGlassBatchValidationError::TooManyVisiblePanels {
+                count: 13,
+                max: NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1,
+            })
+        );
+    }
+
+    #[test]
+    fn native_glass_batch_rejects_interactive_hit_test_in_v4_1() {
+        let mut interactive_panel = panel(99);
+        interactive_panel.hit_test = NativeGlassHitTest::Interactive;
+        let batch = batch_with_panels(vec![interactive_panel]);
+
+        assert_eq!(
+            batch.validate_v4_1(),
+            Err(
+                NativeGlassBatchValidationError::InteractiveHitTestUnsupported {
+                    container_id: LiveId(10),
+                    panel_id: LiveId(99),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn native_glass_container_result_counts_installed_and_failed_panels() {
+        let result = NativeGlassContainerResult::from_panel_results(
+            LiveId(10),
+            NativeGlassInstallState::Partial,
+            "partial",
+            vec![
+                NativeGlassPanelResult {
+                    id: LiveId(1),
+                    state: NativeGlassInstallState::Installed,
+                    reason: "installed",
+                },
+                NativeGlassPanelResult {
+                    id: LiveId(2),
+                    state: NativeGlassInstallState::Failed,
+                    reason: "selector missing",
+                },
+                NativeGlassPanelResult {
+                    id: LiveId(3),
+                    state: NativeGlassInstallState::Rejected,
+                    reason: "interactive unsupported",
+                },
+            ],
+        );
+
+        assert_eq!(result.installed_panels, 1);
+        assert_eq!(result.failed_panels, 2);
+    }
+
+    #[test]
+    fn native_glass_style_maps_to_macos_raw_values() {
+        assert_eq!(NativeGlassStyle::Regular.macos_raw_value(), 0);
+        assert_eq!(NativeGlassStyle::Clear.macos_raw_value(), 1);
+    }
+
+    #[test]
+    fn native_glass_capsule_corner_radius_uses_half_shortest_side() {
+        let rect = Rect {
+            pos: Vec2d { x: 0.0, y: 0.0 },
+            size: Vec2d { x: 100.0, y: 48.0 },
+        };
+
+        assert_eq!(NativeGlassShape::Capsule.corner_radius_for_rect(rect), 24.0);
+    }
 }
