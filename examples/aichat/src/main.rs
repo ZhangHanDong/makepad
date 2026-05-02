@@ -632,9 +632,18 @@ script_mod! {
                     spacing: 0
                     draw_bg.color: #00000000
 
+                    glass_container := GlassContainer {
+                        width: Fill
+                        height: Fill
+                        native: false
+                        spacing: 20.0
+
                     app_shell := GlassPanel {
                         width: Fill
                         height: Fill
+                        native: true
+                        native_radius: 30.0
+                        native_z_order: 0.0
                         new_batch: true
                         flow: Right
                         padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
@@ -658,6 +667,9 @@ script_mod! {
                     sidebar := GlassPanel {
                         width: 298
                         height: Fill
+                        native: true
+                        native_radius: 0.0
+                        native_z_order: 1.0
                         new_batch: true
                         flow: Down
                         padding: Inset{left: 14 top: 14 right: 14 bottom: 14}
@@ -864,6 +876,9 @@ script_mod! {
                     main_area := GlassPanel {
                         width: Fill
                         height: Fill
+                        native: true
+                        native_radius: 0.0
+                        native_z_order: 2.0
                         new_batch: true
                         flow: Down
                         padding: Inset{left: 34 top: 18 right: 34 bottom: 22}
@@ -1013,6 +1028,9 @@ script_mod! {
                             composer := GlassPanel {
                                 width: Fill{min: 620 max: 1040}
                                 height: Fit
+                                native: true
+                                native_radius: 24.0
+                                native_z_order: 3.0
                                 new_batch: true
                                 flow: Down
                                 padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
@@ -1140,6 +1158,7 @@ script_mod! {
                             draw_text.text_style.font_size: 10
                             draw_text.color: #xF3E3C7D8
                         }
+                    }
                     }
                     }
 
@@ -1653,11 +1672,7 @@ fn clamp_opaque_hex_color(value: &str) -> Option<(String, usize, bool)> {
             let consumed = digits_start + 8;
             let alpha = &value[digits_start + 6..consumed];
             if alpha.eq_ignore_ascii_case("ff") {
-                Some((
-                    format!("{}80", &value[..digits_start + 6]),
-                    consumed,
-                    true,
-                ))
+                Some((format!("{}80", &value[..digits_start + 6]), consumed, true))
             } else {
                 Some((value[..consumed].to_string(), consumed, false))
             }
@@ -2682,8 +2697,7 @@ impl Widget for ChatList {
                         let rendered = wrap_bare_latex(display_text);
                         let guarded_text;
                         let markdown_text = if msg.role == ChatRole::Assistant
-                            && AICHAT_NATIVE_GLASS_ACTIVE
-                                .load(std::sync::atomic::Ordering::Relaxed)
+                            && AICHAT_NATIVE_GLASS_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
                         {
                             guarded_text = guard_native_splash_opaque_roots(&rendered, true);
                             guarded_text.as_str()
@@ -3418,14 +3432,13 @@ impl App {
             let state_rendered = render_state_templates(unwrapped, &state);
             let rendered = wrap_bare_latex(&state_rendered);
             let guarded_text;
-            let markdown_text = if AICHAT_NATIVE_GLASS_ACTIVE
-                .load(std::sync::atomic::Ordering::Relaxed)
-            {
-                guarded_text = guard_native_splash_opaque_roots(&rendered, true);
-                guarded_text.as_str()
-            } else {
-                &rendered
-            };
+            let markdown_text =
+                if AICHAT_NATIVE_GLASS_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                    guarded_text = guard_native_splash_opaque_roots(&rendered, true);
+                    guarded_text.as_str()
+                } else {
+                    &rendered
+                };
             let mut markdown = item.markdown(cx, ids!(selectable));
             markdown.set_text(cx, markdown_text);
         }
@@ -3552,6 +3565,12 @@ impl App {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         let glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
+        let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
+
+        let mut glass_container = self.ui.widget(cx, ids!(glass_container));
+        script_apply_eval!(cx, glass_container, {
+            native: #(use_native_panels)
+        });
 
         let mut app_shell = self.ui.view(cx, ids!(app_shell));
         script_apply_eval!(cx, app_shell, {
@@ -3658,7 +3677,10 @@ impl App {
             _ => GlassAppearance::default(),
         };
         AICHAT_NATIVE_GLASS_ACTIVE.store(
-            matches!(self.glass_appearance.substrate, GlassSubstrate::MacosNative { .. }),
+            matches!(
+                self.glass_appearance.substrate,
+                GlassSubstrate::MacosNative { .. }
+            ),
             std::sync::atomic::Ordering::Relaxed,
         );
 
@@ -4014,8 +4036,7 @@ mod tests {
         render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
         should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
         GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY,
+        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -4121,16 +4142,9 @@ mod tests {
 
     #[test]
     fn aichat_native_splash_guard_ignores_non_splash_blocks() {
-        let markdown = concat!(
-            "```rust\n",
-            "let color = \"#x0c0c18\";\n",
-            "```\n",
-        );
+        let markdown = concat!("```rust\n", "let color = \"#x0c0c18\";\n", "```\n",);
 
-        assert_eq!(
-            guard_native_splash_opaque_roots(markdown, true),
-            markdown
-        );
+        assert_eq!(guard_native_splash_opaque_roots(markdown, true), markdown);
     }
 
     #[test]
@@ -4141,14 +4155,8 @@ mod tests {
             "```\n",
         );
 
-        assert_eq!(
-            guard_native_splash_opaque_roots(markdown, true),
-            markdown
-        );
-        assert_eq!(
-            guard_native_splash_opaque_roots(markdown, false),
-            markdown
-        );
+        assert_eq!(guard_native_splash_opaque_roots(markdown, true), markdown);
+        assert_eq!(guard_native_splash_opaque_roots(markdown, false), markdown);
     }
 
     #[test]
