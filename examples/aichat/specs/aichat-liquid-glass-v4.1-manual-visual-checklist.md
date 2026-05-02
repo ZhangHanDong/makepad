@@ -105,3 +105,23 @@ Optional comparison targets:
 - [ ] Record whether regular style is acceptable.
 - [ ] Record whether clear style is acceptable.
 - [ ] Record whether any visual tuning changes are required before Phase F.
+
+## Validation Update 2026-05-02
+
+Studio release validation reached the native backend on macOS 26 for both
+required targets:
+
+- `makepad-example-aichat-macos-native`
+  - compatibility log reached `state=4 substrate=macos-native style=regular style_raw=0`
+  - v4.1 batch log reported `containers=1 panels_installed=4 panels_failed=0`
+- `makepad-example-aichat-macos-native-clear`
+  - compatibility log reached `state=4 substrate=macos-native style=clear style_raw=1`
+  - v4.1 batch log reported `containers=1 panels_installed=4 panels_failed=0`
+
+The user reported the manual visual pass as acceptable after seeing the Studio
+run. Follow-up tuning is still required to make the native material more visible
+across wallpapers by reducing Makepad overlay tint, highlight, noise, and halo.
+After Step 11 tuning, both Studio targets were rerun through fresh release
+RunItems and still reached State 4 with four installed panels. The repeated
+native batch install log flood was no longer observed during the validation
+wait after startup.

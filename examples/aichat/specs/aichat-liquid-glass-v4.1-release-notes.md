@@ -52,8 +52,21 @@ visible in the rendered app.
 Current status:
 
 - compile and unit-test validation: available
-- macOS 26 visual validation: Studio release run required
-- current documentation state: not yet a passed visual validation
+- macOS 26 visual validation: first Studio release pass recorded on 2026-05-02
+- current documentation state: native regular and clear styles reached State 4
+  with four installed panels and no failed panels
+
+The first manual pass used Makepad Studio RunItem validation for both required
+targets. `macos-native` reached `style=regular style_raw=0`; `macos-native-clear`
+reached `style=clear style_raw=1`. Both reported
+`containers=1 panels_installed=4 panels_failed=0`, and the user confirmed the
+native glass was visible. Step 11 reduces the Makepad overlay contribution so
+the native material is less hidden by app-rendered tint, highlight, noise, and
+halo.
+
+The Step 11 Studio rerun confirmed regular and clear native targets still reach
+State 4 after visual tuning. It also confirmed identical native glass batches no
+longer produce repeated install logs after startup.
 
 ## Known v4.1 Limitations
 

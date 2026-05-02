@@ -114,6 +114,8 @@ pub struct MacosWindow {
     pub(crate) native_substrate_view: ObjcId,
     pub(crate) native_glass_container_view: ObjcId,
     pub(crate) native_glass_panel_views: Vec<ObjcId>,
+    pub(crate) last_native_glass_batch: Option<NativeGlassBatch>,
+    pub(crate) last_native_glass_batch_result: Option<NativeGlassBatchResult>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
     window_delegate: ObjcId,
@@ -546,6 +548,15 @@ impl MacosWindow {
         }
     }
 
+    fn cache_native_glass_batch_result(
+        &mut self,
+        batch: &NativeGlassBatch,
+        result: &NativeGlassBatchResult,
+    ) {
+        self.last_native_glass_batch = Some(batch.clone());
+        self.last_native_glass_batch_result = Some(result.clone());
+    }
+
     pub(crate) fn install_native_glass_batch(
         &mut self,
         batch: NativeGlassBatch,
@@ -553,9 +564,16 @@ impl MacosWindow {
         NativeGlassBatchResult,
         Option<WindowNativeSubstrateResolvedEvent>,
     ) {
+        if self.last_native_glass_batch.as_ref() == Some(&batch) {
+            if let Some(result) = self.last_native_glass_batch_result.clone() {
+                return (result, None);
+            }
+        }
+
         if let Err(error) = batch.validate_v4_1() {
             let result = self.native_glass_result_for_validation_error(&batch, error);
             Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
             return (result, None);
         }
 
@@ -567,6 +585,7 @@ impl MacosWindow {
                 containers: Vec::new(),
             };
             Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
             return (result, None);
         };
 
@@ -579,6 +598,7 @@ impl MacosWindow {
                 let result =
                     self.native_glass_class_missing_result(&batch, "container-class-missing");
                 Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
                 return (result, None);
             }
 
@@ -587,6 +607,7 @@ impl MacosWindow {
                 crate::log!("[liquid-glass] state=1 reason=class-missing detail=NSGlassEffectView");
                 let result = self.native_glass_class_missing_result(&batch, "panel-class-missing");
                 Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
                 return (result, None);
             }
 
@@ -598,6 +619,7 @@ impl MacosWindow {
                 let result =
                     self.native_glass_class_missing_result(&batch, "missing-initWithFrame");
                 Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
                 return (result, None);
             }
 
@@ -617,6 +639,7 @@ impl MacosWindow {
                 let result =
                     self.native_glass_class_missing_result(&batch, "container-alloc-init-failed");
                 Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
                 return (result, None);
             }
 
@@ -736,6 +759,7 @@ impl MacosWindow {
                 containers: vec![result_container],
             };
             Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
 
             let first_style = container
                 .panels
@@ -786,6 +810,8 @@ impl MacosWindow {
                 native_substrate_view: nil,
                 native_glass_container_view: nil,
                 native_glass_panel_views: Vec::new(),
+                last_native_glass_batch: None,
+                last_native_glass_batch_result: None,
                 proof_substrate_view: nil,
                 container_view,
                 live_resize_timer: nil,

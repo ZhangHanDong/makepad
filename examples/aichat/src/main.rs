@@ -1262,6 +1262,17 @@ impl GlassOpacity {
         self.halo_scale *= multiplier;
         self
     }
+
+    fn with_native_clear_multiplier(mut self) -> Self {
+        self.app *= 0.72;
+        self.sidebar *= 0.72;
+        self.main *= 0.72;
+        self.composer *= 0.72;
+        self.border_scale *= 0.80;
+        self.highlight_scale *= 0.70;
+        self.noise_scale *= 0.70;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1438,13 +1449,13 @@ fn glass_opacity_values(slider: f64, preset: GlassPanelPreset) -> GlassOpacity {
         GlassPanelPreset::NativeOverlay => {
             let shader_default = shader_glass_opacity_values(DEFAULT_GLASS_OPACITY);
             GlassOpacity {
-                app: shader.app * (0.24 / shader_default.app),
-                sidebar: shader.sidebar * (0.38 / shader_default.sidebar),
-                main: shader.main * (0.32 / shader_default.main),
-                composer: shader.composer * (0.44 / shader_default.composer),
-                border_scale: 0.50,
-                highlight_scale: 0.25,
-                noise_scale: 0.10,
+                app: shader.app * (0.20 / shader_default.app),
+                sidebar: shader.sidebar * (0.30 / shader_default.sidebar),
+                main: shader.main * (0.25 / shader_default.main),
+                composer: shader.composer * (0.34 / shader_default.composer),
+                border_scale: 0.35,
+                highlight_scale: 0.15,
+                noise_scale: 0.05,
                 halo_scale: 0.0,
             }
         }
@@ -3563,7 +3574,7 @@ impl App {
 
     fn apply_glass_appearance(&self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
-        let glass = glass_opacity_values(opacity, appearance.panel_preset())
+        let mut glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
@@ -3572,6 +3583,14 @@ impl App {
             } => makepad_widgets::glass_panel::GlassNativeStyle::Clear,
             _ => makepad_widgets::glass_panel::GlassNativeStyle::Regular,
         };
+        if matches!(
+            appearance.substrate,
+            GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear
+            }
+        ) {
+            glass = glass.with_native_clear_multiplier();
+        }
 
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
@@ -4216,9 +4235,9 @@ mod tests {
         assert!(native.main < shader.main);
         assert!(native.sidebar < shader.sidebar);
         assert!(native.composer < shader.composer);
-        assert_eq!(native.border_scale, 0.50);
-        assert_eq!(native.highlight_scale, 0.25);
-        assert_eq!(native.noise_scale, 0.10);
+        assert_eq!(native.border_scale, 0.35);
+        assert_eq!(native.highlight_scale, 0.15);
+        assert_eq!(native.noise_scale, 0.05);
         assert_eq!(native.halo_scale, 0.0);
 
         let low = glass_opacity_values(MIN_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
@@ -4227,6 +4246,22 @@ mod tests {
         assert!(low.main < high.main);
         assert!(low.sidebar < high.sidebar);
         assert!(low.composer < high.composer);
+    }
+
+    #[test]
+    fn aichat_native_clear_overlay_is_lighter_than_regular_native_overlay() {
+        let regular =
+            glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+        let clear = regular.with_native_clear_multiplier();
+
+        assert!(clear.app < regular.app);
+        assert!(clear.main < regular.main);
+        assert!(clear.sidebar < regular.sidebar);
+        assert!(clear.composer < regular.composer);
+        assert!(clear.border_scale < regular.border_scale);
+        assert!(clear.highlight_scale < regular.highlight_scale);
+        assert!(clear.noise_scale < regular.noise_scale);
+        assert_eq!(clear.halo_scale, regular.halo_scale);
     }
 
     #[test]
