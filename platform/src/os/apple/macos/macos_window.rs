@@ -196,8 +196,9 @@ impl MacosWindow {
                     (0.95, 0.08, 1.0),
                     (0.05, 0.92, 0.95),
                 ];
-                let stripe_count = 12usize;
-                let stripe_width = (bounds.size.width / stripe_count as f64).max(1.0);
+                let stripe_count = 96usize;
+                let proof_width = bounds.size.width.max(4096.0);
+                let stripe_width = (proof_width / stripe_count as f64).max(1.0);
                 for index in 0..stripe_count {
                     let stripe: ObjcId = msg_send![class!(NSView), alloc];
                     let stripe_frame = NSRect {
