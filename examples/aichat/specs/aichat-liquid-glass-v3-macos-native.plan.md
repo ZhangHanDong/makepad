@@ -14,6 +14,10 @@ The `aichat-liquid-glass-phase1` branch has:
 - `WindowNativeSubstrateResolvedEvent` platform-to-app result transport
 - aichat fallback that stays ShaderOnly unless the platform reports `Installed`
 - Makepad-only inactive dimming through existing focus events
+- native overlay visual tuning for reduced double-highlights/noise/halo
+- aichat Splash guard for obvious full-size opaque generated roots
+
+Current release note: [aichat-liquid-glass-v1-release-notes.md](aichat-liquid-glass-v1-release-notes.md).
 
 On macOS versions without `NSGlassEffectView`, expected behavior is:
 
@@ -43,6 +47,7 @@ Expected success logs:
 
 ```text
 [liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
+[liquid-glass] state=4 substrate=macos-native style=clear style_raw=1
 [liquid-glass] app-substrate=macos-native state=Installed reason=installed-on-proofed-hierarchy
 ```
 
@@ -72,7 +77,14 @@ AICHAT_MACOS_GLASS_STYLE_CLEAR_RAW=<NSInteger>
 
 If either override is set, the platform logs a `style-override` line before applying `setStyle:`. Invalid override values are ignored and logged as `style-override-invalid`.
 
-Before calling this production-ready, verify these values against a macOS SDK/runtime that exposes `NSGlassEffectView.Style`.
+Verified on the current macOS 26 validation runtime:
+
+```text
+regular -> 0
+clear   -> 1
+```
+
+If future SDK/runtime validation disagrees, update the defaults before public release.
 
 Preferred verification:
 
@@ -84,7 +96,7 @@ print(NSGlassEffectView.Style.clear.rawValue)
 
 Acceptance:
 
-- style integers are documented with SDK/runtime source
+- style integers are documented with SDK/runtime source or runtime validation logs
 - mismatch is fixed before public release
 
 ## Phase MN-3: Preflight Completeness
@@ -122,6 +134,7 @@ Acceptance:
 - bright wallpaper text remains readable
 - dark wallpaper still shows material
 - no "low alpha without glass" state is possible
+- obvious opaque generated Splash roots are degraded instead of hiding the native substrate
 
 ## Phase MN-5: Known v1 Boundaries
 
@@ -135,6 +148,8 @@ Do not solve these in the first native release unless they block basic visibilit
 - AppKit inactive overlay
 
 The current Makepad-only inactive dimming is the v1 inactive strategy.
+
+These boundaries are documented in [aichat-liquid-glass-v1-release-notes.md](aichat-liquid-glass-v1-release-notes.md).
 
 ## Relationship to ShaderBackdrop
 

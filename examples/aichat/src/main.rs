@@ -61,7 +61,7 @@ script_mod! {
     let ai_panel = #x0A3A30
     let ai_panel_deep = #x06251F
     let ai_cream = #xF3E3C7
-    let ai_cream_dim = #xE0D2BACC
+    let ai_cream_dim = #xEAD8B8DD
     let ai_cyan = #x72E4FF
     let ai_cyan_soft = #x72E4FF77
     let ai_gold = #xF6BE63
@@ -824,13 +824,13 @@ script_mod! {
                         Label {
                             text: "对话"
                             margin: Inset{top: 28 bottom: 2 left: 0 right: 0}
-                            draw_text.color: #xCDBF9FA0
+                            draw_text.color: #xEAD8B8C8
                             draw_text.text_style.font_size: 12
                         }
 
                         Label {
                             text: "暂无聊天"
-                            draw_text.color: #xCDBF9F55
+                            draw_text.color: #xEAD8B888
                             draw_text.text_style.font_size: 12
                         }
 
@@ -991,13 +991,13 @@ script_mod! {
 
                                 empty_title := Label {
                                     text: "我们该做什么？"
-                                    draw_text.color: #xF3E3C7
+                                    draw_text.color: #xFFF0D2
                                     draw_text.text_style.font_size: 27
                                 }
 
                                 empty_subtitle := Label {
                                     text: "输入自然语言，生成可交互的 Makepad diagram。"
-                                    draw_text.color: #xCDBF9FAA
+                                    draw_text.color: #xF3E3C7DD
                                     draw_text.text_style.font_size: 12
                                 }
                             }
@@ -1079,7 +1079,7 @@ script_mod! {
 
                                     Label {
                                         text: "默认权限"
-                                        draw_text.color: ai_cream_dim
+                                        draw_text.color: #xF3E3C7D8
                                         draw_text.text_style.font_size: 11
                                     }
 
@@ -1087,7 +1087,7 @@ script_mod! {
                                         text: "Thinking"
                                         active: false
                                         draw_text +: {
-                                            color: ai_cream_dim
+                                            color: #xF3E3C7D8
                                             text_style +: { font_size: 11 }
                                         }
                                     }
@@ -1138,7 +1138,7 @@ script_mod! {
                             text: "Initializing..."
                             margin: Inset{left: 92 right: 92 top: 0 bottom: 0}
                             draw_text.text_style.font_size: 10
-                            draw_text.color: #xE2D2B9AA
+                            draw_text.color: #xF3E3C7D8
                         }
                     }
                     }
@@ -1208,6 +1208,9 @@ pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::
         is_running: false,
     },
 });
+
+static AICHAT_NATIVE_GLASS_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
@@ -1416,13 +1419,13 @@ fn glass_opacity_values(slider: f64, preset: GlassPanelPreset) -> GlassOpacity {
         GlassPanelPreset::NativeOverlay => {
             let shader_default = shader_glass_opacity_values(DEFAULT_GLASS_OPACITY);
             GlassOpacity {
-                app: shader.app * (0.30 / shader_default.app),
+                app: shader.app * (0.24 / shader_default.app),
                 sidebar: shader.sidebar * (0.38 / shader_default.sidebar),
-                main: shader.main * (0.34 / shader_default.main),
+                main: shader.main * (0.32 / shader_default.main),
                 composer: shader.composer * (0.44 / shader_default.composer),
-                border_scale: 0.6,
-                highlight_scale: 0.4,
-                noise_scale: 0.3,
+                border_scale: 0.50,
+                highlight_scale: 0.25,
+                noise_scale: 0.10,
                 halo_scale: 0.0,
             }
         }
@@ -1478,6 +1481,189 @@ fn unwrap_outer_markdown_fence(text: &str) -> &str {
         return without_close.trim_end_matches('\n').trim_end();
     }
     body
+}
+
+fn guard_native_splash_opaque_roots(markdown: &str, enabled: bool) -> String {
+    if !enabled {
+        return markdown.to_string();
+    }
+
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    let mut fence_ticks = 0usize;
+    let mut in_splash = false;
+    let mut splash_body = String::new();
+
+    for line in markdown.split_inclusive('\n') {
+        if !in_fence {
+            if let Some((ticks, info)) = markdown_fence_open(line) {
+                in_fence = true;
+                fence_ticks = ticks;
+                in_splash = info
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|lang| lang.eq_ignore_ascii_case("splash"));
+                out.push_str(line);
+                if in_splash {
+                    splash_body.clear();
+                }
+            } else {
+                out.push_str(line);
+            }
+            continue;
+        }
+
+        if markdown_fence_close(line, fence_ticks) {
+            if in_splash {
+                let (guarded, view, changed) = guard_splash_block_opaque_root(&splash_body);
+                if changed {
+                    log_splash_opaque_root(view);
+                }
+                out.push_str(&guarded);
+            }
+            out.push_str(line);
+            in_fence = false;
+            in_splash = false;
+            continue;
+        }
+
+        if in_splash {
+            splash_body.push_str(line);
+        } else {
+            out.push_str(line);
+        }
+    }
+
+    if in_splash {
+        let (guarded, view, changed) = guard_splash_block_opaque_root(&splash_body);
+        if changed {
+            log_splash_opaque_root(view);
+        }
+        out.push_str(&guarded);
+    }
+
+    out
+}
+
+fn log_splash_opaque_root(view: &str) {
+    #[cfg(not(test))]
+    log!(
+        "[liquid-glass] splash-opaque-root view={} action=clamp-alpha",
+        view
+    );
+    #[cfg(test)]
+    let _ = view;
+}
+
+fn markdown_fence_open(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let ticks = trimmed.bytes().take_while(|b| *b == b'`').count();
+    (ticks >= 3).then(|| {
+        let info = trimmed[ticks..].trim();
+        (ticks, info)
+    })
+}
+
+fn markdown_fence_close(line: &str, fence_ticks: usize) -> bool {
+    let trimmed = line.trim();
+    let ticks = trimmed.bytes().take_while(|b| *b == b'`').count();
+    ticks >= fence_ticks && trimmed[ticks..].trim().is_empty()
+}
+
+fn guard_splash_block_opaque_root(block: &str) -> (String, &'static str, bool) {
+    let Some(view) = splash_root_view(block) else {
+        return (block.to_string(), "unknown", false);
+    };
+    let compact = block.split_whitespace().collect::<String>();
+    if !compact.contains("width:Fill") || !compact.contains("height:Fill") {
+        return (block.to_string(), view, false);
+    }
+
+    let (guarded, changed) = clamp_opaque_draw_bg_color_alpha(block);
+    (guarded, view, changed)
+}
+
+fn splash_root_view(block: &str) -> Option<&'static str> {
+    let trimmed = block.trim_start();
+    ["RoundedView", "SolidView", "View"]
+        .into_iter()
+        .find(|view| trimmed.starts_with(view))
+}
+
+fn clamp_opaque_draw_bg_color_alpha(block: &str) -> (String, bool) {
+    let mut out = String::with_capacity(block.len());
+    let mut changed = false;
+
+    for line in block.split_inclusive('\n') {
+        let (guarded_line, line_changed) = clamp_opaque_draw_bg_color_line(line);
+        out.push_str(&guarded_line);
+        changed |= line_changed;
+    }
+
+    (out, changed)
+}
+
+fn clamp_opaque_draw_bg_color_line(line: &str) -> (String, bool) {
+    let Some(draw_bg_start) = line.find("draw_bg") else {
+        return (line.to_string(), false);
+    };
+    let after_draw_bg = &line[draw_bg_start..];
+    let Some(hash_offset) = after_draw_bg.find('#') else {
+        return (line.to_string(), false);
+    };
+    if !after_draw_bg[..hash_offset].contains("color") {
+        return (line.to_string(), false);
+    }
+
+    let after_hash = &after_draw_bg[hash_offset..];
+    let Some((guarded_hex, consumed, changed)) = clamp_opaque_hex_color(after_hash) else {
+        return (line.to_string(), false);
+    };
+    if !changed {
+        return (line.to_string(), false);
+    }
+
+    let hex_start = draw_bg_start + hash_offset;
+    let mut out = String::with_capacity(line.len() + 2);
+    out.push_str(&line[..hex_start]);
+    out.push_str(&guarded_hex);
+    out.push_str(&line[hex_start + consumed..]);
+    (out, true)
+}
+
+fn clamp_opaque_hex_color(value: &str) -> Option<(String, usize, bool)> {
+    let bytes = value.as_bytes();
+    if bytes.first().copied() != Some(b'#') {
+        return None;
+    }
+
+    let has_x = bytes.get(1).is_some_and(|b| *b == b'x' || *b == b'X');
+    let digits_start = if has_x { 2 } else { 1 };
+    let digits_len = bytes[digits_start..]
+        .iter()
+        .take_while(|b| b.is_ascii_hexdigit())
+        .count();
+
+    match digits_len {
+        6 => {
+            let consumed = digits_start + 6;
+            Some((format!("{}80", &value[..consumed]), consumed, true))
+        }
+        8 => {
+            let consumed = digits_start + 8;
+            let alpha = &value[digits_start + 6..consumed];
+            if alpha.eq_ignore_ascii_case("ff") {
+                Some((
+                    format!("{}80", &value[..digits_start + 6]),
+                    consumed,
+                    true,
+                ))
+            } else {
+                Some((value[..consumed].to_string(), consumed, false))
+            }
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2454,7 +2640,17 @@ impl Widget for ChatList {
                         // content: some LLMs emit the wrapper as the very
                         // first tokens, so we'd otherwise render a growing
                         // code block for the whole stream.
-                        markdown.set_text(cx, unwrap_outer_markdown_fence(text));
+                        let unwrapped = unwrap_outer_markdown_fence(text);
+                        let guarded_text;
+                        let markdown_text = if AICHAT_NATIVE_GLASS_ACTIVE
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            guarded_text = guard_native_splash_opaque_roots(unwrapped, true);
+                            guarded_text.as_str()
+                        } else {
+                            unwrapped
+                        };
+                        markdown.set_text(cx, markdown_text);
                         if just_started {
                             markdown.reset_all_streaming_animations();
                         } else {
@@ -2484,7 +2680,17 @@ impl Widget for ChatList {
                             unwrapped
                         };
                         let rendered = wrap_bare_latex(display_text);
-                        markdown.set_text(cx, &rendered);
+                        let guarded_text;
+                        let markdown_text = if msg.role == ChatRole::Assistant
+                            && AICHAT_NATIVE_GLASS_ACTIVE
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            guarded_text = guard_native_splash_opaque_roots(&rendered, true);
+                            guarded_text.as_str()
+                        } else {
+                            &rendered
+                        };
+                        markdown.set_text(cx, markdown_text);
                         if is_animating {
                             markdown.stop_streaming_animation();
                         }
@@ -3211,8 +3417,17 @@ impl App {
             let unwrapped = unwrap_outer_markdown_fence(&text);
             let state_rendered = render_state_templates(unwrapped, &state);
             let rendered = wrap_bare_latex(&state_rendered);
+            let guarded_text;
+            let markdown_text = if AICHAT_NATIVE_GLASS_ACTIVE
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                guarded_text = guard_native_splash_opaque_roots(&rendered, true);
+                guarded_text.as_str()
+            } else {
+                &rendered
+            };
             let mut markdown = item.markdown(cx, ids!(selectable));
-            markdown.set_text(cx, &rendered);
+            markdown.set_text(cx, markdown_text);
         }
         cx.redraw_all();
     }
@@ -3442,6 +3657,10 @@ impl App {
             },
             _ => GlassAppearance::default(),
         };
+        AICHAT_NATIVE_GLASS_ACTIVE.store(
+            matches!(self.glass_appearance.substrate, GlassSubstrate::MacosNative { .. }),
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } => {
@@ -3791,11 +4010,12 @@ mod tests {
 
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, parse_glass_backend, render_state_templates,
-        resolve_glass_appearance, resolve_startup_glass_appearance, should_start_window_drag,
-        Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent, GlassBackendRequest,
-        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, DEFAULT_GLASS_OPACITY,
-        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        glass_opacity_values, guard_native_splash_opaque_roots, parse_glass_backend,
+        render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
+        should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -3870,6 +4090,68 @@ mod tests {
     }
 
     #[test]
+    fn aichat_native_splash_guard_clamps_opaque_root_color() {
+        let markdown = concat!(
+            "before\n",
+            "```splash\n",
+            "RoundedView{width: Fill height: Fill draw_bg.color: #x0c0c18}\n",
+            "```\n",
+            "after\n",
+        );
+
+        let guarded = guard_native_splash_opaque_roots(markdown, true);
+
+        assert!(guarded.contains("#x0c0c1880"));
+        assert!(!guarded.contains("draw_bg.color: #x0c0c18}"));
+    }
+
+    #[test]
+    fn aichat_native_splash_guard_clamps_opaque_root_merge_color() {
+        let markdown = concat!(
+            "```splash\n",
+            "View{width: Fill height: Fill draw_bg +: { color: #ffffff }}\n",
+            "```\n",
+        );
+
+        let guarded = guard_native_splash_opaque_roots(markdown, true);
+
+        assert!(guarded.contains("#ffffff80"));
+        assert!(!guarded.contains("color: #ffffff }"));
+    }
+
+    #[test]
+    fn aichat_native_splash_guard_ignores_non_splash_blocks() {
+        let markdown = concat!(
+            "```rust\n",
+            "let color = \"#x0c0c18\";\n",
+            "```\n",
+        );
+
+        assert_eq!(
+            guard_native_splash_opaque_roots(markdown, true),
+            markdown
+        );
+    }
+
+    #[test]
+    fn aichat_native_splash_guard_keeps_transparent_colors_and_disabled_mode() {
+        let markdown = concat!(
+            "```splash\n",
+            "View{width: Fill height: Fill draw_bg.color: #x0c0c1880}\n",
+            "```\n",
+        );
+
+        assert_eq!(
+            guard_native_splash_opaque_roots(markdown, true),
+            markdown
+        );
+        assert_eq!(
+            guard_native_splash_opaque_roots(markdown, false),
+            markdown
+        );
+    }
+
+    #[test]
     fn aichat_glass_resolution_fallback_contract() {
         let unsupported = resolve_glass_appearance(Some("macos-native"), false);
         assert_eq!(unsupported.appearance.substrate, GlassSubstrate::ShaderOnly);
@@ -3916,9 +4198,9 @@ mod tests {
         assert!(native.main < shader.main);
         assert!(native.sidebar < shader.sidebar);
         assert!(native.composer < shader.composer);
-        assert_eq!(native.border_scale, 0.6);
-        assert_eq!(native.highlight_scale, 0.4);
-        assert_eq!(native.noise_scale, 0.3);
+        assert_eq!(native.border_scale, 0.50);
+        assert_eq!(native.highlight_scale, 0.25);
+        assert_eq!(native.noise_scale, 0.10);
         assert_eq!(native.halo_scale, 0.0);
 
         let low = glass_opacity_values(MIN_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);

@@ -4,9 +4,9 @@ Source task spec: [AICHAT-LIQUID-GLASS-IMPLEMENTATION-TASKS.md](AICHAT-LIQUID-GL
 
 ## Status
 
-Phase 0 initial audit. This document classifies known opaque or semi-opaque drawing surfaces that can hide a future native macOS glass substrate.
+Phase 0 audit plus v1 guard status. This document classifies known opaque or semi-opaque drawing surfaces that can hide a native macOS glass substrate.
 
-Native substrate implementation remains blocked until this audit and the Phase 1.5 window hierarchy proof are complete.
+Native substrate implementation is no longer blocked by this audit for v1. The remaining generated-UI risk is handled by a narrow runtime guard and documented as a v1 limitation.
 
 ## Categories
 
@@ -57,13 +57,15 @@ Option A: clamp detected root fill alpha to <= 0.5 in native mode.
 Initial detection scope:
 
 - root-level `View` or `RoundedView` with `width: Fill` and large/full height plus opaque `draw_bg.color`
+- root-level `SolidView` with `width: Fill` and large/full height plus opaque `draw_bg.color`
+- root-level `draw_bg +: { color: ... }` merge forms
 - raw fully opaque white/black root fills
 - generated root surfaces that are likely to cover the entire visible app card
 
 Required log detail:
 
 ```text
-[liquid-glass] splash-opaque-root view=<View|RoundedView> color=<value> action=clamp-alpha
+[liquid-glass] splash-opaque-root view=<View|RoundedView|SolidView> action=clamp-alpha
 ```
 
 Deferred:
@@ -74,18 +76,19 @@ Deferred:
 
 ## Phase 2 Gate Status
 
-Current gate result: **not passed yet**.
+Current gate result: **passed for v1 native release**.
 
 Reasons:
 
-- Phase 1.5 native view visibility proof has not been completed.
-- Splash guard is selected but not implemented.
-- Phase 1 preset plumbing is in progress.
+- native substrate reaches State 4 on the current macOS 26 validation runtime
+- Splash guard is implemented for obvious full-size opaque roots
+- NativeOverlay preset lowers tint, highlight, noise, and halo enough for direct visual validation
+- style mapping is validated as regular `0`, clear `1` on the current validation runtime
 
-No current aichat root/window surface appears to be an immediate opaque blocker: pass clear, window transparency, and root body background are already transparent.
+No current aichat root/window surface appears to be an immediate opaque blocker: pass clear, window transparency, and root body background are transparent.
 
 ## Follow-Up Tasks
 
-- Implement the selected Splash runtime guard before Phase 2 native substrate work.
-- Re-run this audit after Phase 1 preset plumbing is complete.
-- Add screenshots during Phase 1.5 magenta native-view proof.
+- Continue collecting real generated Splash examples that trigger the guard.
+- Consider native-mode Markdown/table tuning only if bright-wallpaper validation shows readability or substrate-hiding regressions.
+- Keep full Splash static analysis and token-only theming deferred until the guard proves insufficient.

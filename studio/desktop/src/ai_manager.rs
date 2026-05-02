@@ -343,6 +343,9 @@ impl App {
                     model: Self::ai_manager_local_model(),
                     base_url: Some(Self::ai_manager_local_base_url()),
                     reasoning_effort: None,
+                    thinking: None,
+                    max_tokens: None,
+                    temperature: None,
                 })),
             ))),
             AiManagerBackend::OpenAiCloud => {
@@ -353,6 +356,9 @@ impl App {
                             model: "gpt-4o".to_string(),
                             base_url: None,
                             reasoning_effort: None,
+                            thinking: None,
+                            max_tokens: None,
+                            temperature: None,
                         },
                     )))) as Box<dyn Agent>
                 })
@@ -1598,6 +1604,7 @@ impl App {
                     self.ai_manager.streaming_text.push_str(&text);
                     self.sync_ai_manager_widgets(cx);
                 }
+                AgentEvent::ThinkingDelta { .. } => {}
                 AgentEvent::ToolRequest {
                     tool_use_id,
                     tool_name,

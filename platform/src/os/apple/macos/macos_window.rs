@@ -75,8 +75,8 @@ impl MacosNativeGlassStyle {
 
     fn tint_alpha(self) -> f64 {
         match self {
-            Self::Regular => 0.22,
-            Self::Clear => 0.08,
+            Self::Regular => 0.12,
+            Self::Clear => 0.03,
         }
     }
 
@@ -233,6 +233,17 @@ impl MacosWindow {
             }
 
             let bounds: NSRect = msg_send![self.container_view, bounds];
+            let shell_inset = 3.0f64;
+            let glass_frame = NSRect {
+                origin: NSPoint {
+                    x: shell_inset,
+                    y: shell_inset,
+                },
+                size: NSSize {
+                    width: (bounds.size.width - shell_inset * 2.0).max(0.0),
+                    height: (bounds.size.height - shell_inset * 2.0).max(0.0),
+                },
+            };
             let container_layer: ObjcId = msg_send![self.container_view, layer];
             if container_layer != nil {
                 let () = msg_send![container_layer, setOpaque: NO];
@@ -254,7 +265,7 @@ impl MacosWindow {
             }
 
             let glass_view: ObjcId = msg_send![glass_class, alloc];
-            let glass_view: ObjcId = msg_send![glass_view, initWithFrame: bounds];
+            let glass_view: ObjcId = msg_send![glass_view, initWithFrame: glass_frame];
             if glass_view == nil {
                 crate::log!("[liquid-glass] state=2 reason=alloc-init-failed");
                 return self.native_substrate_resolved_event(
@@ -268,6 +279,12 @@ impl MacosWindow {
                 glass_view,
                 setAutoresizingMask: Self::NS_VIEW_WIDTH_SIZABLE | Self::NS_VIEW_HEIGHT_SIZABLE
             ];
+            let () = msg_send![glass_view, setWantsLayer: YES];
+            let glass_layer: ObjcId = msg_send![glass_view, layer];
+            if glass_layer != nil {
+                let () = msg_send![glass_layer, setMasksToBounds: YES];
+                let () = msg_send![glass_layer, setCornerRadius: 30.0f64];
+            }
 
             let set_style_sel = sel!(setStyle:);
             let can_set_style: BOOL = msg_send![glass_view, respondsToSelector: set_style_sel];
@@ -300,7 +317,7 @@ impl MacosWindow {
             let can_set_corner_radius: BOOL =
                 msg_send![glass_view, respondsToSelector: set_corner_radius_sel];
             if can_set_corner_radius == YES {
-                let () = msg_send![glass_view, setCornerRadius: 0.0f64];
+                let () = msg_send![glass_view, setCornerRadius: 30.0f64];
             }
 
             let () = msg_send![
