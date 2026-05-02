@@ -37,3 +37,15 @@ types or widget collection logic.
 - `cargo check -p makepad-platform` passes.
 - No AppKit/UIKit types are introduced in the shared API.
 - Existing v1 substrate event types remain available.
+
+## Implementation Status
+
+Landed evidence:
+
+- Step 02 task spec: `aichat-liquid-glass-step-02-platform-descriptors.spec`
+- Commit: `d37d5a5a Add native glass descriptor batch API`
+- Implemented files: `platform/src/event/window.rs`, `platform/src/lib.rs`
+- Verification used during landing:
+  - `cargo test -p makepad-platform native_glass_batch -- --nocapture`
+  - `cargo test -p makepad-platform native_glass_style_maps_to_macos_raw_values -- --nocapture`
+  - staged boundary check for Phase B files

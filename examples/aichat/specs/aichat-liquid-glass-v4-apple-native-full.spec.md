@@ -789,6 +789,23 @@ v4.9 / Phase I: popup/modal glass
 
 This ordering avoids mixing API discovery, platform view management, widget DSL, aichat styling, and iOS backend in one branch.
 
+## Current Branch Implementation Status
+
+Status as of this branch:
+
+| Phase | Status | Evidence |
+|---|---|---|
+| Phase A | Landed | `APPLE-LIQUID-GLASS-API-MATRIX.md`, `apple-liquid-glass-phase-a-runtime-notes.md`, Step 01 spec, commit `e94941df` |
+| Phase B | Landed | shared `NativeGlassBatch` descriptors, validation tests, Step 02 spec, commit `d37d5a5a` |
+| Phase C | Landed for macOS backend plumbing | `CxOsOp::SetNativeGlassBatch`, macOS installer, non-macOS no-op handlers, Step 03 spec, commit `b09029c7` |
+| Phase D | Landed for widget descriptor export | `GlassContainer`, opt-in `GlassPanel.native`, widget collector tests, Step 04 spec, commit `77781499` |
+| Phase E | Landed for aichat wiring | single `glass_container`, four native panels, substrate-gated native toggle, Step 05 spec, commit `9c776f3e` |
+| Phase F-I | Future work | controls, UIKit backend, advanced behavior, and popup/modal glass remain unimplemented |
+
+Studio visual validation remains pending. The branch has compile/unit-test
+coverage for the Rust path, but native glass visibility still requires a
+Makepad Studio release run on macOS 26.
+
 ## Remaining Open Questions
 
 1. Should iOS wait until macOS aichat integration is visually accepted, or start after descriptor API lands?

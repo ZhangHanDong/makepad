@@ -45,3 +45,23 @@ Implement the first macOS AppleNative container backend that consumes the shared
   without crashing.
 - On supported macOS, a valid one-container batch installs multiple native panels
   below the Metal view.
+
+## Implementation Status
+
+Landed evidence:
+
+- Step 03 task spec: `aichat-liquid-glass-step-03-macos-installer.spec`
+- Commit: `b09029c7 Install native glass batches on macOS`
+- Implemented files:
+  - `platform/src/cx_api.rs`
+  - `platform/src/window.rs`
+  - `platform/src/os/apple/macos/macos.rs`
+  - `platform/src/os/apple/macos/macos_window.rs`
+  - non-macOS backend no-op handlers
+- Verification used during landing:
+  - `cargo test -p makepad-platform set_native_glass_batch_queues_platform_op_for_created_window -- --nocapture`
+  - selector search for `NSGlassEffectContainerView`, `NSGlassEffectView`, `setSpacing:`, `setCornerRadius:`, and `setStyle:`
+  - no-op handler search for Linux, Windows, and Web
+  - `cargo check -p makepad-platform`
+
+Studio visual validation remains pending for the installed native panels.

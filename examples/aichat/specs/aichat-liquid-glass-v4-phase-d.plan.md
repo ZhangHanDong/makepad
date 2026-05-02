@@ -28,3 +28,18 @@ Add Makepad widget-level native glass descriptor export while preserving existin
 - `cargo check -p makepad-widgets` passes.
 - `cargo check -p makepad-example-aichat` passes.
 - Existing `GlassPanel` users remain shader-only unless `native: true`.
+
+## Implementation Status
+
+Landed evidence:
+
+- Step 04 task spec: `aichat-liquid-glass-step-04-widget-export.spec`
+- Commit: `77781499 Export native glass descriptors from widgets`
+- Implemented file: `widgets/src/glass_panel.rs`
+- Verification used during landing:
+  - `cargo test -p makepad-widgets native_glass -- --nocapture`
+  - `cargo check -p makepad-widgets`
+  - static checks for `GlassContainer`, `SetNativeGlassBatch`, and default `native: false`
+
+The aichat-specific Phase E wiring landed separately in Step 05 / commit
+`9c776f3e`.
