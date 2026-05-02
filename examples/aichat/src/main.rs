@@ -3566,6 +3566,12 @@ impl App {
         let glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
+        let native_style = match appearance.substrate {
+            GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            } => makepad_widgets::glass_panel::GlassNativeStyle::Clear,
+            _ => makepad_widgets::glass_panel::GlassNativeStyle::Regular,
+        };
 
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
@@ -3574,6 +3580,7 @@ impl App {
 
         let mut app_shell = self.ui.view(cx, ids!(app_shell));
         script_apply_eval!(cx, app_shell, {
+            native_style: #(native_style)
             draw_bg +: {
                 tint_alpha: #(glass.app)
                 border_alpha: #(0.38 * glass.border_scale)
@@ -3585,6 +3592,7 @@ impl App {
 
         let mut sidebar = self.ui.view(cx, ids!(sidebar));
         script_apply_eval!(cx, sidebar, {
+            native_style: #(native_style)
             draw_bg +: {
                 tint_alpha: #(glass.sidebar)
                 border_alpha: #(0.20 * glass.border_scale)
@@ -3596,6 +3604,7 @@ impl App {
 
         let mut main_area = self.ui.view(cx, ids!(main_area));
         script_apply_eval!(cx, main_area, {
+            native_style: #(native_style)
             draw_bg +: {
                 tint_alpha: #(glass.main)
                 border_alpha: #(0.16 * glass.border_scale)
@@ -3607,6 +3616,7 @@ impl App {
 
         let mut composer = self.ui.view(cx, ids!(composer));
         script_apply_eval!(cx, composer, {
+            native_style: #(native_style)
             draw_bg +: {
                 tint_alpha: #(glass.composer)
                 border_alpha: #(0.24 * glass.border_scale)
