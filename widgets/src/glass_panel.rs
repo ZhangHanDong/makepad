@@ -206,6 +206,9 @@ pub struct GlassContainer {
     pub spacing: f64,
 
     #[rust]
+    last_native_batch: Option<NativeGlassBatch>,
+
+    #[rust]
     draw_state: DrawStateWrap<GlassContainerDrawState>,
 }
 
@@ -236,11 +239,16 @@ impl Widget for GlassContainer {
                                 panels: collection.panels,
                             }],
                         };
-                        cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch));
+                        if self.last_native_batch.as_ref() != Some(&batch) {
+                            cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch.clone()));
+                            self.last_native_batch = Some(batch);
+                        }
                     }
                 } else {
                     cx.global::<NativeGlassCollector>().finish(rect);
                 }
+            } else {
+                self.last_native_batch = None;
             }
 
             self.draw_state.end();
