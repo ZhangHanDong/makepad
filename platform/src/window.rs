@@ -2,7 +2,7 @@ use crate::{
     cx::Cx,
     cx_api::CxOsOp,
     draw_pass::{CxDrawPassParent, DrawPass, DrawPassId},
-    event::WindowGeom,
+    event::{NativeGlassBatch, WindowGeom},
     id_pool::*,
     makepad_error_log::*,
     makepad_math::*,
@@ -544,6 +544,21 @@ impl WindowHandle {
         }
     }
 
+    pub fn set_native_glass_batch(&mut self, cx: &mut Cx, batch: NativeGlassBatch) {
+        let window_id = self.window_id();
+        if batch.window_id != window_id {
+            crate::error!(
+                "Native glass batch window mismatch: handle={:?} batch={:?}",
+                window_id,
+                batch.window_id
+            );
+            return;
+        }
+        if cx.windows[window_id].is_created {
+            cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch));
+        }
+    }
+
     pub fn set_transparent(&mut self, cx: &mut Cx, transparent: bool) {
         let mut visuals = cx.windows[self.window_id()].window_visuals();
         visuals.transparent = transparent;
@@ -693,6 +708,8 @@ impl CxWindow {
 mod tests {
     use super::*;
     use crate::event::Event;
+    use crate::event::NativeGlassContainerDescriptor;
+    use crate::makepad_live_id::LiveId;
     use crate::script::vm::ScriptVmCx;
 
     fn test_cx() -> Cx {
@@ -899,5 +916,32 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 1);
         assert!(matches!(cx.platform_ops[0], CxOsOp::SetTopmost(_, true)));
+    }
+
+    #[test]
+    fn set_native_glass_batch_queues_platform_op_for_created_window() {
+        let mut cx = test_cx();
+        let mut window = WindowHandle::new(&mut cx);
+        let window_id = window.window_id();
+        cx.windows[window_id].is_created = true;
+        cx.platform_ops.clear();
+
+        let batch = NativeGlassBatch {
+            window_id,
+            containers: vec![NativeGlassContainerDescriptor {
+                id: LiveId(1),
+                rect: Rect::default(),
+                spacing: 20.0,
+                panels: vec![],
+            }],
+        };
+
+        window.set_native_glass_batch(&mut cx, batch.clone());
+
+        assert_eq!(cx.platform_ops.len(), 1);
+        assert!(matches!(
+            &cx.platform_ops[0],
+            CxOsOp::SetNativeGlassBatch(queued) if queued == &batch
+        ));
     }
 }

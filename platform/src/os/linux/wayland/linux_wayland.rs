@@ -672,6 +672,7 @@ impl WaylandCx {
                         log_linux_backdrop_unsupported_once();
                     }
                 }
+                CxOsOp::SetNativeGlassBatch(_) => {}
                 CxOsOp::ShowClipboardActions { .. } => {}
                 CxOsOp::CopyToClipboard(content) => {
                     if let Some(serial) = state.keyboard_serial.or(state.pointer_serial) {

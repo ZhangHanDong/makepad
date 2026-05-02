@@ -561,6 +561,7 @@ impl Cx {
                         window.win32_window.apply_window_visuals(visuals);
                     }
                 }
+                CxOsOp::SetNativeGlassBatch(_) => {}
                 CxOsOp::CopyToClipboard(content) => unsafe {
                     Win32Window::copy_to_clipboard(&content);
                 },

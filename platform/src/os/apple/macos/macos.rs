@@ -1069,6 +1069,18 @@ impl Cx {
                         };
                     }
                 }
+                CxOsOp::SetNativeGlassBatch(batch) => {
+                    if let Some(metal_window) = metal_windows
+                        .iter_mut()
+                        .find(|w| w.window_id == batch.window_id)
+                    {
+                        let (_result, compat_event) =
+                            metal_window.cocoa_window.install_native_glass_batch(batch);
+                        if let Some(event) = compat_event {
+                            self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
+                        }
+                    }
+                }
                 CxOsOp::ShowTextIME(area, pos, _config) => {
                     let pos = area.clipped_rect(self).pos + pos;
                     metal_windows.iter_mut().for_each(|w| {
