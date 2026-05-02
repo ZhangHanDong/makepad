@@ -2,12 +2,25 @@
 
 ## Status
 
-This is the current implementation design for the first `agent2app` demo in
-`makepad-example-aichat`.
+This document defines the `agent2app` direction for `makepad-example-aichat`.
 
-The goal is not to implement the full Robrix-style schema/template/reconciler
-architecture. The goal is to add the smallest reliable live wire between
-AI-generated Splash UI and the aichat host:
+`agent2app` has two different product meanings. They must stay separate:
+
+- **Runtime A2A**: the agent renders and drives live UI inside the chat host.
+- **Generative A2A**: the agent generates an independent Makepad app/project.
+
+The current shipped implementation is **Runtime A2A D1**. It is not a
+v0/bolt-style project generator yet.
+
+## Two Tracks
+
+### Runtime A2A: `agent2view`
+
+Runtime A2A treats the generated app as an inline live view owned by the chat
+host. The agent generates `runsplash`, the host owns state and capabilities, and
+generated UI can call back into the host through a narrow action channel.
+
+Current D1 loop:
 
 ```text
 AI-generated runsplash UI
@@ -17,6 +30,49 @@ AI-generated runsplash UI
     -> local state update or LLM prompt
     -> generated UI re-renders from state
 ```
+
+Runtime A2A is the right home for:
+
+- `runsplash` inline rendering.
+- `agent.notify(event_id, payload)`.
+- host-owned state such as `APP_DEMO_STATE`.
+- state placeholders such as `{{state.count}}`.
+- host action manifests and parameter validation.
+- live re-rendering inside chat messages.
+
+### Generative A2A: `agent2project`
+
+Generative A2A treats the generated app as a real artifact outside the chat
+view. The agent should produce files, resources, a Makepad crate, state modules,
+action handlers, and packaging/run metadata.
+
+Target future loop:
+
+```text
+user request
+    -> appplan artifact contract
+    -> generated file tree/resources
+    -> Makepad crate
+    -> Studio runnable item or export/package command
+```
+
+Generative A2A is the right home for:
+
+- file tree generation.
+- `Cargo.toml` and `src/main.rs` generation.
+- resource generation and copying.
+- generated app state modules.
+- generated event/action handler code.
+- Studio run/export/package integration.
+
+Generative A2A must not reuse the Runtime A2A manifest as-is. It needs its own
+artifact contract because its output is a codebase, not an inline view.
+
+## Current Scope: Runtime A2A D1
+
+The goal of D1 is not to implement the full Robrix-style
+schema/template/reconciler architecture. The goal is to add the smallest
+reliable live wire between AI-generated Splash UI and the aichat host.
 
 ## Core Decision
 
@@ -32,6 +88,8 @@ host-rendered state loop are proven.
 
 ## Non-Goals
 
+These non-goals apply to Runtime A2A D1 only:
+
 - No Robrix schema.
 - No widget whitelist.
 - No generic capability registry.
@@ -40,6 +98,47 @@ host-rendered state loop are proven.
 - No multi-agent resolver/template-author split.
 - No repair loop for invalid Splash.
 - No product-grade state security model.
+- No independent Makepad project generation.
+- No file tree artifact creation.
+- No export/package workflow for generated apps.
+
+Generative A2A should address the last three items in a separate design, not by
+expanding the D1 Runtime A2A protocol.
+
+## Naming Boundary
+
+Use these names in future specs and code comments:
+
+- `agent2view` for Runtime A2A inside chat.
+- `agent2project` for Generative A2A that creates an independent codebase.
+- `agent2app` only as the umbrella term that includes both tracks.
+
+The current `AppGen` tab is still Runtime A2A unless and until it writes a real
+project artifact to disk. A generated `appplan json` block followed by a
+`runsplash` block is not enough to call the result Generative A2A.
+
+## Manifest Boundary
+
+Runtime A2A manifests describe host capabilities:
+
+- readable state paths, for example `{{state.count}}`.
+- allowed host actions, for example `agent.notify("inc", {})`.
+- action payload schemas.
+- view/runtime lifecycle rules.
+
+Generative A2A manifests describe project artifacts:
+
+- generated files and directories.
+- generated crate/package metadata.
+- dependencies.
+- resources.
+- state modules.
+- event/action handler code.
+- run/export/package targets.
+
+Do not mix the two manifest types. A Runtime A2A action manifest is a
+capability boundary for a live view. A Generative A2A artifact manifest is a
+build contract for a generated project.
 
 ## D1 User Story
 
@@ -544,9 +643,28 @@ D1 is complete when:
 
 ## Later Extensions
 
+### Runtime A2A / `agent2view`
+
 - D2 Todo: add `todos` state and whitelisted `add_todo`, `delete_todo`,
   `toggle_todo` handlers.
 - D3 Dashboard: add multiple state slices and handler groups.
 - VM-level `state`: expose `state.count` after D1 is stable.
-- Capability declaration: optional fenced JSON block listing supported actions.
+- Runtime capability declaration: optional fenced JSON block listing supported
+  host state paths and actions.
 - Handler table: replace `match` only when event count justifies it.
+
+### Generative A2A / `agent2project`
+
+Generative A2A needs a separate design before implementation. That design should
+define:
+
+- `appplan` as an artifact contract, not only a model planning block.
+- output directory layout for generated Makepad apps.
+- required files such as `Cargo.toml` and `src/main.rs`.
+- resource handling.
+- generated state modules.
+- generated action/event handler code.
+- Studio runnable-item integration.
+- export/package validation.
+
+Do not add these responsibilities to Runtime A2A D1.
