@@ -1,10 +1,103 @@
-use crate::makepad_draw::*;
+use crate::{makepad_derive_widget::*, makepad_draw::*, view::View, widget::*};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Script, ScriptHook)]
+pub enum GlassNativeStyle {
+    #[default]
+    Regular,
+    Clear,
+}
+
+impl GlassNativeStyle {
+    fn to_native(self) -> NativeGlassStyle {
+        match self {
+            Self::Regular => NativeGlassStyle::Regular,
+            Self::Clear => NativeGlassStyle::Clear,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Script, ScriptHook)]
+pub enum GlassNativeHitTest {
+    #[default]
+    Passthrough,
+    Interactive,
+}
+
+impl GlassNativeHitTest {
+    fn to_native(self) -> NativeGlassHitTest {
+        match self {
+            Self::Passthrough => NativeGlassHitTest::Passthrough,
+            Self::Interactive => NativeGlassHitTest::Interactive,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Script, ScriptHook)]
+pub enum GlassNativeShape {
+    #[default]
+    RoundedRect,
+    Capsule,
+}
+
+impl GlassNativeShape {
+    fn to_native(self, radius: f64) -> NativeGlassShape {
+        match self {
+            Self::RoundedRect => NativeGlassShape::RoundedRect { radius },
+            Self::Capsule => NativeGlassShape::Capsule,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NativeGlassCollection {
+    id: LiveId,
+    rect: Rect,
+    spacing: f64,
+    panels: Vec<NativeGlassPanelDescriptor>,
+}
+
+#[derive(Default)]
+struct NativeGlassCollector {
+    stack: Vec<NativeGlassCollection>,
+}
+
+impl NativeGlassCollector {
+    fn begin(&mut self, id: LiveId, spacing: f64) {
+        self.stack.push(NativeGlassCollection {
+            id,
+            rect: Rect::default(),
+            spacing,
+            panels: Vec::new(),
+        });
+    }
+
+    fn push_panel(&mut self, panel: NativeGlassPanelDescriptor) {
+        if let Some(collection) = self.stack.last_mut() {
+            collection.panels.push(panel);
+        }
+    }
+
+    fn finish(&mut self, rect: Rect) -> Option<NativeGlassCollection> {
+        let mut collection = self.stack.pop()?;
+        collection.rect = rect;
+        Some(collection)
+    }
+}
 
 script_mod! {
     use mod.prelude.widgets_internal.*
     use mod.widgets.View
 
-    mod.widgets.GlassPanel = View{
+    mod.widgets.GlassContainerBase = #(GlassContainer::register_widget(vm))
+    mod.widgets.GlassPanelBase = #(GlassPanel::register_widget(vm))
+
+    mod.widgets.GlassContainer = set_type_default() do mod.widgets.GlassContainerBase{
+        width: Fill
+        height: Fit
+        spacing: 20.0
+    }
+
+    mod.widgets.GlassPanel = set_type_default() do mod.widgets.GlassPanelBase{
         show_bg: true
         draw_bg +: {
             tint_color: instance(#fff)
@@ -91,5 +184,184 @@ script_mod! {
                 return sdf.result
             }
         }
+    }
+}
+
+#[derive(Clone)]
+enum GlassContainerDrawState {
+    Begin,
+    Drawing,
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct GlassContainer {
+    #[source]
+    source: ScriptObjectRef,
+    #[deref]
+    view: View,
+
+    #[live(false)]
+    pub native: bool,
+    #[live(20.0)]
+    pub spacing: f64,
+
+    #[rust]
+    draw_state: DrawStateWrap<GlassContainerDrawState>,
+}
+
+impl Widget for GlassContainer {
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        if self.draw_state.begin(cx, GlassContainerDrawState::Begin) {
+            if self.native {
+                cx.global::<NativeGlassCollector>()
+                    .begin(LiveId(self.widget_uid().0), self.spacing);
+            }
+            self.draw_state.set(GlassContainerDrawState::Drawing);
+        }
+
+        if let Some(GlassContainerDrawState::Drawing) = self.draw_state.get() {
+            self.view.draw_walk(cx, scope, walk)?;
+
+            if self.native {
+                let rect = self.view.area().rect(cx);
+                if let Some(window_id) = cx.get_current_window_id() {
+                    let collection = cx.global::<NativeGlassCollector>().finish(rect);
+                    if let Some(collection) = collection {
+                        let batch = NativeGlassBatch {
+                            window_id,
+                            containers: vec![NativeGlassContainerDescriptor {
+                                id: collection.id,
+                                rect: collection.rect,
+                                spacing: collection.spacing,
+                                panels: collection.panels,
+                            }],
+                        };
+                        cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch));
+                    }
+                } else {
+                    cx.global::<NativeGlassCollector>().finish(rect);
+                }
+            }
+
+            self.draw_state.end();
+        }
+
+        DrawStep::done()
+    }
+
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+    }
+}
+
+#[derive(Clone)]
+enum GlassPanelDrawState {
+    Begin,
+    Drawing,
+}
+
+#[derive(Script, ScriptHook, Widget)]
+pub struct GlassPanel {
+    #[source]
+    source: ScriptObjectRef,
+    #[deref]
+    view: View,
+
+    #[live(false)]
+    pub native: bool,
+    #[live(GlassNativeStyle::Regular)]
+    pub native_style: GlassNativeStyle,
+    #[live(GlassNativeHitTest::Passthrough)]
+    pub native_hit_test: GlassNativeHitTest,
+    #[live(GlassNativeShape::RoundedRect)]
+    pub native_shape: GlassNativeShape,
+    #[live(12.0)]
+    pub native_radius: f64,
+    #[live]
+    pub native_tint: Option<Vec4f>,
+    #[live(0.0)]
+    pub native_z_order: f64,
+
+    #[rust]
+    draw_state: DrawStateWrap<GlassPanelDrawState>,
+}
+
+impl GlassPanel {
+    fn native_descriptor(&self, cx: &Cx) -> NativeGlassPanelDescriptor {
+        NativeGlassPanelDescriptor {
+            id: LiveId(self.widget_uid().0),
+            rect: self.view.area().rect(cx),
+            shape: self.native_shape.to_native(self.native_radius),
+            style: self.native_style.to_native(),
+            tint: self.native_tint,
+            hit_test: self.native_hit_test.to_native(),
+            z_order: self.native_z_order as i32,
+            visible: self.view.visible(),
+        }
+    }
+}
+
+impl Widget for GlassPanel {
+    fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        if self.draw_state.begin(cx, GlassPanelDrawState::Begin) {
+            self.draw_state.set(GlassPanelDrawState::Drawing);
+        }
+
+        if let Some(GlassPanelDrawState::Drawing) = self.draw_state.get() {
+            self.view.draw_walk(cx, scope, walk)?;
+
+            if self.native {
+                let descriptor = self.native_descriptor(cx);
+                cx.global::<NativeGlassCollector>().push_panel(descriptor);
+            }
+
+            self.draw_state.end();
+        }
+
+        DrawStep::done()
+    }
+
+    fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
+        self.view.handle_event(cx, event, scope);
+    }
+}
+
+#[cfg(test)]
+mod native_glass_tests {
+    use super::*;
+
+    #[test]
+    fn native_glass_collector_returns_container_with_pushed_panels() {
+        let mut collector = NativeGlassCollector::default();
+        collector.begin(LiveId(1), 20.0);
+        collector.push_panel(NativeGlassPanelDescriptor {
+            id: LiveId(2),
+            rect: Rect::default(),
+            shape: NativeGlassShape::RoundedRect { radius: 12.0 },
+            style: NativeGlassStyle::Regular,
+            tint: None,
+            hit_test: NativeGlassHitTest::Passthrough,
+            z_order: 0,
+            visible: true,
+        });
+
+        let collection = collector.finish(Rect {
+            pos: dvec2(10.0, 20.0),
+            size: dvec2(300.0, 200.0),
+        });
+
+        let collection = collection.expect("collection should finish");
+        assert_eq!(collection.id, LiveId(1));
+        assert_eq!(collection.spacing, 20.0);
+        assert_eq!(collection.panels.len(), 1);
+        assert_eq!(collector.stack.len(), 0);
+    }
+
+    #[test]
+    fn glass_native_shape_maps_capsule() {
+        assert_eq!(
+            GlassNativeShape::Capsule.to_native(12.0),
+            NativeGlassShape::Capsule
+        );
     }
 }
