@@ -1312,7 +1312,15 @@ impl GlassOpacity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct ShaderBackdropConfig;
+struct ShaderBackdropConfig {
+    proof: ShaderBackdropProof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum ShaderBackdropProof {
+    #[default]
+    RawSignal,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 enum MacosGlassStyle {
@@ -1356,6 +1364,7 @@ enum GlassPanelPreset {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum GlassBackendRequest {
     Shader,
+    ShaderBackdropProof,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1385,6 +1394,7 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
     match value.map(str::trim).filter(|s| !s.is_empty()) {
         None => (GlassBackendRequest::Shader, None),
         Some("shader") => (GlassBackendRequest::Shader, None),
+        Some("shader-backdrop-proof") => (GlassBackendRequest::ShaderBackdropProof, None),
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1416,6 +1426,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
             appearance: GlassAppearance::default(),
             warning: None,
         },
+        GlassBackendRequest::ShaderBackdropProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::RawSignal,
+                }),
+            },
+            warning: None,
+        },
         GlassBackendRequest::Auto if native_available => GlassConfigResolution {
             appearance: GlassAppearance {
                 substrate: GlassSubstrate::MacosNative {
@@ -1444,11 +1463,7 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
 }
 
 fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolution {
-    let (_, parse_warning) = parse_glass_backend(value);
-    GlassConfigResolution {
-        appearance: GlassAppearance::default(),
-        warning: parse_warning,
-    }
+    resolve_glass_appearance(value, false)
 }
 
 fn initial_glass_opacity() -> f64 {
@@ -1515,7 +1530,17 @@ fn shader_glass_opacity_values(slider: f64) -> GlassOpacity {
 fn glass_opacity_values(slider: f64, preset: GlassPanelPreset) -> GlassOpacity {
     let shader = shader_glass_opacity_values(slider);
     match preset {
-        GlassPanelPreset::ShaderDefault | GlassPanelPreset::BackdropOverlay => shader,
+        GlassPanelPreset::ShaderDefault => shader,
+        GlassPanelPreset::BackdropOverlay => GlassOpacity {
+            app: 0.36,
+            sidebar: 0.42,
+            main: 0.38,
+            composer: 0.44,
+            border_scale: 0.85,
+            highlight_scale: 0.70,
+            noise_scale: 0.35,
+            halo_scale: 0.15,
+        },
         GlassPanelPreset::NativeOverlay => {
             let shader_default = shader_glass_opacity_values(DEFAULT_GLASS_OPACITY);
             GlassOpacity {
@@ -3646,6 +3671,9 @@ impl App {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         let mut glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
+        let backdrop_sample_strength = if appearance.backdrop.is_some() { 1.0 } else { 0.0 };
+        let backdrop_mix = if appearance.backdrop.is_some() { 0.78 } else { 0.0 };
+        let backdrop_grid_strength = if appearance.backdrop.is_some() { 0.58 } else { 0.0 };
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
             GlassSubstrate::MacosNative {
@@ -3691,6 +3719,9 @@ impl App {
                 highlight_strength: #(0.28 * glass.highlight_scale)
                 noise_strength: #(0.004 * glass.noise_scale)
                 halo_strength: #(0.0 * glass.halo_scale)
+                backdrop_sample_strength: #(backdrop_sample_strength)
+                backdrop_mix: #(backdrop_mix)
+                backdrop_grid_strength: #(backdrop_grid_strength)
             }
         });
 
@@ -3703,6 +3734,9 @@ impl App {
                 highlight_strength: #(0.16 * glass.highlight_scale)
                 noise_strength: #(0.004 * glass.noise_scale)
                 halo_strength: #(0.0 * glass.halo_scale)
+                backdrop_sample_strength: #(backdrop_sample_strength)
+                backdrop_mix: #(backdrop_mix)
+                backdrop_grid_strength: #(backdrop_grid_strength)
             }
         });
 
@@ -3715,6 +3749,9 @@ impl App {
                 highlight_strength: #(0.16 * glass.highlight_scale)
                 noise_strength: #(0.004 * glass.noise_scale)
                 halo_strength: #(0.0 * glass.halo_scale)
+                backdrop_sample_strength: #(backdrop_sample_strength)
+                backdrop_mix: #(backdrop_mix)
+                backdrop_grid_strength: #(backdrop_grid_strength)
             }
         });
 
@@ -3727,6 +3764,9 @@ impl App {
                 highlight_strength: #(0.24 * glass.highlight_scale)
                 noise_strength: #(0.003 * glass.noise_scale)
                 halo_strength: #(0.045 * glass.halo_scale)
+                backdrop_sample_strength: #(backdrop_sample_strength)
+                backdrop_mix: #(backdrop_mix)
+                backdrop_grid_strength: #(backdrop_grid_strength)
             }
         });
 
@@ -4159,7 +4199,8 @@ mod tests {
         render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
         should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
         GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -4211,6 +4252,10 @@ mod tests {
         assert_eq!(
             parse_glass_backend(Some("shader")),
             (GlassBackendRequest::Shader, None)
+        );
+        assert_eq!(
+            parse_glass_backend(Some("shader-backdrop-proof")),
+            (GlassBackendRequest::ShaderBackdropProof, None)
         );
         assert_eq!(
             parse_glass_backend(Some("macos-native")),
@@ -4318,6 +4363,23 @@ mod tests {
         let invalid = resolve_startup_glass_appearance(Some("native"));
         assert_eq!(invalid.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert!(invalid.warning.is_some());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_proof_resolves_to_shader_substrate_with_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::RawSignal,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
     }
 
     #[test]

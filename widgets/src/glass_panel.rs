@@ -129,6 +129,23 @@ script_mod! {
             use_scene_blur: instance(0.0)
             blur_amount: instance(0.0)
 
+            // v5.1 shader-backdrop proof parameters. These are disabled by
+            // default and only enabled by the dedicated aichat proof target.
+            backdrop_sample_strength: instance(0.0)
+            backdrop_mix: instance(0.0)
+            backdrop_grid_strength: instance(0.0)
+
+            backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
+                let t = self.draw_pass.time
+                let r = 0.5 + 0.5 * sin(uv.x * 22.0 + t * 1.7)
+                let g = 0.5 + 0.5 * sin(uv.y * 18.0 - t * 1.3 + 2.1)
+                let b = 0.5 + 0.5 * sin((uv.x + uv.y) * 15.0 + t * 1.1 + 4.2)
+                let grid_x = 0.5 + 0.5 * sin(uv.x * 72.0)
+                let grid_y = 0.5 + 0.5 * sin(uv.y * 72.0)
+                let grid = max(pow(grid_x, 20.0), pow(grid_y, 20.0)) * self.backdrop_grid_strength
+                return vec3(r, g, b).mix(vec3(1.0, 0.96, 0.78), clamp(grid, 0.0, 1.0))
+            }
+
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 let inset = self.border_width * 0.5 + self.halo_radius
@@ -163,7 +180,10 @@ script_mod! {
                     ) - 0.5
                 ) * self.noise_strength
 
-                let fill_rgb = self.tint_color.rgb + highlight + noise
+                let backdrop_rgb = self.backdrop_signal_rgb(self.pos)
+                let shader_rgb = self.tint_color.rgb + highlight + noise
+                let sample_mix = clamp(self.backdrop_sample_strength * self.backdrop_mix, 0.0, 1.0)
+                let fill_rgb = shader_rgb.mix(backdrop_rgb + highlight + noise, sample_mix)
                 let fill = vec4(fill_rgb, self.tint_alpha)
                 sdf.fill_keep(fill)
 
