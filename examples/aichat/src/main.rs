@@ -1323,6 +1323,7 @@ enum ShaderBackdropProof {
     RawSignal,
     BlurredSignal,
     TextureSignal,
+    ScreenTextureSignal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1370,6 +1371,7 @@ enum GlassBackendRequest {
     ShaderBackdropProof,
     ShaderBackdropBlurProof,
     ShaderBackdropTextureProof,
+    ShaderBackdropScreenTextureProof,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1404,6 +1406,10 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         Some("shader-backdrop-texture-proof") => {
             (GlassBackendRequest::ShaderBackdropTextureProof, None)
         }
+        Some("shader-backdrop-screen-texture-proof") => (
+            GlassBackendRequest::ShaderBackdropScreenTextureProof,
+            None,
+        ),
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1458,6 +1464,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::TextureSignal,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropScreenTextureProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::ScreenTextureSignal,
                 }),
             },
             warning: None,
@@ -3740,23 +3755,88 @@ impl App {
         cx: &mut Cx,
         path: &[LiveId],
         texture: Option<Texture>,
+        screen_space: f32,
+        texture_size: Vec2f,
     ) {
         let panel_ref = self.ui.widget(cx, path);
         if let Some(mut panel) = panel_ref.borrow_mut::<makepad_widgets::glass_panel::GlassPanel>() {
             panel.set_backdrop_texture(texture);
+            panel.set_backdrop_texture_mapping(screen_space, texture_size);
         };
     }
 
-    fn bind_shader_backdrop_texture(&mut self, cx: &mut Cx, enabled: bool) {
+    fn bind_shader_backdrop_texture(
+        &mut self,
+        cx: &mut Cx,
+        enabled: bool,
+        screen_space: f32,
+        texture_size: Vec2f,
+    ) {
         let texture = if enabled {
             Some(self.ensure_shader_backdrop_texture(cx))
         } else {
             None
         };
-        self.set_shader_backdrop_texture_on_panel(cx, ids!(app_shell), texture.clone());
-        self.set_shader_backdrop_texture_on_panel(cx, ids!(sidebar), texture.clone());
-        self.set_shader_backdrop_texture_on_panel(cx, ids!(main_area), texture.clone());
-        self.set_shader_backdrop_texture_on_panel(cx, ids!(composer), texture);
+        self.set_shader_backdrop_texture_on_panel(
+            cx,
+            ids!(app_shell),
+            texture.clone(),
+            screen_space,
+            texture_size,
+        );
+        self.set_shader_backdrop_texture_on_panel(
+            cx,
+            ids!(sidebar),
+            texture.clone(),
+            screen_space,
+            texture_size,
+        );
+        self.set_shader_backdrop_texture_on_panel(
+            cx,
+            ids!(main_area),
+            texture.clone(),
+            screen_space,
+            texture_size,
+        );
+        self.set_shader_backdrop_texture_on_panel(
+            cx,
+            ids!(composer),
+            texture,
+            screen_space,
+            texture_size,
+        );
+    }
+
+    fn shader_backdrop_texture_size_for_window(&self, cx: &Cx) -> Vec2f {
+        let window_size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
+        if window_size.x >= 1.0 && window_size.y >= 1.0 {
+            vec2(window_size.x as f32, window_size.y as f32)
+        } else {
+            vec2(900.0, 700.0)
+        }
+    }
+
+    fn handle_shader_backdrop_window_geom_change(
+        &mut self,
+        cx: &mut Cx,
+        event: &WindowGeomChangeEvent,
+    ) {
+        if self.glass_appearance.backdrop
+            != Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::ScreenTextureSignal,
+            })
+        {
+            return;
+        }
+        if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
+            return;
+        }
+        let size = event.new_geom.inner_size;
+        if size.x < 1.0 || size.y < 1.0 {
+            return;
+        }
+        self.bind_shader_backdrop_texture(cx, true, 1.0, vec2(size.x as f32, size.y as f32));
+        self.ui.redraw(cx);
     }
 
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
@@ -3778,6 +3858,7 @@ impl App {
             Some(ShaderBackdropProof::RawSignal) => 0.58,
             Some(ShaderBackdropProof::BlurredSignal) => 0.32,
             Some(ShaderBackdropProof::TextureSignal) => 0.0,
+            Some(ShaderBackdropProof::ScreenTextureSignal) => 0.0,
             None => 0.0,
         };
         let backdrop_blur_radius = match backdrop_proof {
@@ -3789,11 +3870,19 @@ impl App {
             _ => 0.0,
         };
         let backdrop_texture_strength = match backdrop_proof {
-            Some(ShaderBackdropProof::TextureSignal) => 1.0,
+            Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal) => 1.0,
             _ => 0.0,
         };
+        let backdrop_texture_screen_space = match backdrop_proof {
+            Some(ShaderBackdropProof::ScreenTextureSignal) => 1.0,
+            _ => 0.0,
+        };
+        let backdrop_texture_size = self.shader_backdrop_texture_size_for_window(cx);
         let bind_backdrop_texture =
-            matches!(backdrop_proof, Some(ShaderBackdropProof::TextureSignal));
+            matches!(
+                backdrop_proof,
+                Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
+            );
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
             GlassSubstrate::MacosNative {
@@ -3902,7 +3991,12 @@ impl App {
             }
         });
 
-        self.bind_shader_backdrop_texture(cx, bind_backdrop_texture);
+        self.bind_shader_backdrop_texture(
+            cx,
+            bind_backdrop_texture,
+            backdrop_texture_screen_space,
+            backdrop_texture_size,
+        );
         self.ui
             .label(cx, ids!(opacity_value))
             .set_text(cx, &format!("{:.0}%", opacity * 100.0));
@@ -4197,6 +4291,9 @@ impl AppMain for App {
 
         if let Event::WindowNativeSubstrateResolved(event) = event {
             self.handle_native_substrate_resolved(cx, event);
+        }
+        if let Event::WindowGeomChange(event) = event {
+            self.handle_shader_backdrop_window_geom_change(cx, event);
         }
 
         match event {
@@ -4541,6 +4638,23 @@ mod tests {
             resolved.appearance.backdrop,
             Some(ShaderBackdropConfig {
                 proof: ShaderBackdropProof::TextureSignal,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_screen_texture_proof_resolves_to_screen_texture_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-screen-texture-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::ScreenTextureSignal,
             })
         );
         assert_eq!(

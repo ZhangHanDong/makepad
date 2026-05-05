@@ -137,6 +137,10 @@ script_mod! {
             backdrop_blur_radius: instance(0.0)
             backdrop_blur_mix: instance(0.0)
             backdrop_texture_strength: instance(0.0)
+            backdrop_texture_screen_space: uniform(0.0)
+            backdrop_texture_size: uniform(vec2(900.0, 700.0))
+            backdrop_texture_uv_offset: uniform(vec2(0.0, 0.0))
+            backdrop_texture_uv_scale: uniform(vec2(1.0, 1.0))
             backdrop_texture: texture_2d(float)
 
             backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
@@ -171,8 +175,13 @@ script_mod! {
                 return center + axial + diagonal
             }
 
+            backdrop_texture_uv: fn(uv: vec2) -> vec2 {
+                let screen_uv = self.backdrop_texture_uv_offset + uv * self.backdrop_texture_uv_scale
+                return uv.mix(screen_uv, clamp(self.backdrop_texture_screen_space, 0.0, 1.0))
+            }
+
             backdrop_texture_rgb: fn(uv: vec2) -> vec3 {
-                return self.backdrop_texture.sample(uv).rgb
+                return self.backdrop_texture.sample(self.backdrop_texture_uv(uv)).rgb
             }
 
             pixel: fn() {
@@ -347,6 +356,14 @@ pub struct GlassPanel {
 
     #[rust]
     backdrop_texture: Option<Texture>,
+    #[rust]
+    backdrop_texture_screen_space: f32,
+    #[rust]
+    backdrop_texture_size: Vec2f,
+    #[rust]
+    backdrop_texture_uv_offset: Vec2f,
+    #[rust]
+    backdrop_texture_uv_scale: Vec2f,
 
     #[rust]
     draw_state: DrawStateWrap<GlassPanelDrawState>,
@@ -355,6 +372,64 @@ pub struct GlassPanel {
 impl GlassPanel {
     pub fn set_backdrop_texture(&mut self, texture: Option<Texture>) {
         self.backdrop_texture = texture;
+    }
+
+    pub fn set_backdrop_texture_mapping(&mut self, screen_space: f32, texture_size: Vec2f) {
+        self.backdrop_texture_screen_space = screen_space;
+        self.backdrop_texture_size = texture_size;
+    }
+
+    fn update_backdrop_texture_uv_mapping(&mut self, cx: &Cx) -> bool {
+        if self.backdrop_texture_screen_space <= 0.5 {
+            self.backdrop_texture_uv_offset = vec2(0.0, 0.0);
+            self.backdrop_texture_uv_scale = vec2(1.0, 1.0);
+            return false;
+        }
+
+        let rect = self.view.area().rect(cx);
+        if rect.size.x < 1.0 || rect.size.y < 1.0 {
+            return false;
+        }
+        let safe_size = vec2(
+            self.backdrop_texture_size.x.max(1.0),
+            self.backdrop_texture_size.y.max(1.0),
+        );
+        let offset = vec2(rect.pos.x as f32 / safe_size.x, rect.pos.y as f32 / safe_size.y);
+        let scale = vec2(rect.size.x as f32 / safe_size.x, rect.size.y as f32 / safe_size.y);
+        let changed = (offset - self.backdrop_texture_uv_offset).length() > 0.001
+            || (scale - self.backdrop_texture_uv_scale).length() > 0.001;
+        self.backdrop_texture_uv_offset = offset;
+        self.backdrop_texture_uv_scale = scale;
+        changed
+    }
+
+    fn apply_backdrop_texture_uniforms(&mut self, cx: &Cx) {
+        self.view.draw_bg.draw_vars.set_uniform(
+            cx,
+            live_id!(backdrop_texture_screen_space),
+            &[self.backdrop_texture_screen_space],
+        );
+        self.view.draw_bg.draw_vars.set_uniform(
+            cx,
+            live_id!(backdrop_texture_size),
+            &[self.backdrop_texture_size.x, self.backdrop_texture_size.y],
+        );
+        self.view.draw_bg.draw_vars.set_uniform(
+            cx,
+            live_id!(backdrop_texture_uv_offset),
+            &[
+                self.backdrop_texture_uv_offset.x,
+                self.backdrop_texture_uv_offset.y,
+            ],
+        );
+        self.view.draw_bg.draw_vars.set_uniform(
+            cx,
+            live_id!(backdrop_texture_uv_scale),
+            &[
+                self.backdrop_texture_uv_scale.x,
+                self.backdrop_texture_uv_scale.y,
+            ],
+        );
     }
 
     fn native_descriptor(&self, cx: &Cx) -> NativeGlassPanelDescriptor {
@@ -381,7 +456,13 @@ impl Widget for GlassPanel {
             if let Some(texture) = &self.backdrop_texture {
                 self.view.draw_bg.draw_vars.set_texture(0, texture);
             }
+            self.update_backdrop_texture_uv_mapping(cx);
+            self.apply_backdrop_texture_uniforms(cx);
             self.view.draw_walk(cx, scope, walk)?;
+            if self.update_backdrop_texture_uv_mapping(cx) {
+                self.apply_backdrop_texture_uniforms(cx);
+                self.view.redraw(cx);
+            }
 
             if self.native {
                 let descriptor = self.native_descriptor(cx);
