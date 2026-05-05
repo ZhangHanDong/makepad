@@ -119,6 +119,7 @@ pub struct MacosWindow {
     pub(crate) last_native_glass_batch: Option<NativeGlassBatch>,
     pub(crate) last_native_glass_batch_result: Option<NativeGlassBatchResult>,
     pub(crate) proof_substrate_view: ObjcId,
+    pub(crate) above_metal_glass_probe_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
     window_delegate: ObjcId,
     live_resize_timer: ObjcId,
@@ -286,6 +287,21 @@ impl MacosWindow {
         Self::native_glass_ns_rect_from_makepad_rect(relative, container_rect.size.y)
     }
 
+    fn above_metal_probe_frame(bounds: NSRect) -> NSRect {
+        let inset_x = 76.0f64.min(bounds.size.width * 0.18);
+        let inset_y = 64.0f64.min(bounds.size.height * 0.18);
+        NSRect {
+            origin: NSPoint {
+                x: inset_x,
+                y: inset_y,
+            },
+            size: NSSize {
+                width: (bounds.size.width - inset_x * 2.0).max(1.0),
+                height: (bounds.size.height - inset_y * 2.0).max(1.0),
+            },
+        }
+    }
+
     fn ns_color_from_vec4f(tint: Vec4f) -> ObjcId {
         unsafe {
             msg_send![
@@ -319,6 +335,102 @@ impl MacosWindow {
         match style {
             NativeGlassStyle::Regular => WindowNativeSubstrateStyle::MacosGlassRegular,
             NativeGlassStyle::Clear => WindowNativeSubstrateStyle::MacosGlassClear,
+        }
+    }
+
+    pub(crate) fn install_above_metal_glass_probe(&mut self, style: MacosNativeGlassStyle) {
+        unsafe {
+            if self.above_metal_glass_probe_view != nil {
+                return;
+            }
+
+            let glass_class = Self::native_glass_effect_view_class();
+            if glass_class.is_null() {
+                crate::log!(
+                    "[liquid-glass] above-metal-probe state=unsupported reason=class-missing"
+                );
+                return;
+            }
+
+            let can_init: BOOL =
+                msg_send![glass_class, instancesRespondToSelector: sel!(initWithFrame:)];
+            if can_init != YES {
+                crate::log!(
+                    "[liquid-glass] above-metal-probe state=failed reason=missing-initWithFrame"
+                );
+                return;
+            }
+
+            let bounds: NSRect = msg_send![self.container_view, bounds];
+            let frame = Self::above_metal_probe_frame(bounds);
+            let glass_view: ObjcId = msg_send![glass_class, alloc];
+            let glass_view: ObjcId = msg_send![glass_view, initWithFrame: frame];
+            if glass_view == nil {
+                crate::log!(
+                    "[liquid-glass] above-metal-probe state=failed reason=alloc-init-failed"
+                );
+                return;
+            }
+
+            let () = msg_send![
+                glass_view,
+                setAutoresizingMask: Self::NS_VIEW_WIDTH_SIZABLE | Self::NS_VIEW_HEIGHT_SIZABLE
+            ];
+            let () = msg_send![glass_view, setWantsLayer: YES];
+            let layer: ObjcId = msg_send![glass_view, layer];
+            if layer != nil {
+                let () = msg_send![layer, setMasksToBounds: YES];
+                let () = msg_send![layer, setCornerRadius: 30.0f64];
+            }
+
+            let set_style_sel = sel!(setStyle:);
+            let can_set_style: BOOL = msg_send![glass_view, respondsToSelector: set_style_sel];
+            let style_raw = style.ns_style_raw();
+            if can_set_style == YES {
+                let () = msg_send![glass_view, setStyle: style_raw];
+            }
+
+            let set_tint_sel = sel!(setTintColor:);
+            let can_set_tint: BOOL = msg_send![glass_view, respondsToSelector: set_tint_sel];
+            if can_set_tint == YES {
+                let tint: ObjcId = msg_send![
+                    class!(NSColor),
+                    colorWithSRGBRed: 0.94f64
+                    green: 0.96f64
+                    blue: 1.0f64
+                    alpha: 0.10f64
+                ];
+                let () = msg_send![glass_view, setTintColor: tint];
+            }
+
+            let set_corner_radius_sel = sel!(setCornerRadius:);
+            let can_set_corner_radius: BOOL =
+                msg_send![glass_view, respondsToSelector: set_corner_radius_sel];
+            if can_set_corner_radius == YES {
+                let () = msg_send![glass_view, setCornerRadius: 30.0f64];
+            }
+
+            let () = msg_send![
+                self.container_view,
+                addSubview: glass_view
+                positioned: 1i64
+                relativeTo: self.view
+            ];
+            let superview: ObjcId = msg_send![glass_view, superview];
+            if superview != self.container_view {
+                let () = msg_send![glass_view, removeFromSuperview];
+                crate::log!(
+                    "[liquid-glass] above-metal-probe state=failed reason=attach-unverified"
+                );
+                return;
+            }
+
+            self.above_metal_glass_probe_view = glass_view;
+            crate::log!(
+                "[liquid-glass] above-metal-probe state=installed style={} style_raw={} input=diagnostic-overlay",
+                style.log_name(),
+                style_raw
+            );
         }
     }
 
@@ -945,6 +1057,7 @@ impl MacosWindow {
                 last_native_glass_batch: None,
                 last_native_glass_batch_result: None,
                 proof_substrate_view: nil,
+                above_metal_glass_probe_view: nil,
                 container_view,
                 live_resize_timer: nil,
                 window_delegate: window_delegate,
@@ -1914,5 +2027,25 @@ mod tests {
 
         a.containers[0].panels[0].rect.size.x += 2.0;
         assert!(!MacosWindow::native_glass_batch_equivalent(&a, &b));
+    }
+
+    #[test]
+    fn above_metal_probe_frame_insets_inside_window_bounds() {
+        let bounds = NSRect {
+            origin: NSPoint { x: 0.0, y: 0.0 },
+            size: NSSize {
+                width: 900.0,
+                height: 700.0,
+            },
+        };
+
+        let frame = MacosWindow::above_metal_probe_frame(bounds);
+
+        assert!(frame.origin.x > 0.0);
+        assert!(frame.origin.y > 0.0);
+        assert!(frame.size.width < bounds.size.width);
+        assert!(frame.size.height < bounds.size.height);
+        assert!(frame.size.width > bounds.size.width * 0.75);
+        assert!(frame.size.height > bounds.size.height * 0.75);
     }
 }

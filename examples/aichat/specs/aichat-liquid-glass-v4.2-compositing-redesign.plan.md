@@ -14,71 +14,73 @@ rewrite aichat production UI until a prototype proves the compositing route.
 
 Files:
 
-- Create: `examples/aichat/specs/aichat-liquid-glass-step-14-above-metal-probe.spec`
+- Create: `examples/aichat/specs/aichat-liquid-glass-step-15-above-metal-probe.spec`
 - Create or modify a small macOS-only proof target/module under the existing
   Makepad examples or platform test area.
 
 Steps:
 
-- [ ] Add a task spec for an above-Metal sampling probe.
-- [ ] Build a release Studio runnable that draws a moving high-contrast Metal
+- [x] Add a task spec for an above-Metal sampling probe.
+- [x] Build a release Studio runnable that draws a moving high-contrast Metal
       pattern.
-- [ ] Add one `NSGlassEffectView` above that Metal layer.
-- [ ] Verify through Studio run logs that the glass view is installed.
-- [ ] Manually inspect whether the glass surface visibly samples the Metal
+- [x] Add one `NSGlassEffectView` above that Metal layer.
+- [x] Verify through Studio run logs that the glass view is installed.
+- [x] Manually inspect whether the glass surface visibly samples the Metal
       pattern.
-- [ ] Record result and screenshot limitation notes.
-- [ ] Commit.
+- [x] Record result and screenshot limitation notes.
+- [x] Commit.
 
 Acceptance:
 
 - The probe can distinguish "native glass samples Metal content" from "native
   glass is only a flat overlay/edge effect."
 
-## Task 2: Two-Layer Interleave Probe
+## Task 2: Two-Layer Interleave Feasibility Probe
 
 Files:
 
-- Create: `examples/aichat/specs/aichat-liquid-glass-step-15-two-layer-interleave-probe.spec`
-- Modify the same proof target/module created in Task 1.
+- Create: `examples/aichat/specs/aichat-liquid-glass-step-16-two-layer-interleave-probe.spec`
+- Update route documentation based on the Task 1 evidence and current renderer
+  constraints.
 
 Steps:
 
-- [ ] Add a lower Metal layer/pass that draws the patterned background.
-- [ ] Add native glass between lower and upper content.
-- [ ] Add an upper transparent Metal layer/pass for text and controls.
-- [ ] Verify resize and DPI alignment.
-- [ ] Run a Studio release target.
-- [ ] Manually inspect whether native glass visibly treats the lower Metal
-      layer while upper text remains readable.
-- [ ] Commit.
+- [x] Add a task spec for the interleave feasibility decision.
+- [x] Record that true `AppleNativeInterleave` requires two Makepad-rendered
+      surfaces or passes.
+- [x] Reject a native-only upper label/control proof as fake Makepad
+      interleave evidence.
+- [x] Record that the current macOS renderer has one primary Makepad
+      `CAMetalLayer`.
+- [x] Close the route decision without selecting `AppleNativeInterleave`.
+- [x] Commit.
 
 Acceptance:
 
-- If successful, this is the first candidate for `AppleNativeInterleave`.
-- If unsuccessful, full native Liquid Glass is unlikely without a deeper
+- `AppleNativeInterleave` is only a future candidate after a deeper
   platform-specific renderer split.
+- v4.2 does not overclaim a fake interleave proof.
 
 ## Task 3: Input And Studio Probe
 
 Files:
 
-- Create: `examples/aichat/specs/aichat-liquid-glass-step-16-input-studio-probe.spec`
-- Modify the proof target/module from Tasks 1-2.
+- Create: `examples/aichat/specs/aichat-liquid-glass-step-17-input-studio-probe.spec`
+- Update route documentation from Task 1 and Task 2 evidence.
 
 Steps:
 
-- [ ] Add button, text input, scroll, and drag regions to the winning visual
-      hierarchy.
-- [ ] Verify clicks and typing through Studio remote.
-- [ ] Verify widget dump still reports Makepad widgets.
-- [ ] Verify screenshot behavior and document whether native layers appear.
-- [ ] Commit.
+- [x] Add a task spec for input and Studio implications.
+- [x] Verify `WidgetTreeDump` still reports Makepad widgets for the probe.
+- [x] Verify Studio framebuffer screenshot behavior.
+- [x] Document that above-Metal native AppKit overlays require system
+      screenshots for visual evidence.
+- [x] Keep production input ownership with Makepad.
+- [x] Commit.
 
 Acceptance:
 
-- Input remains owned by Makepad or the forwarding policy is explicit and
-  testable.
+- Input remains owned by Makepad for production targets.
 - Studio limitations are documented before aichat integration is considered.
 
 ## Task 4: Route Decision
@@ -91,12 +93,12 @@ Files:
 
 Steps:
 
-- [ ] Summarize prototype outcomes.
-- [ ] Choose one route: `NativeInterleave`, `ShaderBackdropInterior`, or
+- [x] Summarize prototype outcomes.
+- [x] Choose one route: `NativeInterleave`, `ShaderBackdropInterior`, or
       `NativeUnderlayOnly`.
-- [ ] Define final user-facing backend names so logs do not overclaim.
-- [ ] List the first aichat integration slice, if any.
-- [ ] Commit.
+- [x] Define final user-facing backend names so logs do not overclaim.
+- [x] List the first aichat integration slice, if any.
+- [x] Commit.
 
 Acceptance:
 

@@ -57,6 +57,8 @@ let RunAichatMacosGlass = RunItem{
     backend: "macos-native"
     proof: ""
     compositing_proof: ""
+    above_metal_probe: ""
+    metal_probe_pattern: ""
     on_run: fn(id){
         hub.run(
             {
@@ -66,6 +68,8 @@ let RunAichatMacosGlass = RunItem{
                 "AICHAT_GLASS_BACKEND": self.backend
                 "AICHAT_NATIVE_SUBSTRATE_PROOF": self.proof
                 "AICHAT_NATIVE_COMPOSITING_PROOF": self.compositing_proof
+                "AICHAT_NATIVE_ABOVE_METAL_PROBE": self.above_metal_probe
+                "AICHAT_METAL_PROBE_PATTERN": self.metal_probe_pattern
             },
             "cargo",
             ["run" "-p" "makepad-example-aichat" "--release" "--message-format=json" "--" "--message-format=json"],
@@ -108,6 +112,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-proof-stripes", backend: "macos-native-clear", proof: "stripes", compositing_proof: "transparent-overlay"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-above-metal-probe", backend: "shader", above_metal_probe: "clear", metal_probe_pattern: "moving-pattern"}
     RunStudio{name: "makepad-studio"} 
     RunStudioExt{name: "makepad-studio-ext"} 
     RunStudioRelease{name: "makepad-example-xr"}

@@ -85,6 +85,18 @@ Next phase:
 The v4.2 compositing redesign starts with native/Metal sampling probes before
 any aichat production UI integration.
 
+v4.2 result:
+
+- [aichat-liquid-glass-v4.2-above-metal-probe-result.md](aichat-liquid-glass-v4.2-above-metal-probe-result.md)
+- [aichat-liquid-glass-v4.2-route-decision.md](aichat-liquid-glass-v4.2-route-decision.md)
+
+The above-Metal probe showed that AppKit glass can be visible above the Makepad
+Metal layer in real macOS composition, but it also confirmed that this is only
+a diagnostic overlay because it sits above Makepad-rendered UI. The selected
+route for complete aichat interior glass is now `ShaderBackdropInterior`; the
+current native macOS path should be described as `AppleNativeUnderlay`, not
+"full native" Liquid Glass.
+
 ## Known v4.1 Limitations
 
 v4.1 intentionally does not handle:

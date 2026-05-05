@@ -1,0 +1,84 @@
+# aichat Liquid Glass v4.2 Route Decision
+
+## Selected Route: ShaderBackdropInterior
+
+v4.2 selects `ShaderBackdropInterior` for complete aichat interior Liquid
+Glass. Apple native APIs remain useful for underlay/substrate diagnostics and
+future platform affordances, but the current Makepad macOS renderer should not
+claim full native Liquid Glass for aichat interiors.
+
+## Evidence
+
+### v4.1 Underlay
+
+The v4.1 native underlay path installed native panels below the Makepad Metal
+view and kept input owned by Makepad. It reached native State 4 and showed edge
+or substrate effects, but the user could not identify meaningful full interior
+glass. That path is `AppleNativeUnderlay`, not full native Liquid Glass.
+
+### Above-Metal Probe
+
+The v4.2 above-Metal probe installed a diagnostic `NSGlassEffectView` above the
+Makepad Metal view:
+
+```text
+[liquid-glass] above-metal-probe state=installed style=clear style_raw=1 input=diagnostic-overlay
+```
+
+The Studio framebuffer screenshot showed only the Makepad pattern, while a
+system screenshot showed the native rounded glass rectangle. This proves two
+things:
+
+- AppKit glass above Makepad Metal can be visible in real macOS composition.
+- Studio framebuffer screenshot is not sufficient evidence for native AppKit
+  overlays above the framebuffer.
+
+The above-Metal hierarchy is still not a production aichat architecture because
+the native view sits above Makepad-rendered text and controls.
+
+### Two-Layer Interleave
+
+AppleNativeInterleave is not selected for v4.2. A true interleave route requires
+two Makepad-rendered surfaces or passes:
+
+- lower scene/content surface for native glass to sample
+- upper transparent foreground surface for text, controls, generated UI, and
+  Studio-inspectable widgets
+
+The current macOS path has one primary Makepad `CAMetalLayer`. Building a real
+two-layer interleave renderer is a larger renderer split, not a small aichat
+target change. A native-only upper label/control proof would not validate
+Makepad foreground interleave, so v4.2 rejects that as a fake proof.
+
+### Input Evidence
+
+Input must remain Makepad-owned for aichat. The above-Metal glass view is a
+diagnostic overlay only; it is not a native control host and must not become the
+production hit-test owner. Native interactive controls and forwarding policies
+belong to a later explicit platform phase.
+
+## Backend Naming
+
+Do not use "full native" for the current macOS target. User-facing and log
+names should distinguish:
+
+- `ShaderOverlay`: existing Makepad overlay material.
+- `AppleNativeUnderlay`: v4.1 native substrate/panel proof below the Makepad
+  Metal layer.
+- `ShaderBackdropInterior`: future Makepad-rendered full interior blur,
+  refraction, and readability treatment.
+- `AppleNativeInterleave`: reserved for a later renderer split if Makepad gains
+  separate lower and upper Metal surfaces.
+
+## Next Implementation Slice
+
+The next aichat implementation slice should start `ShaderBackdropInterior`:
+
+1. Add an offscreen scene/backdrop capture pass.
+2. Add blur and refraction sampling primitives.
+3. Teach `GlassPanel` to sample the backdrop texture.
+4. Keep Apple native underlay targets as diagnostics and platform comparison
+   targets.
+
+This route avoids overclaiming native Liquid Glass while still preserving the
+Apple native proof work for future renderer experiments.

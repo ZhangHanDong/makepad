@@ -632,6 +632,27 @@ script_mod! {
                     spacing: 0
                     draw_bg.color: #00000000
 
+                    metal_probe_pattern := View {
+                        visible: false
+                        width: Fill
+                        height: Fill
+                        show_bg: true
+                        draw_bg +: {
+                            pixel: fn() {
+                                let p = self.pos * self.rect_size
+                                let t = self.draw_pass.time
+                                let r = 0.5 + 0.5 * sin(p.x * 0.040 + t * 3.0)
+                                let g = 0.5 + 0.5 * sin(p.x * 0.055 + p.y * 0.012 + t * 4.0 + 2.1)
+                                let b = 0.5 + 0.5 * sin(p.y * 0.045 - t * 3.5 + 4.2)
+                                let grid_x = 0.5 + 0.5 * sin(p.x * 0.22)
+                                let grid_y = 0.5 + 0.5 * sin(p.y * 0.22)
+                                let grid = max(pow(grid_x, 18.0), pow(grid_y, 18.0))
+                                let color = vec3(r, g, b).mix(vec3(1.0, 1.0, 1.0), grid)
+                                return Pal.premul(vec4(color, 0.95))
+                            }
+                        }
+                    }
+
                     glass_container := GlassContainer {
                         width: Fill
                         height: Fill
@@ -1450,6 +1471,14 @@ fn native_compositing_proof_transparent_overlay() -> bool {
 
 fn native_compositing_proof_transparent_overlay_from_value(value: Option<&str>) -> bool {
     value == Some("transparent-overlay")
+}
+
+fn metal_probe_pattern_enabled() -> bool {
+    metal_probe_pattern_enabled_from_value(std::env::var("AICHAT_METAL_PROBE_PATTERN").ok().as_deref())
+}
+
+fn metal_probe_pattern_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "on" | "moving-pattern"))
 }
 
 fn glass_opacity_with_native_compositing_proof(
@@ -3931,6 +3960,13 @@ impl MatchEvent for App {
         self.update_status(cx);
         self.update_workspace_ui(cx);
         self.update_empty_state_visibility(cx);
+        let show_metal_probe_pattern = metal_probe_pattern_enabled();
+        self.ui
+            .view(cx, ids!(metal_probe_pattern))
+            .set_visible(cx, show_metal_probe_pattern);
+        self.ui
+            .widget(cx, ids!(glass_container))
+            .set_visible(cx, !show_metal_probe_pattern);
         let initial_glass_opacity = initial_glass_opacity();
         self.ui
             .slider(cx, ids!(opacity_slider))
@@ -4118,12 +4154,12 @@ mod tests {
     use super::{
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, glass_opacity_with_native_compositing_proof,
-        guard_native_splash_opaque_roots, native_compositing_proof_transparent_overlay_from_value,
-        parse_glass_backend, render_state_templates, resolve_glass_appearance,
-        resolve_startup_glass_appearance, should_start_window_drag, Agent, App, AppDemoState,
-        BackendType, ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
-        MacosGlassStyle, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY,
+        guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
+        native_compositing_proof_transparent_overlay_from_value, parse_glass_backend,
+        render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
+        should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -4355,6 +4391,16 @@ mod tests {
             ),
             native
         );
+    }
+
+    #[test]
+    fn aichat_above_metal_probe_pattern_env_accepts_explicit_values() {
+        assert!(metal_probe_pattern_enabled_from_value(Some("1")));
+        assert!(metal_probe_pattern_enabled_from_value(Some("true")));
+        assert!(metal_probe_pattern_enabled_from_value(Some("on")));
+        assert!(metal_probe_pattern_enabled_from_value(Some("moving-pattern")));
+        assert!(!metal_probe_pattern_enabled_from_value(None));
+        assert!(!metal_probe_pattern_enabled_from_value(Some("stripes")));
     }
 
     #[test]

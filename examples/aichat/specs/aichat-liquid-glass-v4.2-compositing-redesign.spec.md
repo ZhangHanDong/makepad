@@ -2,7 +2,9 @@
 
 ## Status
 
-Design route. No implementation is implied by this document.
+Prototype route decision recorded. The dedicated above-Metal probe is
+implemented; full production integration is intentionally deferred to the
+selected `ShaderBackdropInterior` route.
 
 v4.2 follows the v4.1 native proof work. v4.1 proved that Makepad can create
 Apple native glass views and align them with aichat panels. It did not prove
@@ -19,6 +21,11 @@ Related documents:
 - [aichat-liquid-glass-v4.1-manual-visual-checklist.md](aichat-liquid-glass-v4.1-manual-visual-checklist.md)
 - [aichat-liquid-glass-step-12-native-compositing-proof.spec](aichat-liquid-glass-step-12-native-compositing-proof.spec)
 - [aichat-liquid-glass-step-13-proof-conclusion-and-log-throttle.spec](aichat-liquid-glass-step-13-proof-conclusion-and-log-throttle.spec)
+- [aichat-liquid-glass-step-15-above-metal-probe.spec](aichat-liquid-glass-step-15-above-metal-probe.spec)
+- [aichat-liquid-glass-step-16-two-layer-interleave-probe.spec](aichat-liquid-glass-step-16-two-layer-interleave-probe.spec)
+- [aichat-liquid-glass-step-17-input-studio-probe.spec](aichat-liquid-glass-step-17-input-studio-probe.spec)
+- [aichat-liquid-glass-v4.2-above-metal-probe-result.md](aichat-liquid-glass-v4.2-above-metal-probe-result.md)
+- [aichat-liquid-glass-v4.2-route-decision.md](aichat-liquid-glass-v4.2-route-decision.md)
 
 ## Objective
 
@@ -214,6 +221,21 @@ pub enum GlassBackend {
 ```
 
 Names are illustrative; final naming should match implementation evidence.
+
+## v4.2 Decision
+
+The selected route is `ShaderBackdropInterior`.
+
+The above-Metal probe proved that a native AppKit glass view can be visible
+above the Makepad Metal layer in real macOS window composition, but that
+hierarchy covers Makepad-rendered text and controls. Studio framebuffer
+screenshots also omit that above-Metal native overlay. A true
+`AppleNativeInterleave` route would require a renderer split into lower and
+upper Makepad Metal surfaces; v4.2 does not implement that split.
+
+Therefore the next complete interior Liquid Glass implementation should be a
+Makepad-rendered `ShaderBackdropInterior`, while the current native targets are
+described as `AppleNativeUnderlay` diagnostics/proofs.
 
 ## Non-Goals
 

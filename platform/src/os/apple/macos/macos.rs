@@ -62,6 +62,18 @@ fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
     }
 }
 
+fn requested_above_metal_glass_probe_style_from_env() -> Option<MacosNativeGlassStyle> {
+    match std::env::var("AICHAT_NATIVE_ABOVE_METAL_PROBE")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("regular") => Some(MacosNativeGlassStyle::Regular),
+        Some("clear") | Some("1") | Some("true") | Some("on") => Some(MacosNativeGlassStyle::Clear),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub struct MetalWindow {
     pub window_id: WindowId,
@@ -927,6 +939,11 @@ impl Cx {
                             .cocoa_window
                             .install_native_glass_substrate(style);
                         self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
+                    }
+                    if let Some(style) = requested_above_metal_glass_probe_style_from_env() {
+                        metal_window
+                            .cocoa_window
+                            .install_above_metal_glass_probe(style);
                     }
                     self.windows[window_id].window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
