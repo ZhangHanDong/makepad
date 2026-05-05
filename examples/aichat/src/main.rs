@@ -1385,6 +1385,7 @@ enum ShaderBackdropProof {
     BlurPass,
     BlurredTexture,
     Refraction,
+    Interior,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1437,6 +1438,7 @@ enum GlassBackendRequest {
     ShaderBackdropBlurPassProof,
     ShaderBackdropBlurredTextureProof,
     ShaderBackdropRefractionProof,
+    ShaderBackdropInterior,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1487,6 +1489,7 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         Some("shader-backdrop-refraction-proof") => {
             (GlassBackendRequest::ShaderBackdropRefractionProof, None)
         }
+        Some("shader-backdrop-interior") => (GlassBackendRequest::ShaderBackdropInterior, None),
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1586,6 +1589,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::Refraction,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropInterior => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::Interior,
                 }),
             },
             warning: None,
@@ -3914,6 +3926,7 @@ impl App {
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::Interior
         )
     }
 
@@ -3923,13 +3936,16 @@ impl App {
             ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::Interior
         )
     }
 
     fn shader_backdrop_proof_samples_blurred_texture(proof: ShaderBackdropProof) -> bool {
         matches!(
             proof,
-            ShaderBackdropProof::BlurredTexture | ShaderBackdropProof::Refraction
+            ShaderBackdropProof::BlurredTexture
+                | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::Interior
         )
     }
 
@@ -4190,6 +4206,7 @@ impl App {
             Some(ShaderBackdropProof::BlurPass) => 0.0,
             Some(ShaderBackdropProof::BlurredTexture) => 0.0,
             Some(ShaderBackdropProof::Refraction) => 0.0,
+            Some(ShaderBackdropProof::Interior) => 0.0,
             None => 0.0,
         };
         let backdrop_blur_radius = match backdrop_proof {
@@ -4207,7 +4224,8 @@ impl App {
                 | ShaderBackdropProof::OffscreenScene
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
-                | ShaderBackdropProof::Refraction,
+                | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::Interior,
             ) => 1.0,
             _ => 0.0,
         };
@@ -4217,16 +4235,19 @@ impl App {
                 | ShaderBackdropProof::OffscreenScene
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
-                | ShaderBackdropProof::Refraction,
+                | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::Interior,
             ) => 1.0,
             _ => 0.0,
         };
         let backdrop_refraction_strength = match backdrop_proof {
             Some(ShaderBackdropProof::Refraction) => 1.0,
+            Some(ShaderBackdropProof::Interior) => 0.72,
             _ => 0.0,
         };
         let backdrop_rim_strength = match backdrop_proof {
             Some(ShaderBackdropProof::Refraction) => 0.12,
+            Some(ShaderBackdropProof::Interior) => 0.09,
             _ => 0.0,
         };
         let backdrop_texture_size = self.shader_backdrop_texture_size_for_window(cx);
@@ -5012,6 +5033,27 @@ mod tests {
     }
 
     #[test]
+    fn aichat_shader_backend_resolves_to_default_shader() {
+        let explicit = resolve_glass_appearance(Some("shader"), false);
+        assert_eq!(explicit.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(explicit.appearance.backdrop, None);
+        assert_eq!(
+            explicit.appearance.panel_preset(),
+            GlassPanelPreset::ShaderDefault
+        );
+        assert!(explicit.warning.is_none());
+
+        let default = resolve_glass_appearance(None, false);
+        assert_eq!(default.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(default.appearance.backdrop, None);
+        assert_eq!(
+            default.appearance.panel_preset(),
+            GlassPanelPreset::ShaderDefault
+        );
+        assert!(default.warning.is_none());
+    }
+
+    #[test]
     fn aichat_shader_backdrop_proof_resolves_to_shader_substrate_with_backdrop() {
         let resolved = resolve_glass_appearance(Some("shader-backdrop-proof"), false);
         assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
@@ -5138,6 +5180,23 @@ mod tests {
             resolved.appearance.backdrop,
             Some(ShaderBackdropConfig {
                 proof: ShaderBackdropProof::Refraction,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_interior_resolves_to_interior_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-interior"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::Interior,
             })
         );
         assert_eq!(
