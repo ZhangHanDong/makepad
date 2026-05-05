@@ -29,6 +29,7 @@ script_mod! {
     mod.draw.DrawAichatBackdropScene = set_type_default() do #(DrawAichatBackdropScene::script_shader(vm)){
         ..mod.draw.DrawQuad
         scene_mode: 0.0
+        scene_grid_strength: uniform(0.18)
 
         pixel: fn() {
             let p = self.pos
@@ -47,7 +48,7 @@ script_mod! {
             let line_b = 0.5 + 0.5 * sin(px.x * 0.010 - px.y * 0.018 + t * 0.33 + 2.0)
             let grid_x = pow(0.5 + 0.5 * sin(px.x * 0.070), 18.0)
             let grid_y = pow(0.5 + 0.5 * sin(px.y * 0.070), 18.0)
-            let grid = max(grid_x, grid_y) * 0.18
+            let grid = max(grid_x, grid_y) * self.scene_grid_strength
             let scene = base
                 + cyan * c1
                 + gold * c2
@@ -1449,6 +1450,33 @@ struct GlassConfigResolution {
     warning: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ShaderBackdropVisualProfile {
+    scene_grid_strength: f32,
+    refraction_strength: f32,
+    rim_strength: f32,
+}
+
+fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropVisualProfile {
+    match proof {
+        ShaderBackdropProof::Interior => ShaderBackdropVisualProfile {
+            scene_grid_strength: 0.045,
+            refraction_strength: 0.64,
+            rim_strength: 0.075,
+        },
+        ShaderBackdropProof::Refraction => ShaderBackdropVisualProfile {
+            scene_grid_strength: 0.18,
+            refraction_strength: 1.0,
+            rim_strength: 0.12,
+        },
+        _ => ShaderBackdropVisualProfile {
+            scene_grid_strength: 0.18,
+            refraction_strength: 0.0,
+            rim_strength: 0.0,
+        },
+    }
+}
+
 impl GlassAppearance {
     fn panel_preset(self) -> GlassPanelPreset {
         match self.substrate {
@@ -1473,10 +1501,9 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         Some("shader-backdrop-texture-proof") => {
             (GlassBackendRequest::ShaderBackdropTextureProof, None)
         }
-        Some("shader-backdrop-screen-texture-proof") => (
-            GlassBackendRequest::ShaderBackdropScreenTextureProof,
-            None,
-        ),
+        Some("shader-backdrop-screen-texture-proof") => {
+            (GlassBackendRequest::ShaderBackdropScreenTextureProof, None)
+        }
         Some("shader-backdrop-scene-proof") => {
             (GlassBackendRequest::ShaderBackdropSceneProof, None)
         }
@@ -1647,7 +1674,9 @@ fn initial_glass_opacity() -> f64 {
 
 fn native_compositing_proof_transparent_overlay() -> bool {
     native_compositing_proof_transparent_overlay_from_value(
-        std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF").ok().as_deref(),
+        std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF")
+            .ok()
+            .as_deref(),
     )
 }
 
@@ -1656,7 +1685,9 @@ fn native_compositing_proof_transparent_overlay_from_value(value: Option<&str>) 
 }
 
 fn metal_probe_pattern_enabled() -> bool {
-    metal_probe_pattern_enabled_from_value(std::env::var("AICHAT_METAL_PROBE_PATTERN").ok().as_deref())
+    metal_probe_pattern_enabled_from_value(
+        std::env::var("AICHAT_METAL_PROBE_PATTERN").ok().as_deref(),
+    )
 }
 
 fn metal_probe_pattern_enabled_from_value(value: Option<&str>) -> bool {
@@ -1670,8 +1701,8 @@ fn shader_backdrop_texture_signal_data() -> Vec<f32> {
         for x in 0..SHADER_BACKDROP_TEXTURE_SIZE {
             let u = x as f32 / (SHADER_BACKDROP_TEXTURE_SIZE - 1) as f32;
             let v = y as f32 / (SHADER_BACKDROP_TEXTURE_SIZE - 1) as f32;
-            let band = ((u * 18.0).sin() * 0.5 + 0.5) * 0.42
-                + ((v * 14.0 + 1.4).sin() * 0.5 + 0.5) * 0.34;
+            let band =
+                ((u * 18.0).sin() * 0.5 + 0.5) * 0.42 + ((v * 14.0 + 1.4).sin() * 0.5 + 0.5) * 0.34;
             let diagonal = (((u + v) * 20.0 + 2.0).sin() * 0.5 + 0.5) * 0.24;
             let grid_x = ((u * 54.0).sin() * 0.5 + 0.5).powf(18.0);
             let grid_y = ((v * 54.0).sin() * 0.5 + 0.5).powf(18.0);
@@ -1692,6 +1723,8 @@ pub struct DrawAichatBackdropScene {
     draw_super: DrawQuad,
     #[live]
     scene_mode: f32,
+    #[rust(0.18)]
+    scene_grid_strength: f32,
 }
 
 #[derive(Script, ScriptHook)]
@@ -4008,7 +4041,8 @@ impl App {
         texture_size: Vec2f,
     ) {
         let panel_ref = self.ui.widget(cx, path);
-        if let Some(mut panel) = panel_ref.borrow_mut::<makepad_widgets::glass_panel::GlassPanel>() {
+        if let Some(mut panel) = panel_ref.borrow_mut::<makepad_widgets::glass_panel::GlassPanel>()
+        {
             panel.set_backdrop_texture(texture);
             panel.set_backdrop_texture_mapping(screen_space, texture_size);
         };
@@ -4080,15 +4114,19 @@ impl App {
         cx: &mut Cx2d,
         size: Vec2f,
         target: &Texture,
+        profile: ShaderBackdropVisualProfile,
     ) {
-        self.shader_backdrop_scene_pass.set_size(
-            cx,
-            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
-        );
+        self.shader_backdrop_scene_pass
+            .set_size(cx, dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64));
         self.shader_backdrop_scene_pass.set_color_texture(
             cx,
             target,
             DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 1.0)),
+        );
+        self.draw_shader_backdrop_scene.draw_vars.set_uniform(
+            cx,
+            live_id!(scene_grid_strength),
+            &[profile.scene_grid_strength],
         );
 
         cx.begin_pass(&self.shader_backdrop_scene_pass, None);
@@ -4119,21 +4157,16 @@ impl App {
         size: Vec2f,
         direction: Vec2f,
     ) {
-        pass.set_size(
-            cx,
-            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
-        );
+        pass.set_size(cx, dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64));
         pass.set_color_texture(
             cx,
             target,
             DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 1.0)),
         );
         draw_blur.draw_vars.set_texture(0, source);
-        draw_blur.draw_vars.set_uniform(
-            cx,
-            live_id!(blur_direction),
-            &[direction.x, direction.y],
-        );
+        draw_blur
+            .draw_vars
+            .set_uniform(cx, live_id!(blur_direction), &[direction.x, direction.y]);
         draw_blur
             .draw_vars
             .set_uniform(cx, live_id!(blur_radius), &[2.5]);
@@ -4240,22 +4273,20 @@ impl App {
             ) => 1.0,
             _ => 0.0,
         };
-        let backdrop_refraction_strength = match backdrop_proof {
-            Some(ShaderBackdropProof::Refraction) => 1.0,
-            Some(ShaderBackdropProof::Interior) => 0.72,
-            _ => 0.0,
-        };
-        let backdrop_rim_strength = match backdrop_proof {
-            Some(ShaderBackdropProof::Refraction) => 0.12,
-            Some(ShaderBackdropProof::Interior) => 0.09,
-            _ => 0.0,
-        };
         let backdrop_texture_size = self.shader_backdrop_texture_size_for_window(cx);
-        let bind_backdrop_texture =
-            matches!(
-                backdrop_proof,
-                Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
-            );
+        let backdrop_profile = backdrop_proof
+            .map(shader_backdrop_visual_profile)
+            .unwrap_or(ShaderBackdropVisualProfile {
+                scene_grid_strength: 0.18,
+                refraction_strength: 0.0,
+                rim_strength: 0.0,
+            });
+        let backdrop_refraction_strength = backdrop_profile.refraction_strength;
+        let backdrop_rim_strength = backdrop_profile.rim_strength;
+        let bind_backdrop_texture = matches!(
+            backdrop_proof,
+            Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
+        );
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
             GlassSubstrate::MacosNative {
@@ -4279,10 +4310,8 @@ impl App {
         );
         if use_native_panels
             && native_compositing_proof_transparent_overlay_from_value(compositing_proof.as_deref())
-            && !AICHAT_NATIVE_COMPOSITING_PROOF_LOGGED.swap(
-                true,
-                std::sync::atomic::Ordering::Relaxed,
-            )
+            && !AICHAT_NATIVE_COMPOSITING_PROOF_LOGGED
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
             log!("[liquid-glass] compositing-proof=transparent-overlay");
         }
@@ -4485,7 +4514,8 @@ impl MatchEvent for App {
         let size = self.shader_backdrop_texture_size_for_window(cx);
         let (scene_texture, blur_h_texture, blur_v_texture) =
             self.ensure_shader_backdrop_render_textures(cx, size);
-        self.render_shader_backdrop_scene_pass(cx, size, &scene_texture);
+        let profile = shader_backdrop_visual_profile(proof);
+        self.render_shader_backdrop_scene_pass(cx, size, &scene_texture, profile);
 
         let final_texture = if Self::shader_backdrop_proof_uses_blur_pass(proof) {
             Self::render_shader_backdrop_blur_pass(
@@ -4864,9 +4894,9 @@ mod tests {
         guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value, parse_glass_backend,
         render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
-        should_start_window_drag, Agent, App, AppDemoState, BackendType, ClaudeCodeCliAgent,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppDemoState,
+        BackendType, ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
@@ -5106,7 +5136,8 @@ mod tests {
 
     #[test]
     fn aichat_shader_backdrop_screen_texture_proof_resolves_to_screen_texture_backdrop() {
-        let resolved = resolve_glass_appearance(Some("shader-backdrop-screen-texture-proof"), false);
+        let resolved =
+            resolve_glass_appearance(Some("shader-backdrop-screen-texture-proof"), false);
         assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert_eq!(
             resolved.appearance.backdrop,
@@ -5157,7 +5188,8 @@ mod tests {
 
     #[test]
     fn aichat_shader_backdrop_blurred_texture_proof_resolves_to_blurred_texture_backdrop() {
-        let resolved = resolve_glass_appearance(Some("shader-backdrop-blurred-texture-proof"), false);
+        let resolved =
+            resolve_glass_appearance(Some("shader-backdrop-blurred-texture-proof"), false);
         assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert_eq!(
             resolved.appearance.backdrop,
@@ -5207,6 +5239,16 @@ mod tests {
     }
 
     #[test]
+    fn aichat_shader_backdrop_interior_visual_profile_is_less_diagnostic_than_refraction_proof() {
+        let interior = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        let refraction = shader_backdrop_visual_profile(ShaderBackdropProof::Refraction);
+
+        assert!(interior.scene_grid_strength < refraction.scene_grid_strength);
+        assert!(interior.refraction_strength < refraction.refraction_strength);
+        assert!(interior.rim_strength < refraction.rim_strength);
+    }
+
+    #[test]
     fn aichat_native_overlay_preset_is_lower_and_monotonic() {
         let shader = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::ShaderDefault);
         let native = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
@@ -5230,8 +5272,7 @@ mod tests {
 
     #[test]
     fn aichat_native_clear_overlay_is_lighter_than_regular_native_overlay() {
-        let regular =
-            glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
+        let regular = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
         let clear = regular.with_native_clear_multiplier();
 
         assert!(clear.app < regular.app);
@@ -5246,19 +5287,16 @@ mod tests {
 
     #[test]
     fn aichat_native_compositing_proof_transparent_overlay_zeros_decoration() {
-        assert!(native_compositing_proof_transparent_overlay_from_value(Some(
-            "transparent-overlay"
-        )));
-        assert!(!native_compositing_proof_transparent_overlay_from_value(Some(
-            "stripes"
-        )));
+        assert!(native_compositing_proof_transparent_overlay_from_value(
+            Some("transparent-overlay")
+        ));
+        assert!(!native_compositing_proof_transparent_overlay_from_value(
+            Some("stripes")
+        ));
 
         let native = glass_opacity_values(DEFAULT_GLASS_OPACITY, GlassPanelPreset::NativeOverlay);
-        let proof = glass_opacity_with_native_compositing_proof(
-            native,
-            true,
-            Some("transparent-overlay"),
-        );
+        let proof =
+            glass_opacity_with_native_compositing_proof(native, true, Some("transparent-overlay"));
 
         assert_eq!(proof.app, 0.0);
         assert_eq!(proof.sidebar, 0.0);
@@ -5270,11 +5308,7 @@ mod tests {
         assert_eq!(proof.halo_scale, 0.0);
 
         assert_eq!(
-            glass_opacity_with_native_compositing_proof(
-                native,
-                false,
-                Some("transparent-overlay")
-            ),
+            glass_opacity_with_native_compositing_proof(native, false, Some("transparent-overlay")),
             native
         );
     }
@@ -5284,7 +5318,9 @@ mod tests {
         assert!(metal_probe_pattern_enabled_from_value(Some("1")));
         assert!(metal_probe_pattern_enabled_from_value(Some("true")));
         assert!(metal_probe_pattern_enabled_from_value(Some("on")));
-        assert!(metal_probe_pattern_enabled_from_value(Some("moving-pattern")));
+        assert!(metal_probe_pattern_enabled_from_value(Some(
+            "moving-pattern"
+        )));
         assert!(!metal_probe_pattern_enabled_from_value(None));
         assert!(!metal_probe_pattern_enabled_from_value(Some("stripes")));
     }
