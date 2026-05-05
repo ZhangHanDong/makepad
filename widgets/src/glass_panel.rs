@@ -136,6 +136,8 @@ script_mod! {
             backdrop_grid_strength: instance(0.0)
             backdrop_blur_radius: instance(0.0)
             backdrop_blur_mix: instance(0.0)
+            backdrop_texture_strength: instance(0.0)
+            backdrop_texture: texture_2d(float)
 
             backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
                 let t = self.draw_pass.time
@@ -167,6 +169,10 @@ script_mod! {
                     + self.backdrop_signal_rgb(uv + vec2(-c.x, c.y))
                 ) * 0.065
                 return center + axial + diagonal
+            }
+
+            backdrop_texture_rgb: fn(uv: vec2) -> vec3 {
+                return self.backdrop_texture.sample(uv).rgb
             }
 
             pixel: fn() {
@@ -206,7 +212,10 @@ script_mod! {
                 let raw_backdrop_rgb = self.backdrop_signal_rgb(self.pos)
                 let blurred_backdrop_rgb = self.backdrop_signal_blurred_rgb(self.pos)
                 let blur_mix = clamp(self.backdrop_blur_mix, 0.0, 1.0)
-                let backdrop_rgb = raw_backdrop_rgb.mix(blurred_backdrop_rgb, blur_mix)
+                let procedural_backdrop_rgb = raw_backdrop_rgb.mix(blurred_backdrop_rgb, blur_mix)
+                let texture_backdrop_rgb = self.backdrop_texture_rgb(self.pos)
+                let texture_mix = clamp(self.backdrop_texture_strength, 0.0, 1.0)
+                let backdrop_rgb = procedural_backdrop_rgb.mix(texture_backdrop_rgb, texture_mix)
                 let shader_rgb = self.tint_color.rgb + highlight + noise
                 let sample_mix = clamp(self.backdrop_sample_strength * self.backdrop_mix, 0.0, 1.0)
                 let fill_rgb = shader_rgb.mix(backdrop_rgb + highlight + noise, sample_mix)
@@ -337,10 +346,17 @@ pub struct GlassPanel {
     pub native_z_order: f64,
 
     #[rust]
+    backdrop_texture: Option<Texture>,
+
+    #[rust]
     draw_state: DrawStateWrap<GlassPanelDrawState>,
 }
 
 impl GlassPanel {
+    pub fn set_backdrop_texture(&mut self, texture: Option<Texture>) {
+        self.backdrop_texture = texture;
+    }
+
     fn native_descriptor(&self, cx: &Cx) -> NativeGlassPanelDescriptor {
         NativeGlassPanelDescriptor {
             id: LiveId(self.widget_uid().0),
@@ -362,6 +378,9 @@ impl Widget for GlassPanel {
         }
 
         if let Some(GlassPanelDrawState::Drawing) = self.draw_state.get() {
+            if let Some(texture) = &self.backdrop_texture {
+                self.view.draw_bg.draw_vars.set_texture(0, texture);
+            }
             self.view.draw_walk(cx, scope, walk)?;
 
             if self.native {

@@ -1258,6 +1258,7 @@ static AICHAT_NATIVE_COMPOSITING_PROOF_LOGGED: std::sync::atomic::AtomicBool =
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
 const MIN_GLASS_OPACITY: f64 = 0.10;
 const MAX_GLASS_OPACITY: f64 = 1.00;
+const SHADER_BACKDROP_TEXTURE_SIZE: usize = 256;
 const INACTIVE_GLASS_MULTIPLIER: f64 = 0.70;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1321,6 +1322,7 @@ enum ShaderBackdropProof {
     #[default]
     RawSignal,
     BlurredSignal,
+    TextureSignal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1367,6 +1369,7 @@ enum GlassBackendRequest {
     Shader,
     ShaderBackdropProof,
     ShaderBackdropBlurProof,
+    ShaderBackdropTextureProof,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1398,6 +1401,9 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         Some("shader") => (GlassBackendRequest::Shader, None),
         Some("shader-backdrop-proof") => (GlassBackendRequest::ShaderBackdropProof, None),
         Some("shader-backdrop-blur-proof") => (GlassBackendRequest::ShaderBackdropBlurProof, None),
+        Some("shader-backdrop-texture-proof") => {
+            (GlassBackendRequest::ShaderBackdropTextureProof, None)
+        }
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1443,6 +1449,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::BlurredSignal,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropTextureProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::TextureSignal,
                 }),
             },
             warning: None,
@@ -1506,6 +1521,28 @@ fn metal_probe_pattern_enabled() -> bool {
 
 fn metal_probe_pattern_enabled_from_value(value: Option<&str>) -> bool {
     matches!(value, Some("1" | "true" | "on" | "moving-pattern"))
+}
+
+fn shader_backdrop_texture_signal_data() -> Vec<f32> {
+    let mut data =
+        Vec::with_capacity(SHADER_BACKDROP_TEXTURE_SIZE * SHADER_BACKDROP_TEXTURE_SIZE * 4);
+    for y in 0..SHADER_BACKDROP_TEXTURE_SIZE {
+        for x in 0..SHADER_BACKDROP_TEXTURE_SIZE {
+            let u = x as f32 / (SHADER_BACKDROP_TEXTURE_SIZE - 1) as f32;
+            let v = y as f32 / (SHADER_BACKDROP_TEXTURE_SIZE - 1) as f32;
+            let band = ((u * 18.0).sin() * 0.5 + 0.5) * 0.42
+                + ((v * 14.0 + 1.4).sin() * 0.5 + 0.5) * 0.34;
+            let diagonal = (((u + v) * 20.0 + 2.0).sin() * 0.5 + 0.5) * 0.24;
+            let grid_x = ((u * 54.0).sin() * 0.5 + 0.5).powf(18.0);
+            let grid_y = ((v * 54.0).sin() * 0.5 + 0.5).powf(18.0);
+            let grid = grid_x.max(grid_y) * 0.42;
+            let r = (0.16 + band * 0.22 + diagonal * 0.46 + grid * 0.62).clamp(0.0, 1.0);
+            let g = (0.24 + band * 0.58 + diagonal * 0.20 + grid * 0.55).clamp(0.0, 1.0);
+            let b = (0.34 + band * 0.46 + diagonal * 0.44 + grid * 0.38).clamp(0.0, 1.0);
+            data.extend_from_slice(&[r, g, b, 1.0]);
+        }
+    }
+    data
 }
 
 fn glass_opacity_with_native_compositing_proof(
@@ -3095,6 +3132,8 @@ pub struct App {
     #[rust]
     glass_appearance: GlassAppearance,
     #[rust]
+    shader_backdrop_texture: Option<Texture>,
+    #[rust]
     glass_inactive_multiplier: f64,
 }
 
@@ -3679,25 +3718,82 @@ impl App {
         self.ui.label(cx, ids!(status_label)).set_text(cx, status);
     }
 
-    fn apply_glass_appearance(&self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
+    fn ensure_shader_backdrop_texture(&mut self, cx: &mut Cx) -> Texture {
+        if let Some(texture) = &self.shader_backdrop_texture {
+            return texture.clone();
+        }
+        let texture = Texture::new_with_format(
+            cx,
+            TextureFormat::VecRGBAf32 {
+                width: SHADER_BACKDROP_TEXTURE_SIZE,
+                height: SHADER_BACKDROP_TEXTURE_SIZE,
+                data: Some(shader_backdrop_texture_signal_data()),
+                updated: TextureUpdated::Full,
+            },
+        );
+        self.shader_backdrop_texture = Some(texture.clone());
+        texture
+    }
+
+    fn set_shader_backdrop_texture_on_panel(
+        &self,
+        cx: &mut Cx,
+        path: &[LiveId],
+        texture: Option<Texture>,
+    ) {
+        let panel_ref = self.ui.widget(cx, path);
+        if let Some(mut panel) = panel_ref.borrow_mut::<makepad_widgets::glass_panel::GlassPanel>() {
+            panel.set_backdrop_texture(texture);
+        };
+    }
+
+    fn bind_shader_backdrop_texture(&mut self, cx: &mut Cx, enabled: bool) {
+        let texture = if enabled {
+            Some(self.ensure_shader_backdrop_texture(cx))
+        } else {
+            None
+        };
+        self.set_shader_backdrop_texture_on_panel(cx, ids!(app_shell), texture.clone());
+        self.set_shader_backdrop_texture_on_panel(cx, ids!(sidebar), texture.clone());
+        self.set_shader_backdrop_texture_on_panel(cx, ids!(main_area), texture.clone());
+        self.set_shader_backdrop_texture_on_panel(cx, ids!(composer), texture);
+    }
+
+    fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         let mut glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
-        let backdrop_sample_strength = if appearance.backdrop.is_some() { 1.0 } else { 0.0 };
-        let backdrop_mix = if appearance.backdrop.is_some() { 0.78 } else { 0.0 };
-        let backdrop_grid_strength = match appearance.backdrop.map(|config| config.proof) {
+        let backdrop_proof = appearance.backdrop.map(|config| config.proof);
+        let backdrop_sample_strength = if appearance.backdrop.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+        let backdrop_mix = if appearance.backdrop.is_some() {
+            0.78
+        } else {
+            0.0
+        };
+        let backdrop_grid_strength = match backdrop_proof {
             Some(ShaderBackdropProof::RawSignal) => 0.58,
             Some(ShaderBackdropProof::BlurredSignal) => 0.32,
+            Some(ShaderBackdropProof::TextureSignal) => 0.0,
             None => 0.0,
         };
-        let backdrop_blur_radius = match appearance.backdrop.map(|config| config.proof) {
+        let backdrop_blur_radius = match backdrop_proof {
             Some(ShaderBackdropProof::BlurredSignal) => 15.0,
             _ => 0.0,
         };
-        let backdrop_blur_mix = match appearance.backdrop.map(|config| config.proof) {
+        let backdrop_blur_mix = match backdrop_proof {
             Some(ShaderBackdropProof::BlurredSignal) => 1.0,
             _ => 0.0,
         };
+        let backdrop_texture_strength = match backdrop_proof {
+            Some(ShaderBackdropProof::TextureSignal) => 1.0,
+            _ => 0.0,
+        };
+        let bind_backdrop_texture =
+            matches!(backdrop_proof, Some(ShaderBackdropProof::TextureSignal));
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
             GlassSubstrate::MacosNative {
@@ -3748,6 +3844,7 @@ impl App {
                 backdrop_grid_strength: #(backdrop_grid_strength)
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
+                backdrop_texture_strength: #(backdrop_texture_strength)
             }
         });
 
@@ -3765,6 +3862,7 @@ impl App {
                 backdrop_grid_strength: #(backdrop_grid_strength)
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
+                backdrop_texture_strength: #(backdrop_texture_strength)
             }
         });
 
@@ -3782,6 +3880,7 @@ impl App {
                 backdrop_grid_strength: #(backdrop_grid_strength)
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
+                backdrop_texture_strength: #(backdrop_texture_strength)
             }
         });
 
@@ -3799,16 +3898,18 @@ impl App {
                 backdrop_grid_strength: #(backdrop_grid_strength)
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
+                backdrop_texture_strength: #(backdrop_texture_strength)
             }
         });
 
+        self.bind_shader_backdrop_texture(cx, bind_backdrop_texture);
         self.ui
             .label(cx, ids!(opacity_value))
             .set_text(cx, &format!("{:.0}%", opacity * 100.0));
         self.ui.redraw(cx);
     }
 
-    fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
+    fn apply_glass_opacity(&mut self, cx: &mut Cx, opacity: f64) {
         self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
 
@@ -4074,6 +4175,7 @@ impl AppMain for App {
         app.available_backends = Self::detect_available_backends();
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
         app.glass_inactive_multiplier = 1.0;
+        app.shader_backdrop_texture = None;
         let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
         let glass = resolve_startup_glass_appearance(glass_backend.as_deref());
         if let Some(warning) = glass.warning {
@@ -4422,6 +4524,23 @@ mod tests {
             resolved.appearance.backdrop,
             Some(ShaderBackdropConfig {
                 proof: ShaderBackdropProof::BlurredSignal,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_texture_proof_resolves_to_texture_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-texture-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::TextureSignal,
             })
         );
         assert_eq!(
