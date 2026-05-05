@@ -77,6 +77,14 @@ as an Apple-native underlay/substrate proof, not complete Liquid Glass. Complete
 Liquid Glass requires a later compositing design that is not limited to native
 panels below the Makepad Metal layer.
 
+Next phase:
+
+- [aichat-liquid-glass-v4.2-compositing-redesign.spec.md](aichat-liquid-glass-v4.2-compositing-redesign.spec.md)
+- [aichat-liquid-glass-v4.2-compositing-redesign.plan.md](aichat-liquid-glass-v4.2-compositing-redesign.plan.md)
+
+The v4.2 compositing redesign starts with native/Metal sampling probes before
+any aichat production UI integration.
+
 ## Known v4.1 Limitations
 
 v4.1 intentionally does not handle:
