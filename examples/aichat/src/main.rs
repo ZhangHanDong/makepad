@@ -26,6 +26,61 @@ script_mod! {
     use mod.res.*
     use mod.draw.*
 
+    mod.draw.DrawAichatBackdropScene = set_type_default() do #(DrawAichatBackdropScene::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        scene_mode: 0.0
+
+        pixel: fn() {
+            let p = self.pos
+            let px = self.pos * self.rect_size
+            let t = self.draw_pass.time
+            let cyan = vec3(0.45, 0.90, 1.0)
+            let gold = vec3(1.0, 0.76, 0.38)
+            let violet = vec3(0.78, 0.54, 1.0)
+            let mint = vec3(0.50, 1.0, 0.82)
+            let base = vec3(0.035, 0.075, 0.095).mix(vec3(0.12, 0.08, 0.12), p.y)
+            let c1 = smoothstep(0.52, 0.0, length(p - vec2(0.16, 0.16))) * 0.42
+            let c2 = smoothstep(0.42, 0.0, length(p - vec2(0.88, 0.15))) * 0.32
+            let c3 = smoothstep(0.58, 0.0, length(p - vec2(0.62, 0.86))) * 0.28
+            let c4 = smoothstep(0.46, 0.0, length(p - vec2(0.28, 0.78))) * 0.24
+            let line_a = 0.5 + 0.5 * sin(px.x * 0.018 + px.y * 0.010 + t * 0.40)
+            let line_b = 0.5 + 0.5 * sin(px.x * 0.010 - px.y * 0.018 + t * 0.33 + 2.0)
+            let grid_x = pow(0.5 + 0.5 * sin(px.x * 0.070), 18.0)
+            let grid_y = pow(0.5 + 0.5 * sin(px.y * 0.070), 18.0)
+            let grid = max(grid_x, grid_y) * 0.18
+            let scene = base
+                + cyan * c1
+                + gold * c2
+                + violet * c3
+                + mint * c4
+                + vec3(0.06, 0.08, 0.10) * line_a
+                + vec3(0.08, 0.06, 0.09) * line_b
+                + vec3(0.75, 0.95, 0.95) * grid
+            return Pal.premul(vec4(scene, 1.0))
+        }
+    }
+
+    mod.draw.DrawAichatBackdropBlur = set_type_default() do #(DrawAichatBackdropBlur::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        source_texture: texture_2d(float)
+        blur_direction: uniform(vec2(1.0, 0.0))
+        blur_radius: uniform(1.0)
+
+        pixel: fn() {
+            let uv = self.pos
+            let d = self.blur_direction * self.blur_radius
+            let rgb =
+                self.source_texture.sample(uv - d * 3.0).rgb * 0.070159
+                + self.source_texture.sample(uv - d * 2.0).rgb * 0.131075
+                + self.source_texture.sample(uv - d).rgb * 0.190713
+                + self.source_texture.sample(uv).rgb * 0.216106
+                + self.source_texture.sample(uv + d).rgb * 0.190713
+                + self.source_texture.sample(uv + d * 2.0).rgb * 0.131075
+                + self.source_texture.sample(uv + d * 3.0).rgb * 0.070159
+            return Pal.premul(vec4(rgb, 1.0))
+        }
+    }
+
     // Override theme fonts. Two purposes:
     //   1. font_code — CJK-capable monospace (LXGW Mono) so `` `inline` ``
     //      and CodeView render Chinese correctly.
@@ -614,6 +669,8 @@ script_mod! {
     }
 
     startup() do #(App::script_component(vm)){
+        draw_shader_backdrop_scene: mod.draw.DrawAichatBackdropScene{}
+        draw_shader_backdrop_blur: mod.draw.DrawAichatBackdropBlur{}
         ui: Root{
             main_window := Window{
                 show_caption_bar: false
@@ -1324,6 +1381,10 @@ enum ShaderBackdropProof {
     BlurredSignal,
     TextureSignal,
     ScreenTextureSignal,
+    OffscreenScene,
+    BlurPass,
+    BlurredTexture,
+    Refraction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1372,6 +1433,10 @@ enum GlassBackendRequest {
     ShaderBackdropBlurProof,
     ShaderBackdropTextureProof,
     ShaderBackdropScreenTextureProof,
+    ShaderBackdropSceneProof,
+    ShaderBackdropBlurPassProof,
+    ShaderBackdropBlurredTextureProof,
+    ShaderBackdropRefractionProof,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1410,6 +1475,18 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
             GlassBackendRequest::ShaderBackdropScreenTextureProof,
             None,
         ),
+        Some("shader-backdrop-scene-proof") => {
+            (GlassBackendRequest::ShaderBackdropSceneProof, None)
+        }
+        Some("shader-backdrop-blur-pass-proof") => {
+            (GlassBackendRequest::ShaderBackdropBlurPassProof, None)
+        }
+        Some("shader-backdrop-blurred-texture-proof") => {
+            (GlassBackendRequest::ShaderBackdropBlurredTextureProof, None)
+        }
+        Some("shader-backdrop-refraction-proof") => {
+            (GlassBackendRequest::ShaderBackdropRefractionProof, None)
+        }
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1473,6 +1550,42 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::ScreenTextureSignal,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropSceneProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::OffscreenScene,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropBlurPassProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::BlurPass,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropBlurredTextureProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::BlurredTexture,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropRefractionProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::Refraction,
                 }),
             },
             warning: None,
@@ -1558,6 +1671,26 @@ fn shader_backdrop_texture_signal_data() -> Vec<f32> {
         }
     }
     data
+}
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawAichatBackdropScene {
+    #[deref]
+    draw_super: DrawQuad,
+    #[live]
+    scene_mode: f32,
+}
+
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawAichatBackdropBlur {
+    #[deref]
+    draw_super: DrawQuad,
+    #[rust(vec2(1.0, 0.0))]
+    blur_direction: Vec2f,
+    #[rust(1.0)]
+    blur_radius: f32,
 }
 
 fn glass_opacity_with_native_compositing_proof(
@@ -3120,6 +3253,22 @@ CommonMark closes a 3-backtick fence at the next 3-backtick sequence — there i
 pub struct App {
     #[live]
     ui: WidgetRef,
+    #[new]
+    shader_backdrop_scene_pass: DrawPass,
+    #[new]
+    shader_backdrop_blur_h_pass: DrawPass,
+    #[new]
+    shader_backdrop_blur_v_pass: DrawPass,
+    #[new]
+    shader_backdrop_scene_draw_list: DrawList2d,
+    #[new]
+    shader_backdrop_blur_h_draw_list: DrawList2d,
+    #[new]
+    shader_backdrop_blur_v_draw_list: DrawList2d,
+    #[live]
+    draw_shader_backdrop_scene: DrawAichatBackdropScene,
+    #[live]
+    draw_shader_backdrop_blur: DrawAichatBackdropBlur,
     #[rust]
     agent: Option<Box<dyn Agent>>,
     #[rust]
@@ -3148,6 +3297,14 @@ pub struct App {
     glass_appearance: GlassAppearance,
     #[rust]
     shader_backdrop_texture: Option<Texture>,
+    #[rust]
+    shader_backdrop_scene_texture: Option<Texture>,
+    #[rust]
+    shader_backdrop_blur_h_texture: Option<Texture>,
+    #[rust]
+    shader_backdrop_blur_v_texture: Option<Texture>,
+    #[rust]
+    shader_backdrop_render_size: Vec2f,
     #[rust]
     glass_inactive_multiplier: f64,
 }
@@ -3750,6 +3907,82 @@ impl App {
         texture
     }
 
+    fn shader_backdrop_proof_uses_render_pass(proof: ShaderBackdropProof) -> bool {
+        matches!(
+            proof,
+            ShaderBackdropProof::OffscreenScene
+                | ShaderBackdropProof::BlurPass
+                | ShaderBackdropProof::BlurredTexture
+                | ShaderBackdropProof::Refraction
+        )
+    }
+
+    fn shader_backdrop_proof_uses_blur_pass(proof: ShaderBackdropProof) -> bool {
+        matches!(
+            proof,
+            ShaderBackdropProof::BlurPass
+                | ShaderBackdropProof::BlurredTexture
+                | ShaderBackdropProof::Refraction
+        )
+    }
+
+    fn shader_backdrop_proof_samples_blurred_texture(proof: ShaderBackdropProof) -> bool {
+        matches!(
+            proof,
+            ShaderBackdropProof::BlurredTexture | ShaderBackdropProof::Refraction
+        )
+    }
+
+    fn ensure_shader_backdrop_render_texture(
+        cx: &mut Cx,
+        texture: &mut Option<Texture>,
+        size: Vec2f,
+    ) -> Texture {
+        let width = size.x.max(1.0).ceil() as usize;
+        let height = size.y.max(1.0).ceil() as usize;
+        if let Some(existing) = texture {
+            return existing.clone();
+        }
+        let new_texture = Texture::new_with_format(
+            cx,
+            TextureFormat::RenderBGRAu8 {
+                size: TextureSize::Fixed { width, height },
+                initial: true,
+            },
+        );
+        *texture = Some(new_texture.clone());
+        new_texture
+    }
+
+    fn ensure_shader_backdrop_render_textures(
+        &mut self,
+        cx: &mut Cx,
+        size: Vec2f,
+    ) -> (Texture, Texture, Texture) {
+        if (self.shader_backdrop_render_size - size).length() > 0.5 {
+            self.shader_backdrop_scene_texture = None;
+            self.shader_backdrop_blur_h_texture = None;
+            self.shader_backdrop_blur_v_texture = None;
+            self.shader_backdrop_render_size = size;
+        }
+        let scene = Self::ensure_shader_backdrop_render_texture(
+            cx,
+            &mut self.shader_backdrop_scene_texture,
+            size,
+        );
+        let blur_h = Self::ensure_shader_backdrop_render_texture(
+            cx,
+            &mut self.shader_backdrop_blur_h_texture,
+            size,
+        );
+        let blur_v = Self::ensure_shader_backdrop_render_texture(
+            cx,
+            &mut self.shader_backdrop_blur_v_texture,
+            size,
+        );
+        (scene, blur_h, blur_v)
+    }
+
     fn set_shader_backdrop_texture_on_panel(
         &self,
         cx: &mut Cx,
@@ -3765,18 +3998,13 @@ impl App {
         };
     }
 
-    fn bind_shader_backdrop_texture(
-        &mut self,
+    fn bind_shader_backdrop_render_texture(
+        &self,
         cx: &mut Cx,
-        enabled: bool,
+        texture: Option<Texture>,
         screen_space: f32,
         texture_size: Vec2f,
     ) {
-        let texture = if enabled {
-            Some(self.ensure_shader_backdrop_texture(cx))
-        } else {
-            None
-        };
         self.set_shader_backdrop_texture_on_panel(
             cx,
             ids!(app_shell),
@@ -3807,6 +4035,21 @@ impl App {
         );
     }
 
+    fn bind_shader_backdrop_texture(
+        &mut self,
+        cx: &mut Cx,
+        enabled: bool,
+        screen_space: f32,
+        texture_size: Vec2f,
+    ) {
+        let texture = if enabled {
+            Some(self.ensure_shader_backdrop_texture(cx))
+        } else {
+            None
+        };
+        self.bind_shader_backdrop_render_texture(cx, texture, screen_space, texture_size);
+    }
+
     fn shader_backdrop_texture_size_for_window(&self, cx: &Cx) -> Vec2f {
         let window_size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
         if window_size.x >= 1.0 && window_size.y >= 1.0 {
@@ -3816,18 +4059,95 @@ impl App {
         }
     }
 
+    fn render_shader_backdrop_scene_pass(
+        &mut self,
+        cx: &mut Cx2d,
+        size: Vec2f,
+        target: &Texture,
+    ) {
+        self.shader_backdrop_scene_pass.set_size(
+            cx,
+            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+        );
+        self.shader_backdrop_scene_pass.set_color_texture(
+            cx,
+            target,
+            DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 1.0)),
+        );
+
+        cx.begin_pass(&self.shader_backdrop_scene_pass, None);
+        self.shader_backdrop_scene_draw_list.begin_always(cx);
+        cx.begin_root_turtle(
+            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            Layout::flow_down(),
+        );
+        self.draw_shader_backdrop_scene.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            },
+        );
+        cx.end_pass_sized_turtle();
+        self.shader_backdrop_scene_draw_list.end(cx);
+        cx.end_pass(&self.shader_backdrop_scene_pass);
+    }
+
+    fn render_shader_backdrop_blur_pass(
+        cx: &mut Cx2d,
+        pass: &DrawPass,
+        draw_list: &mut DrawList2d,
+        draw_blur: &mut DrawAichatBackdropBlur,
+        source: &Texture,
+        target: &Texture,
+        size: Vec2f,
+        direction: Vec2f,
+    ) {
+        pass.set_size(
+            cx,
+            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+        );
+        pass.set_color_texture(
+            cx,
+            target,
+            DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 1.0)),
+        );
+        draw_blur.draw_vars.set_texture(0, source);
+        draw_blur.draw_vars.set_uniform(
+            cx,
+            live_id!(blur_direction),
+            &[direction.x, direction.y],
+        );
+        draw_blur
+            .draw_vars
+            .set_uniform(cx, live_id!(blur_radius), &[2.5]);
+
+        cx.begin_pass(pass, None);
+        draw_list.begin_always(cx);
+        cx.begin_root_turtle(
+            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            Layout::flow_down(),
+        );
+        draw_blur.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            },
+        );
+        cx.end_pass_sized_turtle();
+        draw_list.end(cx);
+        cx.end_pass(pass);
+    }
+
     fn handle_shader_backdrop_window_geom_change(
         &mut self,
         cx: &mut Cx,
         event: &WindowGeomChangeEvent,
     ) {
-        if self.glass_appearance.backdrop
-            != Some(ShaderBackdropConfig {
-                proof: ShaderBackdropProof::ScreenTextureSignal,
-            })
-        {
+        let Some(backdrop) = self.glass_appearance.backdrop else {
             return;
-        }
+        };
         if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
             return;
         }
@@ -3835,7 +4155,14 @@ impl App {
         if size.x < 1.0 || size.y < 1.0 {
             return;
         }
-        self.bind_shader_backdrop_texture(cx, true, 1.0, vec2(size.x as f32, size.y as f32));
+        if backdrop.proof == ShaderBackdropProof::ScreenTextureSignal {
+            self.bind_shader_backdrop_texture(cx, true, 1.0, vec2(size.x as f32, size.y as f32));
+        } else if Self::shader_backdrop_proof_uses_render_pass(backdrop.proof) {
+            self.shader_backdrop_scene_texture = None;
+            self.shader_backdrop_blur_h_texture = None;
+            self.shader_backdrop_blur_v_texture = None;
+            self.shader_backdrop_render_size = vec2(size.x as f32, size.y as f32);
+        }
         self.ui.redraw(cx);
     }
 
@@ -3859,6 +4186,10 @@ impl App {
             Some(ShaderBackdropProof::BlurredSignal) => 0.32,
             Some(ShaderBackdropProof::TextureSignal) => 0.0,
             Some(ShaderBackdropProof::ScreenTextureSignal) => 0.0,
+            Some(ShaderBackdropProof::OffscreenScene) => 0.0,
+            Some(ShaderBackdropProof::BlurPass) => 0.0,
+            Some(ShaderBackdropProof::BlurredTexture) => 0.0,
+            Some(ShaderBackdropProof::Refraction) => 0.0,
             None => 0.0,
         };
         let backdrop_blur_radius = match backdrop_proof {
@@ -3870,11 +4201,32 @@ impl App {
             _ => 0.0,
         };
         let backdrop_texture_strength = match backdrop_proof {
-            Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal) => 1.0,
+            Some(
+                ShaderBackdropProof::TextureSignal
+                | ShaderBackdropProof::ScreenTextureSignal
+                | ShaderBackdropProof::OffscreenScene
+                | ShaderBackdropProof::BlurPass
+                | ShaderBackdropProof::BlurredTexture
+                | ShaderBackdropProof::Refraction,
+            ) => 1.0,
             _ => 0.0,
         };
         let backdrop_texture_screen_space = match backdrop_proof {
-            Some(ShaderBackdropProof::ScreenTextureSignal) => 1.0,
+            Some(
+                ShaderBackdropProof::ScreenTextureSignal
+                | ShaderBackdropProof::OffscreenScene
+                | ShaderBackdropProof::BlurPass
+                | ShaderBackdropProof::BlurredTexture
+                | ShaderBackdropProof::Refraction,
+            ) => 1.0,
+            _ => 0.0,
+        };
+        let backdrop_refraction_strength = match backdrop_proof {
+            Some(ShaderBackdropProof::Refraction) => 1.0,
+            _ => 0.0,
+        };
+        let backdrop_rim_strength = match backdrop_proof {
+            Some(ShaderBackdropProof::Refraction) => 0.12,
             _ => 0.0,
         };
         let backdrop_texture_size = self.shader_backdrop_texture_size_for_window(cx);
@@ -3934,6 +4286,8 @@ impl App {
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
                 backdrop_texture_strength: #(backdrop_texture_strength)
+                backdrop_refraction_strength: #(backdrop_refraction_strength)
+                backdrop_rim_strength: #(backdrop_rim_strength)
             }
         });
 
@@ -3952,6 +4306,8 @@ impl App {
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
                 backdrop_texture_strength: #(backdrop_texture_strength)
+                backdrop_refraction_strength: #(backdrop_refraction_strength)
+                backdrop_rim_strength: #(backdrop_rim_strength)
             }
         });
 
@@ -3970,6 +4326,8 @@ impl App {
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
                 backdrop_texture_strength: #(backdrop_texture_strength)
+                backdrop_refraction_strength: #(backdrop_refraction_strength)
+                backdrop_rim_strength: #(backdrop_rim_strength)
             }
         });
 
@@ -3988,6 +4346,8 @@ impl App {
                 backdrop_blur_radius: #(backdrop_blur_radius)
                 backdrop_blur_mix: #(backdrop_blur_mix)
                 backdrop_texture_strength: #(backdrop_texture_strength)
+                backdrop_refraction_strength: #(backdrop_refraction_strength)
+                backdrop_rim_strength: #(backdrop_rim_strength)
             }
         });
 
@@ -4092,6 +4452,55 @@ impl App {
 }
 
 impl MatchEvent for App {
+    fn handle_draw_2d(&mut self, cx: &mut Cx2d) {
+        let Some(backdrop) = self.glass_appearance.backdrop else {
+            return;
+        };
+        let proof = backdrop.proof;
+        if !Self::shader_backdrop_proof_uses_render_pass(proof) {
+            return;
+        }
+
+        let size = self.shader_backdrop_texture_size_for_window(cx);
+        let (scene_texture, blur_h_texture, blur_v_texture) =
+            self.ensure_shader_backdrop_render_textures(cx, size);
+        self.render_shader_backdrop_scene_pass(cx, size, &scene_texture);
+
+        let final_texture = if Self::shader_backdrop_proof_uses_blur_pass(proof) {
+            Self::render_shader_backdrop_blur_pass(
+                cx,
+                &self.shader_backdrop_blur_h_pass,
+                &mut self.shader_backdrop_blur_h_draw_list,
+                &mut self.draw_shader_backdrop_blur,
+                &scene_texture,
+                &blur_h_texture,
+                size,
+                vec2(1.0 / size.x.max(1.0), 0.0),
+            );
+            Self::render_shader_backdrop_blur_pass(
+                cx,
+                &self.shader_backdrop_blur_v_pass,
+                &mut self.shader_backdrop_blur_v_draw_list,
+                &mut self.draw_shader_backdrop_blur,
+                &blur_h_texture,
+                &blur_v_texture,
+                size,
+                vec2(0.0, 1.0 / size.y.max(1.0)),
+            );
+            if Self::shader_backdrop_proof_samples_blurred_texture(proof)
+                || proof == ShaderBackdropProof::BlurPass
+            {
+                blur_v_texture
+            } else {
+                scene_texture
+            }
+        } else {
+            scene_texture
+        };
+
+        self.bind_shader_backdrop_render_texture(cx, Some(final_texture), 1.0, size);
+    }
+
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         for action in actions {
             if let SplashAction::Notify { event_id, payload } = action.cast() {
@@ -4270,6 +4679,10 @@ impl AppMain for App {
         app.moonshot_thinking_enabled = Self::initial_moonshot_thinking_enabled();
         app.glass_inactive_multiplier = 1.0;
         app.shader_backdrop_texture = None;
+        app.shader_backdrop_scene_texture = None;
+        app.shader_backdrop_blur_h_texture = None;
+        app.shader_backdrop_blur_v_texture = None;
+        app.shader_backdrop_render_size = vec2(0.0, 0.0);
         let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
         let glass = resolve_startup_glass_appearance(glass_backend.as_deref());
         if let Some(warning) = glass.warning {
@@ -4306,7 +4719,9 @@ impl AppMain for App {
             _ => {}
         }
 
-        self.match_event(cx, event);
+        if self.match_event_with_draw_2d(cx, event).is_err() {
+            self.match_event(cx, event);
+        }
         self.ui.handle_event(cx, event, &mut Scope::empty());
 
         if let Some(agent) = &mut self.agent {
@@ -4655,6 +5070,74 @@ mod tests {
             resolved.appearance.backdrop,
             Some(ShaderBackdropConfig {
                 proof: ShaderBackdropProof::ScreenTextureSignal,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_offscreen_scene_proof_resolves_to_offscreen_scene_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-scene-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::OffscreenScene,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_blur_pass_proof_resolves_to_blur_pass_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-blur-pass-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::BlurPass,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_blurred_texture_proof_resolves_to_blurred_texture_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-blurred-texture-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::BlurredTexture,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_refraction_proof_resolves_to_refraction_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-refraction-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::Refraction,
             })
         );
         assert_eq!(

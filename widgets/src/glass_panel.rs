@@ -141,6 +141,8 @@ script_mod! {
             backdrop_texture_size: uniform(vec2(900.0, 700.0))
             backdrop_texture_uv_offset: uniform(vec2(0.0, 0.0))
             backdrop_texture_uv_scale: uniform(vec2(1.0, 1.0))
+            backdrop_refraction_strength: instance(0.0)
+            backdrop_rim_strength: instance(0.0)
             backdrop_texture: texture_2d(float)
 
             backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
@@ -175,9 +177,23 @@ script_mod! {
                 return center + axial + diagonal
             }
 
+            backdrop_edge_weight: fn(uv: vec2) -> float {
+                let px = uv * self.rect_size
+                let edge = min(min(px.x, self.rect_size.x - px.x), min(px.y, self.rect_size.y - px.y))
+                return clamp(1.0 - edge / 34.0, 0.0, 1.0)
+            }
+
+            backdrop_refracted_uv: fn(uv: vec2) -> vec2 {
+                let centered = uv - vec2(0.5, 0.5)
+                let edge = self.backdrop_edge_weight(uv)
+                let pull = centered * edge * self.backdrop_refraction_strength * 0.090
+                return clamp(uv + pull, vec2(0.0, 0.0), vec2(1.0, 1.0))
+            }
+
             backdrop_texture_uv: fn(uv: vec2) -> vec2 {
-                let screen_uv = self.backdrop_texture_uv_offset + uv * self.backdrop_texture_uv_scale
-                return uv.mix(screen_uv, clamp(self.backdrop_texture_screen_space, 0.0, 1.0))
+                let local_uv = self.backdrop_refracted_uv(uv)
+                let screen_uv = self.backdrop_texture_uv_offset + local_uv * self.backdrop_texture_uv_scale
+                return local_uv.mix(screen_uv, clamp(self.backdrop_texture_screen_space, 0.0, 1.0))
             }
 
             backdrop_texture_rgb: fn(uv: vec2) -> vec3 {
@@ -227,7 +243,9 @@ script_mod! {
                 let backdrop_rgb = procedural_backdrop_rgb.mix(texture_backdrop_rgb, texture_mix)
                 let shader_rgb = self.tint_color.rgb + highlight + noise
                 let sample_mix = clamp(self.backdrop_sample_strength * self.backdrop_mix, 0.0, 1.0)
+                let rim = self.backdrop_edge_weight(self.pos) * self.backdrop_rim_strength
                 let fill_rgb = shader_rgb.mix(backdrop_rgb + highlight + noise, sample_mix)
+                    + vec3(1.0, 0.94, 0.78) * rim
                 let fill = vec4(fill_rgb, self.tint_alpha)
                 sdf.fill_keep(fill)
 
