@@ -134,6 +134,8 @@ script_mod! {
             backdrop_sample_strength: instance(0.0)
             backdrop_mix: instance(0.0)
             backdrop_grid_strength: instance(0.0)
+            backdrop_blur_radius: instance(0.0)
+            backdrop_blur_mix: instance(0.0)
 
             backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
                 let t = self.draw_pass.time
@@ -144,6 +146,27 @@ script_mod! {
                 let grid_y = 0.5 + 0.5 * sin(uv.y * 72.0)
                 let grid = max(pow(grid_x, 20.0), pow(grid_y, 20.0)) * self.backdrop_grid_strength
                 return vec3(r, g, b).mix(vec3(1.0, 0.96, 0.78), clamp(grid, 0.0, 1.0))
+            }
+
+            backdrop_signal_blurred_rgb: fn(uv: vec2) -> vec3 {
+                let px = self.backdrop_blur_radius / max(min(self.rect_size.x, self.rect_size.y), 1.0)
+                let a = vec2(px, 0.0)
+                let b = vec2(0.0, px)
+                let c = vec2(px * 0.707, px * 0.707)
+                let center = self.backdrop_signal_rgb(uv) * 0.22
+                let axial = (
+                    self.backdrop_signal_rgb(uv + a)
+                    + self.backdrop_signal_rgb(uv - a)
+                    + self.backdrop_signal_rgb(uv + b)
+                    + self.backdrop_signal_rgb(uv - b)
+                ) * 0.13
+                let diagonal = (
+                    self.backdrop_signal_rgb(uv + c)
+                    + self.backdrop_signal_rgb(uv - c)
+                    + self.backdrop_signal_rgb(uv + vec2(c.x, -c.y))
+                    + self.backdrop_signal_rgb(uv + vec2(-c.x, c.y))
+                ) * 0.065
+                return center + axial + diagonal
             }
 
             pixel: fn() {
@@ -180,7 +203,10 @@ script_mod! {
                     ) - 0.5
                 ) * self.noise_strength
 
-                let backdrop_rgb = self.backdrop_signal_rgb(self.pos)
+                let raw_backdrop_rgb = self.backdrop_signal_rgb(self.pos)
+                let blurred_backdrop_rgb = self.backdrop_signal_blurred_rgb(self.pos)
+                let blur_mix = clamp(self.backdrop_blur_mix, 0.0, 1.0)
+                let backdrop_rgb = raw_backdrop_rgb.mix(blurred_backdrop_rgb, blur_mix)
                 let shader_rgb = self.tint_color.rgb + highlight + noise
                 let sample_mix = clamp(self.backdrop_sample_strength * self.backdrop_mix, 0.0, 1.0)
                 let fill_rgb = shader_rgb.mix(backdrop_rgb + highlight + noise, sample_mix)

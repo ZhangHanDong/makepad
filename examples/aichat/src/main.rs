@@ -1320,6 +1320,7 @@ struct ShaderBackdropConfig {
 enum ShaderBackdropProof {
     #[default]
     RawSignal,
+    BlurredSignal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1365,6 +1366,7 @@ enum GlassPanelPreset {
 enum GlassBackendRequest {
     Shader,
     ShaderBackdropProof,
+    ShaderBackdropBlurProof,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1395,6 +1397,7 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         None => (GlassBackendRequest::Shader, None),
         Some("shader") => (GlassBackendRequest::Shader, None),
         Some("shader-backdrop-proof") => (GlassBackendRequest::ShaderBackdropProof, None),
+        Some("shader-backdrop-blur-proof") => (GlassBackendRequest::ShaderBackdropBlurProof, None),
         Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
@@ -1431,6 +1434,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::RawSignal,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropBlurProof => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::BlurredSignal,
                 }),
             },
             warning: None,
@@ -3673,7 +3685,19 @@ impl App {
             .with_inactive_multiplier(self.glass_inactive_multiplier);
         let backdrop_sample_strength = if appearance.backdrop.is_some() { 1.0 } else { 0.0 };
         let backdrop_mix = if appearance.backdrop.is_some() { 0.78 } else { 0.0 };
-        let backdrop_grid_strength = if appearance.backdrop.is_some() { 0.58 } else { 0.0 };
+        let backdrop_grid_strength = match appearance.backdrop.map(|config| config.proof) {
+            Some(ShaderBackdropProof::RawSignal) => 0.58,
+            Some(ShaderBackdropProof::BlurredSignal) => 0.32,
+            None => 0.0,
+        };
+        let backdrop_blur_radius = match appearance.backdrop.map(|config| config.proof) {
+            Some(ShaderBackdropProof::BlurredSignal) => 15.0,
+            _ => 0.0,
+        };
+        let backdrop_blur_mix = match appearance.backdrop.map(|config| config.proof) {
+            Some(ShaderBackdropProof::BlurredSignal) => 1.0,
+            _ => 0.0,
+        };
         let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
         let native_style = match appearance.substrate {
             GlassSubstrate::MacosNative {
@@ -3722,6 +3746,8 @@ impl App {
                 backdrop_sample_strength: #(backdrop_sample_strength)
                 backdrop_mix: #(backdrop_mix)
                 backdrop_grid_strength: #(backdrop_grid_strength)
+                backdrop_blur_radius: #(backdrop_blur_radius)
+                backdrop_blur_mix: #(backdrop_blur_mix)
             }
         });
 
@@ -3737,6 +3763,8 @@ impl App {
                 backdrop_sample_strength: #(backdrop_sample_strength)
                 backdrop_mix: #(backdrop_mix)
                 backdrop_grid_strength: #(backdrop_grid_strength)
+                backdrop_blur_radius: #(backdrop_blur_radius)
+                backdrop_blur_mix: #(backdrop_blur_mix)
             }
         });
 
@@ -3752,6 +3780,8 @@ impl App {
                 backdrop_sample_strength: #(backdrop_sample_strength)
                 backdrop_mix: #(backdrop_mix)
                 backdrop_grid_strength: #(backdrop_grid_strength)
+                backdrop_blur_radius: #(backdrop_blur_radius)
+                backdrop_blur_mix: #(backdrop_blur_mix)
             }
         });
 
@@ -3767,6 +3797,8 @@ impl App {
                 backdrop_sample_strength: #(backdrop_sample_strength)
                 backdrop_mix: #(backdrop_mix)
                 backdrop_grid_strength: #(backdrop_grid_strength)
+                backdrop_blur_radius: #(backdrop_blur_radius)
+                backdrop_blur_mix: #(backdrop_blur_mix)
             }
         });
 
@@ -4373,6 +4405,23 @@ mod tests {
             resolved.appearance.backdrop,
             Some(ShaderBackdropConfig {
                 proof: ShaderBackdropProof::RawSignal,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_blur_proof_resolves_to_blur_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-blur-proof"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::BlurredSignal,
             })
         );
         assert_eq!(

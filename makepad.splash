@@ -109,6 +109,7 @@ hub.set_run_items([
     RunStudioRelease{name: "makepad-example-aichat"}
     RunRelease{name: "makepad-example-aichat-native", run: "makepad-example-aichat"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-proof", backend: "shader-backdrop-proof"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-blur-proof", backend: "shader-backdrop-blur-proof"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-auto", backend: "auto"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
