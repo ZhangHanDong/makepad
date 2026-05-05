@@ -1455,6 +1455,7 @@ struct ShaderBackdropVisualProfile {
     scene_grid_strength: f32,
     refraction_strength: f32,
     rim_strength: f32,
+    chroma_strength: f32,
 }
 
 fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropVisualProfile {
@@ -1463,16 +1464,19 @@ fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropV
             scene_grid_strength: 0.045,
             refraction_strength: 0.64,
             rim_strength: 0.075,
+            chroma_strength: 0.18,
         },
         ShaderBackdropProof::Refraction => ShaderBackdropVisualProfile {
             scene_grid_strength: 0.18,
             refraction_strength: 1.0,
             rim_strength: 0.12,
+            chroma_strength: 0.34,
         },
         _ => ShaderBackdropVisualProfile {
             scene_grid_strength: 0.18,
             refraction_strength: 0.0,
             rim_strength: 0.0,
+            chroma_strength: 0.0,
         },
     }
 }
@@ -4280,9 +4284,11 @@ impl App {
                 scene_grid_strength: 0.18,
                 refraction_strength: 0.0,
                 rim_strength: 0.0,
+                chroma_strength: 0.0,
             });
         let backdrop_refraction_strength = backdrop_profile.refraction_strength;
         let backdrop_rim_strength = backdrop_profile.rim_strength;
+        let chroma_strength = backdrop_profile.chroma_strength;
         let bind_backdrop_texture = matches!(
             backdrop_proof,
             Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
@@ -4338,6 +4344,7 @@ impl App {
                 backdrop_texture_strength: #(backdrop_texture_strength)
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
+                chroma_strength: #(chroma_strength)
             }
         });
 
@@ -4358,6 +4365,7 @@ impl App {
                 backdrop_texture_strength: #(backdrop_texture_strength)
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
+                chroma_strength: #(chroma_strength)
             }
         });
 
@@ -4378,6 +4386,7 @@ impl App {
                 backdrop_texture_strength: #(backdrop_texture_strength)
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
+                chroma_strength: #(chroma_strength)
             }
         });
 
@@ -4398,6 +4407,7 @@ impl App {
                 backdrop_texture_strength: #(backdrop_texture_strength)
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
+                chroma_strength: #(chroma_strength)
             }
         });
 
@@ -5246,6 +5256,17 @@ mod tests {
         assert!(interior.scene_grid_strength < refraction.scene_grid_strength);
         assert!(interior.refraction_strength < refraction.refraction_strength);
         assert!(interior.rim_strength < refraction.rim_strength);
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_interior_visual_profile_uses_subtle_chroma() {
+        let interior = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        let refraction = shader_backdrop_visual_profile(ShaderBackdropProof::Refraction);
+        let shader = shader_backdrop_visual_profile(ShaderBackdropProof::RawSignal);
+
+        assert!(interior.chroma_strength > 0.0);
+        assert!(interior.chroma_strength < refraction.chroma_strength);
+        assert_eq!(shader.chroma_strength, 0.0);
     }
 
     #[test]

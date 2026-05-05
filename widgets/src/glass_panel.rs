@@ -197,7 +197,21 @@ script_mod! {
             }
 
             backdrop_texture_rgb: fn(uv: vec2) -> vec3 {
-                return self.backdrop_texture.sample(self.backdrop_texture_uv(uv)).rgb
+                let chroma = clamp(
+                    self.chroma_strength * self.backdrop_edge_weight(uv),
+                    0.0,
+                    1.0
+                )
+                let centered = uv - vec2(0.5, 0.5)
+                let offset = centered * chroma * 0.040
+                let r = self.backdrop_texture.sample(
+                    self.backdrop_texture_uv(clamp(uv + offset, vec2(0.0, 0.0), vec2(1.0, 1.0)))
+                ).r
+                let g = self.backdrop_texture.sample(self.backdrop_texture_uv(uv)).g
+                let b = self.backdrop_texture.sample(
+                    self.backdrop_texture_uv(clamp(uv - offset, vec2(0.0, 0.0), vec2(1.0, 1.0)))
+                ).b
+                return vec3(r, g, b)
             }
 
             pixel: fn() {
@@ -412,8 +426,14 @@ impl GlassPanel {
             self.backdrop_texture_size.x.max(1.0),
             self.backdrop_texture_size.y.max(1.0),
         );
-        let offset = vec2(rect.pos.x as f32 / safe_size.x, rect.pos.y as f32 / safe_size.y);
-        let scale = vec2(rect.size.x as f32 / safe_size.x, rect.size.y as f32 / safe_size.y);
+        let offset = vec2(
+            rect.pos.x as f32 / safe_size.x,
+            rect.pos.y as f32 / safe_size.y,
+        );
+        let scale = vec2(
+            rect.size.x as f32 / safe_size.x,
+            rect.size.y as f32 / safe_size.y,
+        );
         let changed = (offset - self.backdrop_texture_uv_offset).length() > 0.001
             || (scale - self.backdrop_texture_uv_scale).length() > 0.001;
         self.backdrop_texture_uv_offset = offset;
