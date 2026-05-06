@@ -140,6 +140,18 @@ fn force_set_map_value(heap: &mut ScriptHeap, obj: ScriptObject, key: LiveId, va
     });
 }
 
+fn map_contains_key(heap: &mut ScriptHeap, obj: ScriptObject, key: LiveId) -> bool {
+    heap.map_mut_with(key, obj, |key, map| map.contains_key(&key.into()))
+}
+
+fn should_inject_widget_alias(name: LiveId) -> bool {
+    name != LiveId(0)
+        && name != id!(self)
+        && name != id!(ui)
+        && name != id!(mod)
+        && name != id!(agent)
+}
+
 #[doc(hidden)]
 pub fn ensure_widget_async_hooks_registered(cx: &mut Cx) {
     cx.global::<CxWidgetAsync>();
@@ -274,6 +286,17 @@ impl<'a> WidgetToScriptCallExt for ScriptVm<'a> {
             .heap
             .set_value(args_obj, id!(self).into(), source.into(), trap);
         self.bx.heap.set_value(args_obj, id!(ui).into(), ui, trap);
+
+        let aliases = self.with_cx(|cx| cx.widget_tree().named_widget_uids());
+        for (name, uid) in aliases {
+            if !should_inject_widget_alias(name)
+                || map_contains_key(&mut self.bx.heap, args_obj, name)
+            {
+                continue;
+            }
+            let handle = self.build_ui_handle_for_uid(uid);
+            force_set_map_value(&mut self.bx.heap, args_obj, name, handle);
+        }
 
         args_obj
     }

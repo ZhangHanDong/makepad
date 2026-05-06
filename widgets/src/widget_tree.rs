@@ -1616,6 +1616,30 @@ impl WidgetTree {
         }
     }
 
+    /// Return the currently indexed named widgets as `(name, uid)` pairs.
+    ///
+    /// This is primarily used by script callbacks to provide convenient aliases
+    /// for generated UI, so a callback can refer to `name.text()` when the tree
+    /// contains `name := TextInput{...}`.
+    pub fn named_widget_uids(&self) -> Vec<(LiveId, WidgetUid)> {
+        self.sync_dirty();
+        let inner = self.inner.borrow();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+
+        for (index, node) in inner.nodes.iter().enumerate() {
+            let name = inner.names.get(index).copied().unwrap_or(LiveId(0));
+            if name == LiveId(0) || !seen.insert(name) {
+                continue;
+            }
+            if node.widget.upgrade().is_some() {
+                out.push((name, node.uid));
+            }
+        }
+
+        out
+    }
+
     /// Build the path of LiveIds from root to the node with the given UID.
     pub fn path_to(&self, uid: WidgetUid) -> Vec<LiveId> {
         self.sync_dirty();

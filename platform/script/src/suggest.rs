@@ -12,8 +12,8 @@ use std::fmt::Write;
 
 /// Compute Levenshtein distance between two strings
 pub fn levenshtein(a: &str, b: &str) -> usize {
-    let a_len = a.len();
-    let b_len = b.len();
+    let a_len = a.chars().count();
+    let b_len = b.chars().count();
 
     if a_len == 0 {
         return b_len;
@@ -37,6 +37,28 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
         std::mem::swap(&mut prev_row, &mut curr_row);
     }
     prev_row[b_len]
+}
+
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let mut end = s.len();
+    let mut truncated = false;
+    for (count, (idx, _)) in s.char_indices().enumerate() {
+        if count == max_chars {
+            end = idx;
+            truncated = true;
+            break;
+        }
+    }
+
+    if truncated {
+        format!("{}...", &s[..end])
+    } else {
+        s.to_string()
+    }
+}
+
+fn format_string_preview(s: &str) -> String {
+    format!("\"{}\"", truncate_with_ellipsis(s, 12))
 }
 
 /// Format a ScriptValue briefly for display in suggestions.
@@ -86,24 +108,13 @@ pub fn format_value_brief(heap: &ScriptHeap, value: ScriptValue) -> String {
 
     // Handle inline strings
     if let Some(s) = value.as_inline_string(|s| s.to_string()) {
-        let truncated = if s.len() > 12 {
-            format!("{}...", &s[..12])
-        } else {
-            s
-        };
-        return format!("\"{}\"", truncated);
+        return format_string_preview(&s);
     }
 
     // Handle heap strings
     if let Some(s) = value.as_string() {
         if let Some(str_data) = &heap.strings[s] {
-            let s = &str_data.string.0;
-            let truncated = if s.len() > 12 {
-                format!("{}...", &s[..12])
-            } else {
-                s.to_string()
-            };
-            return format!("\"{}\"", truncated);
+            return format_string_preview(&str_data.string.0);
         }
         return "\"\"".to_string();
     }
@@ -678,5 +689,33 @@ pub fn suggest_pod_field(heap: &ScriptHeap, pod_ty: ScriptPodType, field: LiveId
             suggest_from_iter(&key_str, components.into_iter())
         }
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levenshtein_counts_unicode_chars_not_bytes() {
+        assert_eq!(levenshtein("启用", "启用"), 0);
+        assert_eq!(levenshtein("启用", "启停"), 1);
+        assert_eq!(levenshtein("启用", "启用计算器"), 3);
+    }
+
+    #[test]
+    fn string_preview_truncates_on_char_boundary() {
+        let mut heap = ScriptHeap::empty();
+        let value = heap.new_string_from_str("Ask AI 启用计算器开关");
+
+        assert_eq!(format_value_brief(&heap, value), "\"Ask AI 启用计算器...\"");
+    }
+
+    #[test]
+    fn string_preview_leaves_twelve_char_unicode_strings_intact() {
+        let mut heap = ScriptHeap::empty();
+        let value = heap.new_string_from_str("Ask AI 启用计算器");
+
+        assert_eq!(format_value_brief(&heap, value), "\"Ask AI 启用计算器\"");
     }
 }

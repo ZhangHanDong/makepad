@@ -1305,6 +1305,17 @@ pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::
         remaining_seconds: 25 * 60,
         is_running: false,
     },
+    calculator: CalculatorDemoState {
+        display: String::new(),
+        accumulator: 0.0,
+        pending_operator: String::new(),
+        has_accumulator: false,
+        start_new_entry: true,
+    },
+    collections: GenericCollectionsState {
+        collections: Vec::new(),
+    },
+    inputs: GenericInputsState { inputs: Vec::new() },
 });
 
 static AICHAT_NATIVE_GLASS_ACTIVE: std::sync::atomic::AtomicBool =
@@ -2172,6 +2183,30 @@ const MAX_STATELESS_HISTORY_MESSAGES: usize = 12;
 pub struct AppDemoState {
     count: i64,
     timer: TimerDemoState,
+    calculator: CalculatorDemoState,
+    collections: GenericCollectionsState,
+    inputs: GenericInputsState,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+struct AppDemoStateBeforeInputs {
+    count: i64,
+    timer: TimerDemoState,
+    calculator: CalculatorDemoState,
+    collections: GenericCollectionsState,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+struct AppDemoStateBeforeCollections {
+    count: i64,
+    timer: TimerDemoState,
+    calculator: CalculatorDemoState,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+struct LegacyAppDemoState {
+    count: i64,
+    timer: TimerDemoState,
 }
 
 #[derive(Clone, Debug, SerJson, DeJson)]
@@ -2181,11 +2216,82 @@ pub struct TimerDemoState {
     is_running: bool,
 }
 
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct CalculatorDemoState {
+    display: String,
+    accumulator: f64,
+    pending_operator: String,
+    has_accumulator: bool,
+    start_new_entry: bool,
+}
+
+#[derive(Clone, Debug, Default, SerJson, DeJson)]
+pub struct GenericCollectionsState {
+    collections: Vec<GenericCollectionState>,
+}
+
+#[derive(Clone, Debug, Default, SerJson, DeJson)]
+pub struct GenericInputsState {
+    inputs: Vec<GenericInputState>,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct GenericInputState {
+    key: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct GenericCollectionState {
+    name: String,
+    next_id: u64,
+    items: Vec<GenericListItemState>,
+}
+
+#[derive(Clone, Debug, SerJson, DeJson)]
+pub struct GenericListItemState {
+    id: u64,
+    text: String,
+    done: bool,
+}
+
+#[derive(Clone, Debug, DeJson)]
+struct CollectionAddPayload {
+    collection: String,
+    text: String,
+}
+
+#[derive(Clone, Debug, DeJson)]
+struct CollectionAddFromInputPayload {
+    collection: String,
+    input: String,
+}
+
+#[derive(Clone, Debug, DeJson)]
+struct CollectionIdPayload {
+    collection: String,
+    id: u64,
+}
+
+#[derive(Clone, Debug, DeJson)]
+struct CollectionPayload {
+    collection: String,
+}
+
+#[derive(Clone, Debug, DeJson)]
+struct InputSetPayload {
+    key: String,
+    text: String,
+}
+
 impl Default for AppDemoState {
     fn default() -> Self {
         Self {
             count: 0,
             timer: TimerDemoState::default(),
+            calculator: CalculatorDemoState::default(),
+            collections: GenericCollectionsState::default(),
+            inputs: GenericInputsState::default(),
         }
     }
 }
@@ -2200,12 +2306,76 @@ impl Default for TimerDemoState {
     }
 }
 
+impl Default for CalculatorDemoState {
+    fn default() -> Self {
+        Self {
+            display: "0".to_string(),
+            accumulator: 0.0,
+            pending_operator: String::new(),
+            has_accumulator: false,
+            start_new_entry: true,
+        }
+    }
+}
+
+impl GenericCollectionState {
+    fn new(name: &str) -> Self {
+        Self {
+            name: normalize_collection_name(name),
+            next_id: 1,
+            items: Vec::new(),
+        }
+    }
+}
+
+impl GenericInputState {
+    fn new(key: &str) -> Self {
+        Self {
+            key: normalize_input_key(key),
+            text: String::new(),
+        }
+    }
+}
+
 impl AppDemoState {
     fn load_from_disk() -> Self {
         std::fs::read_to_string(APP_STATE_SAVE_PATH)
             .ok()
-            .and_then(|s| Self::deserialize_json(&s).ok())
+            .and_then(|s| Self::deserialize_json_compat(&s))
             .unwrap_or_default()
+    }
+
+    fn deserialize_json_compat(input: &str) -> Option<Self> {
+        if let Ok(state) = Self::deserialize_json(input) {
+            return Some(state);
+        }
+        if let Ok(state) = AppDemoStateBeforeInputs::deserialize_json(input) {
+            return Some(Self {
+                count: state.count,
+                timer: state.timer,
+                calculator: state.calculator,
+                collections: state.collections,
+                inputs: GenericInputsState::default(),
+            });
+        }
+        if let Ok(state) = AppDemoStateBeforeCollections::deserialize_json(input) {
+            return Some(Self {
+                count: state.count,
+                timer: state.timer,
+                calculator: state.calculator,
+                collections: GenericCollectionsState::default(),
+                inputs: GenericInputsState::default(),
+            });
+        }
+        LegacyAppDemoState::deserialize_json(input)
+            .ok()
+            .map(|legacy| Self {
+                count: legacy.count,
+                timer: legacy.timer,
+                calculator: CalculatorDemoState::default(),
+                collections: GenericCollectionsState::default(),
+                inputs: GenericInputsState::default(),
+            })
     }
 
     fn save_to_disk(&self) {
@@ -2214,13 +2384,17 @@ impl AppDemoState {
 
     fn prompt_json(&self) -> String {
         format!(
-            "{{\n  \"count\": {},\n  \"timer\": {{\n    \"duration_seconds\": {},\n    \"remaining_seconds\": {},\n    \"display\": \"{}\",\n    \"is_running\": {},\n    \"button_label\": \"{}\"\n  }}\n}}",
+            "{{\n  \"count\": {},\n  \"timer\": {{\n    \"duration_seconds\": {},\n    \"remaining_seconds\": {},\n    \"display\": \"{}\",\n    \"is_running\": {},\n    \"button_label\": \"{}\"\n  }},\n  \"calculator\": {{\n    \"display\": \"{}\",\n    \"pending_operator\": \"{}\"\n  }},\n  \"collections\": {},\n  \"inputs\": {}\n}}",
             self.count,
             self.timer.duration_seconds,
             self.timer.remaining_seconds,
             self.timer.display(),
             self.timer.is_running,
-            self.timer.button_label()
+            self.timer.button_label(),
+            json_escape(self.calculator.display()),
+            json_escape(self.calculator.pending_operator_symbol()),
+            self.collections.prompt_json(),
+            self.inputs.prompt_json()
         )
     }
 }
@@ -2245,7 +2419,415 @@ impl TimerDemoState {
     }
 }
 
-fn state_template_value(state: &AppDemoState, path: &str) -> Option<String> {
+impl CalculatorDemoState {
+    fn display(&self) -> &str {
+        if self.display.is_empty() {
+            "0"
+        } else {
+            &self.display
+        }
+    }
+
+    fn pending_operator_symbol(&self) -> &str {
+        match self.pending_operator.as_str() {
+            "add" => "+",
+            "subtract" => "-",
+            "multiply" => "x",
+            "divide" => "/",
+            _ => "",
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn input_digit(&mut self, digit: char) {
+        if !digit.is_ascii_digit() {
+            return;
+        }
+        if self.start_new_entry || self.display() == "0" || self.display() == "Error" {
+            self.display.clear();
+            self.display.push(digit);
+            self.start_new_entry = false;
+            return;
+        }
+        if self
+            .display
+            .chars()
+            .filter(|ch| ch.is_ascii_digit())
+            .count()
+            < 15
+        {
+            self.display.push(digit);
+        }
+    }
+
+    fn input_decimal(&mut self) {
+        if self.start_new_entry || self.display() == "Error" {
+            self.display = "0.".to_string();
+            self.start_new_entry = false;
+        } else if !self.display.contains('.') {
+            self.display.push('.');
+        }
+    }
+
+    fn backspace(&mut self) {
+        if self.start_new_entry || self.display() == "Error" {
+            self.display = "0".to_string();
+            self.start_new_entry = true;
+            return;
+        }
+        self.display.pop();
+        if self.display.is_empty() || self.display == "-" {
+            self.display = "0".to_string();
+            self.start_new_entry = true;
+        }
+    }
+
+    fn toggle_sign(&mut self) {
+        if self.display() == "0" || self.display() == "Error" {
+            return;
+        }
+        if self.display.starts_with('-') {
+            self.display.remove(0);
+        } else {
+            self.display.insert(0, '-');
+        }
+    }
+
+    fn percent(&mut self) {
+        let value = self.current_value() / 100.0;
+        self.set_display_value(value);
+        self.start_new_entry = true;
+    }
+
+    fn set_operator(&mut self, operator: &str) {
+        if !matches!(operator, "add" | "subtract" | "multiply" | "divide") {
+            return;
+        }
+        let current = self.current_value();
+        if self.has_accumulator && !self.pending_operator.is_empty() && !self.start_new_entry {
+            if !self.apply_pending(current) {
+                return;
+            }
+        } else {
+            self.accumulator = current;
+            self.has_accumulator = true;
+        }
+        self.pending_operator = operator.to_string();
+        self.start_new_entry = true;
+    }
+
+    fn equals(&mut self) {
+        if !self.has_accumulator || self.pending_operator.is_empty() {
+            self.start_new_entry = true;
+            return;
+        }
+        let current = self.current_value();
+        if self.apply_pending(current) {
+            self.pending_operator.clear();
+            self.has_accumulator = false;
+            self.start_new_entry = true;
+        }
+    }
+
+    fn current_value(&self) -> f64 {
+        self.display().parse::<f64>().unwrap_or(0.0)
+    }
+
+    fn apply_pending(&mut self, rhs: f64) -> bool {
+        let result = match self.pending_operator.as_str() {
+            "add" => self.accumulator + rhs,
+            "subtract" => self.accumulator - rhs,
+            "multiply" => self.accumulator * rhs,
+            "divide" => {
+                if rhs == 0.0 {
+                    self.display = "Error".to_string();
+                    self.pending_operator.clear();
+                    self.has_accumulator = false;
+                    self.start_new_entry = true;
+                    return false;
+                }
+                self.accumulator / rhs
+            }
+            _ => rhs,
+        };
+        self.accumulator = result;
+        self.set_display_value(result);
+        true
+    }
+
+    fn set_display_value(&mut self, value: f64) {
+        if !value.is_finite() {
+            self.display = "Error".to_string();
+            return;
+        }
+        if value.fract() == 0.0 && value.abs() <= i64::MAX as f64 {
+            self.display = format!("{}", value as i64);
+            return;
+        }
+        let mut display = format!("{:.10}", value);
+        while display.contains('.') && display.ends_with('0') {
+            display.pop();
+        }
+        if display.ends_with('.') {
+            display.pop();
+        }
+        self.display = display;
+    }
+}
+
+impl GenericCollectionsState {
+    fn collection_mut(&mut self, name: &str) -> &mut GenericCollectionState {
+        let name = normalize_collection_name(name);
+        if let Some(index) = self
+            .collections
+            .iter()
+            .position(|collection| collection.name == name)
+        {
+            return &mut self.collections[index];
+        }
+        self.collections.push(GenericCollectionState::new(&name));
+        self.collections.last_mut().unwrap()
+    }
+
+    fn collection(&self, name: &str) -> Option<&GenericCollectionState> {
+        let name = normalize_collection_name(name);
+        self.collections
+            .iter()
+            .find(|collection| collection.name == name)
+    }
+
+    fn add_item(&mut self, collection: &str, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let collection = self.collection_mut(collection);
+        let id = collection.next_id;
+        collection.next_id = collection.next_id.saturating_add(1).max(id + 1);
+        collection.items.push(GenericListItemState {
+            id,
+            text: text.to_string(),
+            done: false,
+        });
+    }
+
+    fn delete_item(&mut self, collection: &str, id: u64) {
+        let collection = self.collection_mut(collection);
+        collection.items.retain(|item| item.id != id);
+    }
+
+    fn toggle_item(&mut self, collection: &str, id: u64) {
+        let collection = self.collection_mut(collection);
+        if let Some(item) = collection.items.iter_mut().find(|item| item.id == id) {
+            item.done = !item.done;
+        }
+    }
+
+    fn clear_collection(&mut self, collection: &str) {
+        self.collection_mut(collection).items.clear();
+    }
+
+    fn rows_splash(&self, collection: &str) -> String {
+        let collection_name = normalize_collection_name(collection);
+        let Some(collection) = self.collection(&collection_name) else {
+            return empty_collection_splash();
+        };
+        if collection.items.is_empty() {
+            return empty_collection_splash();
+        }
+
+        let mut out = String::new();
+        for item in &collection.items {
+            let text = splash_escape(&item.text);
+            let collection = splash_escape(&collection_name);
+            let active = if item.done { "true" } else { "false" };
+            let color = if item.done { "#xAAB3C0" } else { "#xF4F7FB" };
+            out.push_str(&format!(
+                r#"View{{
+    width: Fill height: Fit
+    flow: Right spacing: 10 padding: 10
+    align: Align{{x: 0.0 y: 0.5}}
+    CheckBox{{
+        active: {}
+        text: "{}"
+        draw_text +: {{ color: {} }}
+        on_click: || agent.notify("app.collection.toggle", {{collection: "{}", id: {}}})
+    }}
+    View{{ width: Fill height: Fit }}
+    ButtonFlat{{
+        text: "x"
+        draw_text +: {{ color: #xFF5A5A }}
+        on_click: || agent.notify("app.collection.delete", {{collection: "{}", id: {}}})
+    }}
+}}
+"#,
+                active, text, color, collection, item.id, collection, item.id
+            ));
+        }
+        out
+    }
+
+    fn count(&self, collection: &str) -> usize {
+        self.collection(collection)
+            .map(|collection| collection.items.len())
+            .unwrap_or(0)
+    }
+
+    fn prompt_json(&self) -> String {
+        let mut out = String::from("{");
+        for (index, collection) in self.collections.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            out.push('"');
+            out.push_str(&json_escape(&collection.name));
+            out.push_str("\": {\"count\": ");
+            out.push_str(&collection.items.len().to_string());
+            out.push_str(", \"items\": [");
+            for (item_index, item) in collection.items.iter().enumerate() {
+                if item_index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!(
+                    "{{\"id\": {}, \"text\": \"{}\", \"done\": {}}}",
+                    item.id,
+                    json_escape(&item.text),
+                    item.done
+                ));
+            }
+            out.push_str("]}");
+        }
+        out.push('}');
+        out
+    }
+}
+
+impl GenericInputsState {
+    fn input_mut(&mut self, key: &str) -> &mut GenericInputState {
+        let key = normalize_input_key(key);
+        if let Some(index) = self.inputs.iter().position(|input| input.key == key) {
+            return &mut self.inputs[index];
+        }
+        self.inputs.push(GenericInputState::new(&key));
+        self.inputs.last_mut().unwrap()
+    }
+
+    fn input(&self, key: &str) -> Option<&GenericInputState> {
+        let key = normalize_input_key(key);
+        self.inputs.iter().find(|input| input.key == key)
+    }
+
+    fn set_text(&mut self, key: &str, text: &str) {
+        self.input_mut(key).text = text.to_string();
+    }
+
+    fn take_text(&mut self, key: &str) -> String {
+        std::mem::take(&mut self.input_mut(key).text)
+    }
+
+    fn text(&self, key: &str) -> &str {
+        self.input(key)
+            .map(|input| input.text.as_str())
+            .unwrap_or("")
+    }
+
+    fn prompt_json(&self) -> String {
+        let mut out = String::from("{");
+        for (index, input) in self.inputs.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            out.push('"');
+            out.push_str(&json_escape(&input.key));
+            out.push_str("\": \"");
+            out.push_str(&json_escape(&input.text));
+            out.push('"');
+        }
+        out.push('}');
+        out
+    }
+}
+
+fn normalize_collection_name(name: &str) -> String {
+    let normalized: String = name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(32)
+        .collect();
+    if normalized.is_empty() {
+        "items".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn normalize_input_key(key: &str) -> String {
+    let normalized: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(32)
+        .collect();
+    if normalized.is_empty() {
+        "input".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn empty_collection_splash() -> String {
+    r#"Label{
+    width: Fill height: Fit
+    text: "No items yet"
+    draw_text +: { color: #xAAB3C0 }
+}
+"#
+    .to_string()
+}
+
+fn json_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push(' '),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn splash_escape(value: &str) -> String {
+    json_escape(value)
+}
+
+fn state_template_value(state: &AppDemoState, path: &str, include_inputs: bool) -> Option<String> {
+    if let Some(path) = path.strip_prefix("collection.") {
+        let mut parts = path.split('.');
+        let collection = parts.next()?;
+        return match parts.next() {
+            Some("rows") => Some(state.collections.rows_splash(collection)),
+            Some("count") => Some(state.collections.count(collection).to_string()),
+            _ => None,
+        };
+    }
+
+    if let Some(path) = path.strip_prefix("input.") {
+        let mut parts = path.split('.');
+        let input = parts.next()?;
+        return match parts.next() {
+            Some("value") if include_inputs => Some(state.inputs.text(input).to_string()),
+            Some("value") => Some(String::new()),
+            _ => None,
+        };
+    }
+
     match path {
         "count" => Some(state.count.to_string()),
         "timer.duration_seconds" => Some(state.timer.duration_seconds.to_string()),
@@ -2253,11 +2835,28 @@ fn state_template_value(state: &AppDemoState, path: &str) -> Option<String> {
         "timer.display" => Some(state.timer.display()),
         "timer.is_running" => Some(state.timer.is_running.to_string()),
         "timer.button_label" => Some(state.timer.button_label().to_string()),
+        "calculator.display" => Some(state.calculator.display().to_string()),
+        "calculator.pending_operator" => {
+            Some(state.calculator.pending_operator_symbol().to_string())
+        }
         _ => None,
     }
 }
 
+#[cfg(test)]
 fn render_state_templates(raw: &str, state: &AppDemoState) -> String {
+    render_state_templates_with_inputs(raw, state, true)
+}
+
+fn render_state_templates_for_ui(raw: &str, state: &AppDemoState) -> String {
+    render_state_templates_with_inputs(raw, state, false)
+}
+
+fn render_state_templates_with_inputs(
+    raw: &str,
+    state: &AppDemoState,
+    include_inputs: bool,
+) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
 
@@ -2271,7 +2870,7 @@ fn render_state_templates(raw: &str, state: &AppDemoState) -> String {
         };
 
         let path = after_open[..end].trim();
-        if let Some(value) = state_template_value(state, path) {
+        if let Some(value) = state_template_value(state, path, include_inputs) {
             out.push_str(&value);
         } else {
             log!("[render_state_templates] unknown path: {}", path);
@@ -2388,12 +2987,36 @@ agent.notify("timer.reset", {{}})
 agent.notify("timer.add_minute", {{}})
 agent.notify("timer.subtract_minute", {{}})
 
+Calculator apps may use:
+
+agent.notify("calculator.digit.1", {{}})
+agent.notify("calculator.operator.add", {{}})
+agent.notify("calculator.equals", {{}})
+agent.notify("calculator.clear", {{}})
+
+Collection-style apps may use the generic collection API:
+
+agent.notify("app.input.set", {{key: "new_item", text: "Draft text"}})
+agent.notify("app.collection.add_from_input", {{collection: "items", input: "new_item"}})
+agent.notify("app.collection.add", {{collection: "items", text: "New item"}})
+agent.notify("app.collection.toggle", {{collection: "items", id: 1}})
+agent.notify("app.collection.delete", {{collection: "items", id: 1}})
+agent.notify("app.collection.clear", {{collection: "items"}})
+
 Only use actions listed in the current capability manifest.
 
 Display host state with markdown-layer placeholders inside string literals:
 
 Label{{ text: "Count: {{{{state.count}}}}" }}
 Label{{ text: "{{{{state.timer.display}}}}" }}
+Label{{ text: "{{{{state.calculator.display}}}}" }}
+
+For collection rows, place the rows placeholder directly inside a View body, not inside a string:
+
+{{{{state.collection.items.rows}}}}
+
+For collection input controls, do not call widget methods like `new_item.text()` in button callbacks.
+Use TextInput `on_change` to send draft text to the host, then have Add use `app.collection.add_from_input`.
 
 Here is the Splash scripting manual. Follow it exactly:
 
@@ -2419,6 +3042,7 @@ fn active_chat_data() -> &'static std::sync::RwLock<ChatData> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppCapability {
     Counter,
+    Calculator,
     Timer,
     Todo,
     Generic,
@@ -2427,7 +3051,13 @@ enum AppCapability {
 impl AppCapability {
     fn detect(request: &str) -> Self {
         let text = request.to_lowercase();
-        if text.contains("番茄")
+        if text.contains("计算器")
+            || text.contains("calculator")
+            || text.contains("calc")
+            || text.contains("加减乘除")
+        {
+            Self::Calculator
+        } else if text.contains("番茄")
             || text.contains("pomodoro")
             || text.contains("timer")
             || text.contains("倒计时")
@@ -2450,6 +3080,7 @@ impl AppCapability {
     fn app_type(self) -> &'static str {
         match self {
             Self::Counter => "counter",
+            Self::Calculator => "calculator",
             Self::Timer => "timer",
             Self::Todo => "todo",
             Self::Generic => "generic",
@@ -2462,12 +3093,16 @@ impl AppCapability {
                 r#"{{"app_type":"counter","title":"{}","state_paths":["count"],"actions":["inc","dec","reset"],"required_controls":["increment","decrement","reset"]}}"#,
                 title
             ),
+            Self::Calculator => format!(
+                r#"{{"app_type":"calculator","title":"{}","state_paths":["calculator.display","calculator.pending_operator"],"actions":["calculator.digit.0","calculator.digit.1","calculator.digit.2","calculator.digit.3","calculator.digit.4","calculator.digit.5","calculator.digit.6","calculator.digit.7","calculator.digit.8","calculator.digit.9","calculator.decimal","calculator.operator.add","calculator.operator.subtract","calculator.operator.multiply","calculator.operator.divide","calculator.equals","calculator.clear","calculator.backspace","calculator.sign","calculator.percent"],"required_controls":["digits 0-9","decimal point","operators + - x /","equals","clear"]}}"#,
+                title
+            ),
             Self::Timer => format!(
                 r#"{{"app_type":"timer","title":"{}","state_paths":["timer.display","timer.is_running","timer.button_label"],"actions":["timer.start","timer.pause","timer.toggle","timer.reset","timer.add_minute","timer.subtract_minute"],"required_controls":["visible start or pause","reset","optional duration adjustment"]}}"#,
                 title
             ),
             Self::Todo => format!(
-                r#"{{"app_type":"todo","title":"{}","state_paths":[],"actions":[],"required_controls":["list","add item","toggle item","delete item"],"status":"planned but not implemented in host runtime yet"}}"#,
+                r#"{{"app_type":"collection","title":"{}","state_paths":["collection.items.rows","collection.items.count","input.new_item.value"],"actions":["app.input.set","app.collection.add_from_input","app.collection.add","app.collection.toggle","app.collection.delete","app.collection.clear"],"required_controls":["text input","add item","toggle item","delete item"],"collection":"items","input":"new_item"}}"#,
                 title
             ),
             Self::Generic => format!(
@@ -2494,6 +3129,41 @@ agent.notify("ask_ai", {})
 - A visible -1 button
 - A visible Reset button"#
             }
+            Self::Calculator => {
+                r#"[Available state paths]
+{{state.calculator.display}}            // current calculator display
+{{state.calculator.pending_operator}}   // pending operator symbol, or empty
+
+[Available actions]
+agent.notify("calculator.digit.0", {})
+agent.notify("calculator.digit.1", {})
+agent.notify("calculator.digit.2", {})
+agent.notify("calculator.digit.3", {})
+agent.notify("calculator.digit.4", {})
+agent.notify("calculator.digit.5", {})
+agent.notify("calculator.digit.6", {})
+agent.notify("calculator.digit.7", {})
+agent.notify("calculator.digit.8", {})
+agent.notify("calculator.digit.9", {})
+agent.notify("calculator.decimal", {})
+agent.notify("calculator.operator.add", {})       // +
+agent.notify("calculator.operator.subtract", {})  // -
+agent.notify("calculator.operator.multiply", {})  // x
+agent.notify("calculator.operator.divide", {})    // /
+agent.notify("calculator.equals", {})
+agent.notify("calculator.clear", {})
+agent.notify("calculator.backspace", {})
+agent.notify("calculator.sign", {})
+agent.notify("calculator.percent", {})
+agent.notify("ask_ai", {})
+
+[Required controls]
+- A large display bound to {{state.calculator.display}}
+- Digit buttons 0 through 9
+- Operator buttons +, -, x, /
+- Equals and Clear buttons
+- Operator buttons must use calculator.operator.* actions, never inc/dec/reset"#
+            }
             Self::Timer => {
                 r#"[Available state paths]
 {{state.timer.display}}              // formatted MM:SS
@@ -2518,20 +3188,36 @@ agent.notify("ask_ai", {})
             }
             Self::Todo => {
                 r#"[Available state paths]
-Todo state is not implemented yet in this demo runtime.
+{{state.collection.items.rows}}     // generated Splash rows for collection "items"
+{{state.collection.items.count}}    // item count for collection "items"
+{{state.input.new_item.value}}      // current draft text for Add input
 
 [Available actions]
+agent.notify("app.input.set", {key: "new_item", text: "Draft text"})
+agent.notify("app.collection.add_from_input", {collection: "items", input: "new_item"})
+agent.notify("app.collection.add", {collection: "items", text: "Item text"})
+agent.notify("app.collection.toggle", {collection: "items", id: 1})
+agent.notify("app.collection.delete", {collection: "items", id: 1})
+agent.notify("app.collection.clear", {collection: "items"})
 agent.notify("ask_ai", {})
 
 [Required controls]
-- Render a static todo mockup or ask for Todo runtime support.
-- Do not invent unimplemented todo.add/todo.delete actions."#
+- Use collection name "items".
+- Use input key "new_item".
+- Add input must be `TextInput{text: "{{state.input.new_item.value}}" on_change: |text| agent.notify("app.input.set", {key: "new_item", text: text})}`.
+- Add button must call `agent.notify("app.collection.add_from_input", {collection: "items", input: "new_item"})`.
+- Do not call widget methods such as `new_item.text()` or `new_item.set_text()` inside callbacks; widget ids are not script variables.
+- Put {{state.collection.items.rows}} directly inside the list container, not inside a Label string.
+- Delete and toggle controls are supplied by {{state.collection.items.rows}}; do not hardcode item rows."#
             }
             Self::Generic => {
                 r#"[Available state paths]
 {{state.count}}
 {{state.timer.display}}
 {{state.timer.button_label}}
+{{state.collection.items.rows}}
+{{state.collection.items.count}}
+{{state.input.new_item.value}}
 
 [Available actions]
 agent.notify("ask_ai", {})
@@ -2540,10 +3226,16 @@ agent.notify("dec", {})
 agent.notify("reset", {})
 agent.notify("timer.toggle", {})
 agent.notify("timer.reset", {})
+agent.notify("app.input.set", {key: "new_item", text: "Draft text"})
+agent.notify("app.collection.add_from_input", {collection: "items", input: "new_item"})
+agent.notify("app.collection.add", {collection: "items", text: "Item text"})
+agent.notify("app.collection.toggle", {collection: "items", id: 1})
+agent.notify("app.collection.delete", {collection: "items", id: 1})
+agent.notify("app.collection.clear", {collection: "items"})
 
 [Required controls]
 - Use only the actions listed above.
-- If the app needs unavailable host behavior, show a static mockup and include an Ask AI button."#
+- For list-like apps, use the generic collection API with collection name "items"."#
             }
         }
     }
@@ -3061,7 +3753,7 @@ impl Widget for ChatList {
                         let state_rendered;
                         let display_text = if msg.role == ChatRole::Assistant {
                             let state = APP_DEMO_STATE.read().unwrap();
-                            state_rendered = render_state_templates(unwrapped, &state);
+                            state_rendered = render_state_templates_for_ui(unwrapped, &state);
                             state_rendered.as_str()
                         } else {
                             unwrapped
@@ -3176,15 +3868,36 @@ Interactive generated UI can notify the host from button callbacks:
 
 Button{{ text: "+1" on_click: || agent.notify("inc", {{}}) }}
 
-Supported demo actions are `inc`, `dec`, `reset`, and `ask_ai`. For the D1 counter, always use an empty object payload:
+Supported demo actions are `inc`, `dec`, `reset`, calculator actions, generic collection actions, and `ask_ai`.
 
 agent.notify("inc", {{}})
 agent.notify("dec", {{}})
 agent.notify("reset", {{}})
+agent.notify("calculator.digit.1", {{}})
+agent.notify("calculator.operator.add", {{}})
+agent.notify("calculator.equals", {{}})
+agent.notify("calculator.clear", {{}})
+agent.notify("app.input.set", {{key: "new_item", text: "Draft text"}})
+agent.notify("app.collection.add_from_input", {{collection: "items", input: "new_item"}})
+agent.notify("app.collection.add", {{collection: "items", text: "New item"}})
+agent.notify("app.collection.toggle", {{collection: "items", id: 1}})
+agent.notify("app.collection.delete", {{collection: "items", id: 1}})
+agent.notify("app.collection.clear", {{collection: "items"}})
 
-To display host state in D1, use the markdown-layer placeholder `{{{{state.count}}}}` inside string literals:
+To display host state, use markdown-layer placeholders inside string literals:
 
 Label{{ text: "Count: {{{{state.count}}}}" }}
+Label{{ text: "{{{{state.calculator.display}}}}" }}
+
+For collection/list UI, insert generated rows directly inside a container:
+
+{{{{state.collection.items.rows}}}}
+
+For collection/list input, avoid widget method reads such as `new_item.text()` inside `on_click`.
+Instead:
+- bind TextInput text to `{{{{state.input.new_item.value}}}}`
+- use `on_change: |text| agent.notify("app.input.set", {{key: "new_item", text: text}})`
+- use Add button `on_click: || agent.notify("app.collection.add_from_input", {{collection: "items", input: "new_item"}})`
 
 Do not hardcode mutable state when the UI should reflect host state.
 
@@ -3789,6 +4502,40 @@ impl App {
         state.save_to_disk();
     }
 
+    fn mutate_calculator<F>(&self, f: F)
+    where
+        F: FnOnce(&mut CalculatorDemoState),
+    {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        f(&mut state.calculator);
+        state.save_to_disk();
+    }
+
+    fn mutate_collections<F>(&self, f: F)
+    where
+        F: FnOnce(&mut GenericCollectionsState),
+    {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        f(&mut state.collections);
+        state.save_to_disk();
+    }
+
+    fn mutate_inputs<F>(&self, f: F)
+    where
+        F: FnOnce(&mut GenericInputsState),
+    {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        f(&mut state.inputs);
+        state.save_to_disk();
+    }
+
+    fn add_collection_item_from_input(&self, collection: &str, input: &str) {
+        let mut state = APP_DEMO_STATE.write().unwrap();
+        let text = state.inputs.take_text(input);
+        state.collections.add_item(collection, &text);
+        state.save_to_disk();
+    }
+
     fn tick_timer_state(&self) -> bool {
         let mut state = APP_DEMO_STATE.write().unwrap();
         if !state.timer.is_running {
@@ -3827,7 +4574,7 @@ impl App {
                 continue;
             };
             let unwrapped = unwrap_outer_markdown_fence(&text);
-            let state_rendered = render_state_templates(unwrapped, &state);
+            let state_rendered = render_state_templates_for_ui(unwrapped, &state);
             let rendered = wrap_bare_latex(&state_rendered);
             let guarded_text;
             let markdown_text =
@@ -3905,6 +4652,119 @@ impl App {
                     }
                 });
                 self.refresh_visible_state_templates(cx);
+            }
+            event if event.starts_with("calculator.digit.") => {
+                if let Some(digit) = event
+                    .strip_prefix("calculator.digit.")
+                    .and_then(|digit| digit.chars().next())
+                {
+                    self.mutate_calculator(|calculator| calculator.input_digit(digit));
+                    self.refresh_visible_state_templates(cx);
+                }
+            }
+            "calculator.decimal" => {
+                self.mutate_calculator(|calculator| calculator.input_decimal());
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.operator.add" => {
+                self.mutate_calculator(|calculator| calculator.set_operator("add"));
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.operator.subtract" => {
+                self.mutate_calculator(|calculator| calculator.set_operator("subtract"));
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.operator.multiply" => {
+                self.mutate_calculator(|calculator| calculator.set_operator("multiply"));
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.operator.divide" => {
+                self.mutate_calculator(|calculator| calculator.set_operator("divide"));
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.equals" => {
+                self.mutate_calculator(|calculator| calculator.equals());
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.clear" => {
+                self.mutate_calculator(|calculator| calculator.reset());
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.backspace" => {
+                self.mutate_calculator(|calculator| calculator.backspace());
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.sign" => {
+                self.mutate_calculator(|calculator| calculator.toggle_sign());
+                self.refresh_visible_state_templates(cx);
+            }
+            "calculator.percent" => {
+                self.mutate_calculator(|calculator| calculator.percent());
+                self.refresh_visible_state_templates(cx);
+            }
+            "app.collection.add" => {
+                if let Ok(payload) = CollectionAddPayload::deserialize_json(payload) {
+                    self.mutate_collections(|collections| {
+                        collections.add_item(&payload.collection, &payload.text)
+                    });
+                    self.refresh_visible_state_templates(cx);
+                } else {
+                    log!("[splash] invalid app.collection.add payload: {}", payload);
+                }
+            }
+            "app.collection.add_from_input" => {
+                if let Ok(payload) = CollectionAddFromInputPayload::deserialize_json(payload) {
+                    self.add_collection_item_from_input(&payload.collection, &payload.input);
+                    self.refresh_visible_state_templates(cx);
+                } else {
+                    log!(
+                        "[splash] invalid app.collection.add_from_input payload: {}",
+                        payload
+                    );
+                }
+            }
+            "app.collection.toggle" => {
+                if let Ok(payload) = CollectionIdPayload::deserialize_json(payload) {
+                    self.mutate_collections(|collections| {
+                        collections.toggle_item(&payload.collection, payload.id)
+                    });
+                    self.refresh_visible_state_templates(cx);
+                } else {
+                    log!(
+                        "[splash] invalid app.collection.toggle payload: {}",
+                        payload
+                    );
+                }
+            }
+            "app.collection.delete" => {
+                if let Ok(payload) = CollectionIdPayload::deserialize_json(payload) {
+                    self.mutate_collections(|collections| {
+                        collections.delete_item(&payload.collection, payload.id)
+                    });
+                    self.refresh_visible_state_templates(cx);
+                } else {
+                    log!(
+                        "[splash] invalid app.collection.delete payload: {}",
+                        payload
+                    );
+                }
+            }
+            "app.collection.clear" => {
+                if let Ok(payload) = CollectionPayload::deserialize_json(payload) {
+                    self.mutate_collections(|collections| {
+                        collections.clear_collection(&payload.collection)
+                    });
+                    self.refresh_visible_state_templates(cx);
+                } else {
+                    log!("[splash] invalid app.collection.clear payload: {}", payload);
+                }
+            }
+            "app.input.set" => {
+                if let Ok(payload) = InputSetPayload::deserialize_json(payload) {
+                    self.mutate_inputs(|inputs| inputs.set_text(&payload.key, &payload.text));
+                } else {
+                    log!("[splash] invalid app.input.set payload: {}", payload);
+                }
             }
             "ask_ai" => {
                 let workspace = self.active_workspace;
@@ -4929,11 +5789,12 @@ mod tests {
         glass_opacity_values, glass_opacity_with_native_compositing_proof,
         guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value, parse_glass_backend,
-        render_state_templates, resolve_glass_appearance, resolve_startup_glass_appearance,
-        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppDemoState,
-        BackendType, ClaudeCodeCliAgent, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
-        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
-        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        render_state_templates, render_state_templates_for_ui, resolve_glass_appearance,
+        resolve_startup_glass_appearance, should_start_window_drag, Agent, App, AppCapability,
+        AppDemoState, BackendType, CalculatorDemoState, ClaudeCodeCliAgent,
+        GenericCollectionsState, GenericInputsState, GlassBackendRequest, GlassPanelPreset,
+        GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof,
+        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -5490,6 +6351,148 @@ mod tests {
             ),
             "01:05 Pause true"
         );
+    }
+
+    #[test]
+    fn app_capability_detects_calculator_requests() {
+        assert_eq!(
+            AppCapability::detect("帮我做一个计算器"),
+            AppCapability::Calculator
+        );
+        assert_eq!(
+            AppCapability::detect("make a calculator"),
+            AppCapability::Calculator
+        );
+    }
+
+    #[test]
+    fn app_capability_detects_todo_as_collection_app() {
+        assert_eq!(AppCapability::detect("生成 todo list"), AppCapability::Todo);
+        let manifest = AppCapability::Todo.manifest();
+        assert!(manifest.contains("app.input.set"));
+        assert!(manifest.contains("app.collection.add_from_input"));
+        assert!(manifest.contains("{{state.input.new_item.value}}"));
+        assert!(manifest.contains("Do not call widget methods"));
+    }
+
+    #[test]
+    fn state_templates_render_calculator_display() {
+        let mut state = AppDemoState::default();
+        state.calculator.input_digit('4');
+        state.calculator.input_digit('2');
+        assert_eq!(
+            render_state_templates("{{state.calculator.display}}", &state),
+            "42"
+        );
+    }
+
+    #[test]
+    fn calculator_operator_does_not_increment_display() {
+        let mut calculator = CalculatorDemoState::default();
+        calculator.input_digit('1');
+        calculator.set_operator("add");
+        assert_eq!(calculator.display(), "1");
+        assert_eq!(calculator.pending_operator_symbol(), "+");
+    }
+
+    #[test]
+    fn calculator_adds_after_equals() {
+        let mut calculator = CalculatorDemoState::default();
+        calculator.input_digit('1');
+        calculator.set_operator("add");
+        calculator.input_digit('2');
+        calculator.equals();
+        assert_eq!(calculator.display(), "3");
+    }
+
+    #[test]
+    fn app_state_loads_legacy_json_without_calculator() {
+        let legacy = r#"{"count":5,"timer":{"duration_seconds":120,"remaining_seconds":30,"is_running":true}}"#;
+        let state = AppDemoState::deserialize_json_compat(legacy).unwrap();
+        assert_eq!(state.count, 5);
+        assert_eq!(state.timer.remaining_seconds, 30);
+        assert_eq!(state.calculator.display(), "0");
+        assert_eq!(state.collections.count("items"), 0);
+    }
+
+    #[test]
+    fn app_state_loads_calculator_json_without_collections() {
+        let legacy = r#"{"count":5,"timer":{"duration_seconds":120,"remaining_seconds":30,"is_running":true},"calculator":{"display":"9","accumulator":0,"pending_operator":"","has_accumulator":false,"start_new_entry":true}}"#;
+        let state = AppDemoState::deserialize_json_compat(legacy).unwrap();
+        assert_eq!(state.count, 5);
+        assert_eq!(state.calculator.display(), "9");
+        assert_eq!(state.collections.count("items"), 0);
+        assert_eq!(state.inputs.text("new_item"), "");
+    }
+
+    #[test]
+    fn app_state_loads_collections_json_without_inputs() {
+        let legacy = r#"{"count":5,"timer":{"duration_seconds":120,"remaining_seconds":30,"is_running":true},"calculator":{"display":"9","accumulator":0,"pending_operator":"","has_accumulator":false,"start_new_entry":true},"collections":{"collections":[]}}"#;
+        let state = AppDemoState::deserialize_json_compat(legacy).unwrap();
+        assert_eq!(state.count, 5);
+        assert_eq!(state.calculator.display(), "9");
+        assert_eq!(state.collections.count("items"), 0);
+        assert_eq!(state.inputs.text("new_item"), "");
+    }
+
+    #[test]
+    fn generic_collection_add_toggle_delete() {
+        let mut collections = GenericCollectionsState::default();
+        collections.add_item("items", "hello");
+        assert_eq!(collections.count("items"), 1);
+        collections.toggle_item("items", 1);
+        assert!(collections.collection("items").unwrap().items[0].done);
+        collections.delete_item("items", 1);
+        assert_eq!(collections.count("items"), 0);
+    }
+
+    #[test]
+    fn generic_input_set_and_take() {
+        let mut inputs = GenericInputsState::default();
+        inputs.set_text("new_item", "hello");
+        assert_eq!(inputs.text("new_item"), "hello");
+        assert_eq!(inputs.take_text("new_item"), "hello");
+        assert_eq!(inputs.text("new_item"), "");
+    }
+
+    #[test]
+    fn state_templates_render_generic_input_value() {
+        let mut state = AppDemoState::default();
+        state.inputs.set_text("new_item", "hello");
+        assert_eq!(
+            render_state_templates("{{state.input.new_item.value}}", &state),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn state_templates_for_ui_do_not_rewrite_input_values() {
+        let mut state = AppDemoState::default();
+        state.inputs.set_text("new_item", "hello");
+        assert_eq!(
+            render_state_templates_for_ui("{{state.input.new_item.value}}", &state),
+            ""
+        );
+    }
+
+    #[test]
+    fn generic_collection_can_add_from_input_state() {
+        let mut state = AppDemoState::default();
+        state.inputs.set_text("new_item", "hello");
+        let text = state.inputs.take_text("new_item");
+        state.collections.add_item("items", &text);
+        assert_eq!(state.collections.count("items"), 1);
+        assert_eq!(state.inputs.text("new_item"), "");
+    }
+
+    #[test]
+    fn state_templates_render_generic_collection_rows() {
+        let mut state = AppDemoState::default();
+        state.collections.add_item("items", "hello");
+        let rendered = render_state_templates("{{state.collection.items.rows}}", &state);
+        assert!(rendered.contains("hello"));
+        assert!(rendered.contains("app.collection.toggle"));
+        assert!(rendered.contains("app.collection.delete"));
     }
 
     #[test]
