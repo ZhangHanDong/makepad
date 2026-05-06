@@ -1386,6 +1386,7 @@ enum ShaderBackdropProof {
     BlurPass,
     BlurredTexture,
     Refraction,
+    InteriorNoChroma,
     Interior,
 }
 
@@ -1439,6 +1440,7 @@ enum GlassBackendRequest {
     ShaderBackdropBlurPassProof,
     ShaderBackdropBlurredTextureProof,
     ShaderBackdropRefractionProof,
+    ShaderBackdropInteriorNoChroma,
     ShaderBackdropInterior,
     MacosNative(MacosGlassStyle),
     Auto,
@@ -1460,6 +1462,12 @@ struct ShaderBackdropVisualProfile {
 
 fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropVisualProfile {
     match proof {
+        ShaderBackdropProof::InteriorNoChroma => ShaderBackdropVisualProfile {
+            scene_grid_strength: 0.045,
+            refraction_strength: 0.64,
+            rim_strength: 0.075,
+            chroma_strength: 0.0,
+        },
         ShaderBackdropProof::Interior => ShaderBackdropVisualProfile {
             scene_grid_strength: 0.045,
             refraction_strength: 0.64,
@@ -1519,6 +1527,9 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
         }
         Some("shader-backdrop-refraction-proof") => {
             (GlassBackendRequest::ShaderBackdropRefractionProof, None)
+        }
+        Some("shader-backdrop-interior-no-chroma") => {
+            (GlassBackendRequest::ShaderBackdropInteriorNoChroma, None)
         }
         Some("shader-backdrop-interior") => (GlassBackendRequest::ShaderBackdropInterior, None),
         Some("macos-native") => (
@@ -1620,6 +1631,15 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 substrate: GlassSubstrate::ShaderOnly,
                 backdrop: Some(ShaderBackdropConfig {
                     proof: ShaderBackdropProof::Refraction,
+                }),
+            },
+            warning: None,
+        },
+        GlassBackendRequest::ShaderBackdropInteriorNoChroma => GlassConfigResolution {
+            appearance: GlassAppearance {
+                substrate: GlassSubstrate::ShaderOnly,
+                backdrop: Some(ShaderBackdropConfig {
+                    proof: ShaderBackdropProof::InteriorNoChroma,
                 }),
             },
             warning: None,
@@ -3963,6 +3983,7 @@ impl App {
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::InteriorNoChroma
                 | ShaderBackdropProof::Interior
         )
     }
@@ -3973,6 +3994,7 @@ impl App {
             ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::InteriorNoChroma
                 | ShaderBackdropProof::Interior
         )
     }
@@ -3982,6 +4004,7 @@ impl App {
             proof,
             ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::InteriorNoChroma
                 | ShaderBackdropProof::Interior
         )
     }
@@ -4243,6 +4266,7 @@ impl App {
             Some(ShaderBackdropProof::BlurPass) => 0.0,
             Some(ShaderBackdropProof::BlurredTexture) => 0.0,
             Some(ShaderBackdropProof::Refraction) => 0.0,
+            Some(ShaderBackdropProof::InteriorNoChroma) => 0.0,
             Some(ShaderBackdropProof::Interior) => 0.0,
             None => 0.0,
         };
@@ -4262,6 +4286,7 @@ impl App {
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::InteriorNoChroma
                 | ShaderBackdropProof::Interior,
             ) => 1.0,
             _ => 0.0,
@@ -4273,6 +4298,7 @@ impl App {
                 | ShaderBackdropProof::BlurPass
                 | ShaderBackdropProof::BlurredTexture
                 | ShaderBackdropProof::Refraction
+                | ShaderBackdropProof::InteriorNoChroma
                 | ShaderBackdropProof::Interior,
             ) => 1.0,
             _ => 0.0,
@@ -5249,6 +5275,23 @@ mod tests {
     }
 
     #[test]
+    fn aichat_shader_backdrop_interior_no_chroma_resolves_to_interior_no_chroma_backdrop() {
+        let resolved = resolve_glass_appearance(Some("shader-backdrop-interior-no-chroma"), false);
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(
+            resolved.appearance.backdrop,
+            Some(ShaderBackdropConfig {
+                proof: ShaderBackdropProof::InteriorNoChroma,
+            })
+        );
+        assert_eq!(
+            resolved.appearance.panel_preset(),
+            GlassPanelPreset::BackdropOverlay
+        );
+        assert!(resolved.warning.is_none());
+    }
+
+    #[test]
     fn aichat_shader_backdrop_interior_visual_profile_is_less_diagnostic_than_refraction_proof() {
         let interior = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
         let refraction = shader_backdrop_visual_profile(ShaderBackdropProof::Refraction);
@@ -5261,9 +5304,13 @@ mod tests {
     #[test]
     fn aichat_shader_backdrop_interior_visual_profile_uses_subtle_chroma() {
         let interior = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        let no_chroma = shader_backdrop_visual_profile(ShaderBackdropProof::InteriorNoChroma);
         let refraction = shader_backdrop_visual_profile(ShaderBackdropProof::Refraction);
         let shader = shader_backdrop_visual_profile(ShaderBackdropProof::RawSignal);
 
+        assert_eq!(no_chroma.chroma_strength, 0.0);
+        assert_eq!(no_chroma.refraction_strength, interior.refraction_strength);
+        assert_eq!(no_chroma.rim_strength, interior.rim_strength);
         assert!(interior.chroma_strength > 0.0);
         assert!(interior.chroma_strength < refraction.chroma_strength);
         assert_eq!(shader.chroma_strength, 0.0);
