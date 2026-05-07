@@ -1,0 +1,18 @@
+[book]
+title = "Agent2App Protocol Little Book"
+authors = ["Makepad / Robrix Agent2App Working Draft"]
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "/private/tmp/agent2app-little-book-en"
+create-missing = false
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+git-repository-url = "https://github.com/makepad/makepad"
+edit-url-template = ""
