@@ -156,41 +156,92 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="action-protocol"><a class="header" href="#action-protocol">Action Protocol</a></h1>
-<p>An Action is an intent emitted by the user or view. The protocol must distinguish local view actions from shared fact actions.</p>
+<p>Action is the intent emitted by the user or view. The protocol kernel first defines action semantics, then transport binding decides how to carry those semantics.</p>
 <pre class="mermaid">flowchart TB
-    A[User action] --&gt; C{action kind}
+    A[User action] --&gt; C{Action kind}
     C --&gt; L[Local View Action]
     C --&gt; S[Shared Fact Action]
 
     L --&gt; LR[Host local reducer]
     LR --&gt; RR[Re-render local view/session]
 
-    S --&gt; AR[org.octos.action_response]
+    S --&gt; AR[Action response transport]
     AR --&gt; AG[Agent validates and applies policy]
-    AG --&gt; NE[New Matrix snapshot event]
+    AG --&gt; NE[New Snapshot]
 </pre>
+<h2 id="core-action"><a class="header" href="#core-action">Core Action</a></h2>
+<p>A shared Action contains at least:</p>
+<pre><code class="language-json">{
+  "action_id": "approve_plan",
+  "kind": "shared_fact",
+  "scope_key": {
+    "scope": "room",
+    "app_id": "mission.main"
+  },
+  "payload": {}
+}
+</code></pre>
+<p><code>action_id</code> must be registered in the AppType action schema.</p>
+<p><code>kind</code> is decided by AppType policy and can be:</p>
+<pre><code class="language-text">local_view | shared_fact | agent_callback
+</code></pre>
+<p><code>scope_key</code> points to the AppInstance being operated on.</p>
+<p><code>payload</code> must validate against the action schema.</p>
 <h2 id="local-view-action"><a class="header" href="#local-view-action">Local View Action</a></h2>
-<p>Local View Action applies to:</p>
+<p>Local View Action fits:</p>
 <ul>
-<li>expanding or collapsing task details;</li>
+<li>expanding/collapsing task details;</li>
 <li>selecting an agent;</li>
-<li>switching filter/sort/tab state;</li>
+<li>switching filters, sorting, or tabs;</li>
 <li>aichat counter/timer/calculator/collection operations.</li>
 </ul>
-<p>Local reducer lookup must dispatch through an AppType plus action id whitelist.</p>
-<p>Robrix2 should not use an unbounded global <code>agent.notify("anything")</code> string surface as its production action API.</p>
-<h2 id="aichat-agentnotify"><a class="header" href="#aichat-agentnotify">aichat agent.notify</a></h2>
-<p>aichat uses <code>agent.notify(event_id, payload)</code>:</p>
+<p>Local reducer lookup must dispatch by the AppType + action id whitelist.</p>
+<p>Local View Action can update HostState, but it must not automatically become shared truth.</p>
+<h2 id="shared-fact-action"><a class="header" href="#shared-fact-action">Shared Fact Action</a></h2>
+<p>Shared Fact Action changes shared facts. It must be validated by the Agent/producer and then produce a new Snapshot.</p>
+<p>Examples in Mission Room:</p>
+<pre><code class="language-text">approve_plan
+request_plan_changes
+pause_mission
+resume_mission
+</code></pre>
+<p>These actions must not silently modify mission truth through a local reducer alone.</p>
+<h2 id="local-binding-agentnotify"><a class="header" href="#local-binding-agentnotify">Local Binding: agent.notify</a></h2>
+<p>aichat uses <code>agent.notify(event_id, payload)</code> to carry Action:</p>
 <pre><code class="language-splash">agent.notify("inc", {})
 agent.notify("app.collection.add_from_input", {collection: "items", input: "new_item"})
 </code></pre>
+<p><code>agent.notify</code> is the reverse channel of the aichat Local Binding. It is not the shared protocol kernel itself; it is the local carrier that maps user intent inside a Template back to the Host action dispatcher.</p>
 <p>Implementation boundary:</p>
 <ul>
 <li><code>agent.notify</code> is registered in <code>widgets/src/splash.rs</code>.</li>
 <li><code>SplashAction</code> is defined in <code>widgets/src/splash.rs</code>.</li>
 <li><code>SplashAction::Notify</code> is a bare action, not a widget action.</li>
-<li>aichat directly iterates <code>actions</code> in <code>handle_actions</code> and casts them.</li>
+<li>aichat directly iterates <code>actions</code> and casts in <code>handle_actions</code>.</li>
 </ul>
+<p>Call contract:</p>
+<ul>
+<li>The first argument is <code>event_id</code>. It must be convertible to a string; a missing or invalid value becomes an empty string.</li>
+<li>The second argument is <code>payload</code>. It can be any Splash value, and the runtime serializes it into a JSON string.</li>
+<li><code>agent.notify</code> does not return a business value. It returns <code>nil</code>.</li>
+<li>It can be used inside generated <code>runsplash</code> callbacks such as <code>Button.on_click</code> and <code>TextInput.on_change</code>.</li>
+</ul>
+<p>Runtime path:</p>
+<pre class="mermaid">sequenceDiagram
+    participant UI as runsplash UI
+    participant VM as Splash VM
+    participant CX as Cx action queue
+    participant H as aichat Host
+    participant S as Host data/state
+
+    UI-&gt;&gt;VM: agent.notify(event_id, payload)
+    VM-&gt;&gt;VM: stringify event_id and JSON-encode payload
+    VM-&gt;&gt;CX: Cx::post_action(SplashAction::Notify)
+    CX-&gt;&gt;H: handle_actions
+    H-&gt;&gt;H: whitelist event_id and validate payload
+    H-&gt;&gt;S: mutate local data/state or trigger agent callback
+    H-&gt;&gt;UI: refresh visible templates
+</pre>
 <p>The Host must:</p>
 <ul>
 <li>validate event id;</li>
@@ -198,8 +249,20 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
 <li>log and ignore unknown events;</li>
 <li>log and ignore invalid payloads.</li>
 </ul>
-<h2 id="robrix2-shared-action"><a class="header" href="#robrix2-shared-action">Robrix2 Shared Action</a></h2>
-<p>Robrix2 uses <code>org.octos.action_response</code> for shared actions.</p>
+<p>State refresh rules:</p>
+<ul>
+<li>The Host is the data/state owner. <code>runsplash</code> is only the current view template.</li>
+<li>After a valid action changes Host data/state, the Host projects the current data/state back into the visible template.</li>
+<li>Draft state in input fields must not rewrite the <code>runsplash</code> source on every keypress. Input should call <code>agent.notify("app.input.set", ...)</code> into HostState, and a submit action should consume it.</li>
+</ul>
+<p>Boundary:</p>
+<ul>
+<li><code>agent.notify</code> can carry <code>local_view</code> actions and aichat-local <code>agent_callback</code> actions.</li>
+<li>It must not be used as the production protocol for remote shared fact actions in scenarios such as Robrix2.</li>
+<li>Remote shared actions should use the corresponding transport binding, such as <code>org.octos.action_response</code> in Matrix.</li>
+</ul>
+<h2 id="remote-binding-action_response"><a class="header" href="#remote-binding-action_response">Remote Binding: action_response</a></h2>
+<p>Robrix2 uses <code>org.octos.action_response</code> to carry Shared Fact Action.</p>
 <pre><code class="language-json">{
   "org.octos.action_response": {
     "action_id": "approve_plan",
@@ -216,10 +279,10 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
 <p>Rules:</p>
 <ul>
 <li><code>source_event_id</code> points to the original Matrix event that produced the action.</li>
-<li><code>app</code> explicitly routes the action when a room contains multiple app instances.</li>
+<li>The <code>app</code> field explicitly routes the action when multiple app instances exist in the same room.</li>
 <li>The producer validates the action response.</li>
 <li>After applying policy, the producer sends a new app snapshot event.</li>
-<li>Robrix2 may perform optimistic local view updates, but it must not treat optimistic state as shared truth.</li>
+<li>Robrix2 may perform optimistic local view updates, but must not treat optimistic state as shared truth.</li>
 </ul>
 
                     </main>
@@ -230,7 +293,7 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="08-aichat-profile.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="08-a2ui-compatibility.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -244,7 +307,7 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="08-aichat-profile.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="08-a2ui-compatibility.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

@@ -1,9 +1,9 @@
 <!DOCTYPE HTML>
-<html lang="en" class="light sidebar-visible" dir="ltr">
+<html lang="zh-CN" class="light sidebar-visible" dir="ltr">
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Safety Model - Agent2App Protocol Little Book</title>
+        <title>数据模型 - Agent2App 协议小册</title>
 
 
         <!-- Custom HTML head -->
@@ -120,7 +120,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">Agent2App Protocol Little Book</h1>
+                    <h1 class="menu-title">Agent2App 协议小册</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -155,79 +155,120 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="safety-model"><a class="header" href="#safety-model">Safety Model</a></h1>
-<p>The Agent2View v0.1 safety model should stay short and executable. Safety rules are split into protocol-kernel rules, binding rules, and profile rules.</p>
-<h2 id="shared-principles"><a class="header" href="#shared-principles">Shared Principles</a></h2>
-<pre class="mermaid">flowchart TD
-    I[Input] --&gt; T{registered AppType}
-    T --&gt;|no| F[Fallback]
-    T --&gt;|yes| V{state validates}
-    V --&gt;|no| F
-    V --&gt;|yes| P{template preflight}
-    P --&gt;|fail| F
-    P --&gt;|ok| A{action whitelist}
-    A --&gt;|unknown| D[Drop / log]
-    A --&gt;|known| R[Render or reduce]
+                        <h1 id="数据模型"><a class="header" href="#数据模型">数据模型</a></h1>
+<p>Agent2App 应明确区分 <code>data</code>、<code>state</code> 和 <code>view</code> 三层。</p>
+<pre class="mermaid">flowchart TB
+    D[Data&lt;br/&gt;domain facts / shared truth]
+    S[State&lt;br/&gt;host session / draft / interaction]
+    V[View&lt;br/&gt;template / component tree]
+
+    D --&gt; R[Render data model]
+    S --&gt; R
+    R --&gt; V
+
+    V --&gt; A[Action]
+    A --&gt;|data_mutation| D
+    A --&gt;|local_view| S
 </pre>
-<p>Principles:</p>
-<ol>
-<li>Rich UI renders only for registered AppTypes.</li>
-<li>Each AppType validates its own state.</li>
-<li>Template must pass profile-defined preflight.</li>
-<li>Template preflight must reject unknown widgets, unknown helpers, and undeclared state paths.</li>
-<li>Any failure falls back to the safe representation specified by the profile.</li>
-<li>Action dispatch must use an AppType + action id whitelist.</li>
-<li>Widget state must not become shared truth.</li>
-</ol>
-<h2 id="local-binding-safety-boundary"><a class="header" href="#local-binding-safety-boundary">Local Binding Safety Boundary</a></h2>
-<p>Local binding may accept LLM-generated templates, but it must:</p>
+<p>三层定义：</p>
 <ul>
-<li>restrict the host action manifest;</li>
-<li>validate payload;</li>
-<li>limit callable APIs from the template;</li>
-<li>reject or degrade dangerous shaders, unknown widgets, and unknown helpers;</li>
-<li>never promote arbitrary Agent output to system authority.</li>
+<li>Data：AppInstance 的业务数据和共享事实，可以被校验、同步、审计和复现。</li>
+<li>State：Host 或 renderer 为当前交互保留的运行状态，不默认进入共享事实。</li>
+<li>View：把 data 和必要 state 投影成 UI 的模板或组件树。</li>
 </ul>
-<p>aichat belongs to this boundary.</p>
-<h2 id="remote-binding-safety-boundary"><a class="header" href="#remote-binding-safety-boundary">Remote Binding Safety Boundary</a></h2>
-<p>Remote/event binding must be more conservative:</p>
+<p><code>Snapshot</code> 应优先理解为 <code>DataSnapshot</code>。旧文档或旧 binding 中名为 <code>state</code>、<code>initial_state</code> 的字段，如果承载的是业务事实，应在语义上映射到 <code>data</code>。</p>
+<h2 id="data"><a class="header" href="#data">Data</a></h2>
+<p>Data 是 AppType 定义的业务事实层。它回答“这个 app 当前事实是什么”，而不是“某个客户端正在如何显示它”。</p>
+<p>典型 data：</p>
 <ul>
-<li>do not trust runtime templates carried by events;</li>
-<li>render only locally registered AppTypes;</li>
-<li>use only locally registered templates;</li>
-<li>shared state must come from original event content or producer snapshot;</li>
-<li>shared actions must go through action response and be validated by the producer.</li>
+<li>counter 的当前数值。</li>
+<li>timer 的目标时长、剩余时间、运行标记。</li>
+<li>collection 的 item 列表和完成状态。</li>
+<li>mission room 的目标、阶段、任务、决策、阻塞项。</li>
+<li>account dashboard 汇总出的任务摘要。</li>
 </ul>
-<p>Robrix2 belongs to this boundary.</p>
-<h2 id="application-scenario-constraints"><a class="header" href="#application-scenario-constraints">Application Scenario Constraints</a></h2>
-<p>aichat profile:</p>
+<p>Data 必须满足 AppType 的 <code>data_schema</code>。当某个 binding 还使用 <code>state_schema</code> 命名权威业务事实时，profile 必须声明该字段是 legacy alias，并按 <code>data_schema</code> 校验。</p>
+<h2 id="datasnapshot"><a class="header" href="#datasnapshot">DataSnapshot</a></h2>
+<p>DataSnapshot 是 AppInstance 在某个版本上的完整 data 文档。</p>
+<pre><code class="language-json">{
+  "data": {
+    "goal": {
+      "title": "Ship room-scoped agent2app runtime",
+      "status": "planning"
+    },
+    "phase": "planning",
+    "tasks": []
+  },
+  "version": 7,
+  "producer": "@agent:example.org",
+  "created_at": "2026-05-07T10:00:00Z"
+}
+</code></pre>
+<p>规则：</p>
 <ul>
-<li>may accept LLM-generated <code>runsplash</code>;</li>
-<li>may use <code>agent.notify</code>;</li>
-<li>must restrict the host action manifest;</li>
-<li>must validate payload.</li>
+<li>远程/event binding 中，DataSnapshot 必须来自 producer event 或可审计事件日志。</li>
+<li>本地 binding 中，Host 可以临时作为 data owner，例如 aichat demo 的本地 reducer。</li>
+<li><code>room</code> 和 <code>account</code> scoped app 推荐传完整 DataSnapshot，而不是只传 patch。</li>
+<li>局部 patch 只适合有严格顺序、幂等和冲突处理保证的 binding。</li>
 </ul>
-<p>Robrix2 profile:</p>
+<h2 id="render-data-model"><a class="header" href="#render-data-model">Render Data Model</a></h2>
+<p>Render data model 是渲染器实际绑定的文档。它可以由 Core Data 加上允许暴露的 Host State 投影而来。</p>
+<pre class="mermaid">flowchart LR
+    D[DataSnapshot] --&gt; P[Projection]
+    S[Allowed Host State] --&gt; P
+    P --&gt; R[Render data model]
+    R --&gt; T[Template / A2UI components]
+</pre>
+<p>Render data model 不等于共享事实。它可以包含：</p>
 <ul>
-<li>does not accept event-supplied Splash templates;</li>
-<li>does not accept runtime-generated templates as the v1 production path;</li>
-<li>does not use <code>agent.notify</code> to express shared actions;</li>
-<li>does not silently modify mission truth through local reducers;</li>
-<li>does not read <code>m.replace</code> edits to change app state or action set.</li>
+<li><code>data.*</code>：业务事实投影。</li>
+<li><code>state.*</code>：允许暴露给 view 的本地状态，例如输入 draft、当前 tab、filter。</li>
+<li><code>meta.*</code>：Host 注入的安全元信息，例如只读 attribution、capability label。</li>
 </ul>
-<h2 id="fail-closed-to-safe-rendering"><a class="header" href="#fail-closed-to-safe-rendering">Fail Closed to Safe Rendering</a></h2>
-<p>Rich rendering is an enhancement, not the only readable form of a message.</p>
-<p>Any validation failure must fall back to the safe representation defined by the profile. In Robrix2, that safe representation is <code>body</code>. In aichat, it can be an error view, log + ignore, or keeping the last usable view.</p>
+<p>模板和组件树只能访问 capability manifest 允许的路径。</p>
+<p>推荐路径约定：</p>
+<pre><code class="language-text">/data/count
+/data/collections/items/rows
+/state/inputs/new_item/value
+/state/ui/selected_tab
+/meta/producer/display_name
+</code></pre>
+<p>旧的 <code>{{state.count}}</code> 写法在 aichat legacy runsplash binding 中可以继续支持，但应被视为 legacy path alias。新的通用文档和 A2UI 兼容路径应优先使用 <code>/data/*</code> 与 <code>/state/*</code> 分开表达。</p>
+<h2 id="data-mutation"><a class="header" href="#data-mutation">Data Mutation</a></h2>
+<p>只有 AppType policy 标记为 data mutation 的 action 能改变 data。当前 core kind 中，这类 action 通常表现为 <code>shared_fact</code>；本地 binding 可以用 Host reducer 作为 producer loopback，但语义仍然是 data mutation，而不是普通 <code>local_view</code> state update。</p>
+<pre class="mermaid">sequenceDiagram
+    participant V as View
+    participant H as Host
+    participant P as Policy / Producer
+    participant D as DataSnapshot
+
+    V-&gt;&gt;H: data mutation action
+    H-&gt;&gt;P: validate action + payload + scope
+    P-&gt;&gt;D: produce newer DataSnapshot
+    D--&gt;&gt;H: data version advances
+    H--&gt;&gt;V: re-render projection
+</pre>
+<p><code>local_view</code> action 只能改变 state。它可以影响当前渲染结果，但不得静默提升为 data。</p>
+<h2 id="与-a2ui-data-model-的关系"><a class="header" href="#与-a2ui-data-model-的关系">与 A2UI Data Model 的关系</a></h2>
+<p>A2UI 的 <code>updateDataModel</code> 是 view encoding 的 render data model 更新，不是 Agent2App Core Data 的唯一来源。</p>
+<p>推荐映射：</p>
+<ul>
+<li>Agent2App <code>DataSnapshot</code> 投影到 A2UI data model 的 <code>/data</code>。</li>
+<li>Host 允许暴露的 local state 投影到 A2UI data model 的 <code>/state</code>。</li>
+<li>A2UI 输入组件更新 client-side data model 时，只更新 <code>/state</code> 下的 draft。</li>
+<li>用户提交后，Host 根据 action schema 决定是否把 <code>/state</code> 中的 draft 作为 payload 提交给 data mutation。</li>
+</ul>
+<p>这样可以同时支持 A2UI 的本地双向绑定和 Agent2App 的共享事实边界。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="10-mission-room-profile.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="04-envelope-and-scope.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="12-versioning-validation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="05-state-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -237,11 +278,11 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="10-mission-room-profile.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="04-envelope-and-scope.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="12-versioning-validation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="05-state-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

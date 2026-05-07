@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Robrix2 Profile - Agent2App Protocol Little Book</title>
+        <title>Robrix2 Application Scenario - Agent2App Protocol Little Book</title>
 
 
         <!-- Custom HTML head -->
@@ -155,8 +155,17 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="robrix2-profile"><a class="header" href="#robrix2-profile">Robrix2 Profile</a></h1>
-<p>Robrix2 is the Matrix Event-Sourced profile. It renders Matrix event history and does not own a private RPC session with the producing Agent.</p>
+                        <h1 id="robrix2-application-scenario"><a class="header" href="#robrix2-application-scenario">Robrix2 Application Scenario</a></h1>
+<p>Robrix2 is the Matrix IM app-card scenario on top of the Agent2App Core Kernel. It uses Remote/Event Binding to render Matrix event history and does not own a private RPC session with the producing Agent.</p>
+<h2 id="scenario-positioning"><a class="header" href="#scenario-positioning">Scenario Positioning</a></h2>
+<pre class="mermaid">flowchart LR
+    Core[Agent2View Core]
+    Core --&gt; Binding[Remote/Event Binding]
+    Binding --&gt; Env[org.octos.app]
+    Env --&gt; Registry[AppRegistry]
+    Registry --&gt; Card[Native IM app card]
+</pre>
+<p>Robrix2's responsibility is to consume events, validate AppType, project Snapshot, render local templates, and write user shared actions back into the event system.</p>
 <h2 id="v1-display-cards"><a class="header" href="#v1-display-cards">V1 Display Cards</a></h2>
 <p>Robrix2 v1 cards should remain display-only:</p>
 <ul>
@@ -166,7 +175,7 @@
 </ul>
 <p>These apps do not need LLM-generated templates or local reducers.</p>
 <h2 id="agentviewsession"><a class="header" href="#agentviewsession">AgentViewSession</a></h2>
-<p>The Robrix2 interactive runtime should use a structure similar to:</p>
+<p>Robrix2 interactive runtime should use a structure similar to:</p>
 <pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>struct AgentViewSession {
@@ -179,7 +188,7 @@
     dirty: bool,
 }
 <span class="boring">}</span></code></pre></pre>
-<p>The session map preserves state while a room is open.</p>
+<p>The session map stores state while a room is open.</p>
 <pre class="mermaid">flowchart LR
     EV[Matrix event] --&gt; SK[ScopeKey]
     SK --&gt; SM[SessionMap]
@@ -188,7 +197,7 @@
     S --&gt; V2[Visible card B]
 </pre>
 <h2 id="local-reducer-loop"><a class="header" href="#local-reducer-loop">Local Reducer Loop</a></h2>
-<p>The first local reducers should stay narrow:</p>
+<p>Robrix2 may support local view reducers, but the first reducers should remain narrow:</p>
 <pre><code class="language-text">counter.inc
 counter.dec
 counter.reset
@@ -203,17 +212,17 @@ timer.reset
   -&gt; re-render affected views
 </code></pre>
 <p><code>message</code> scope redraws only one card.</p>
-<p><code>room</code> scope redraws all visible cards pointing to the same <code>room_id + app_id</code>.</p>
+<p><code>room</code> scope redraws all visible cards that point to the same <code>room_id + app_id</code>.</p>
 <h2 id="relationship-to-aichat"><a class="header" href="#relationship-to-aichat">Relationship to aichat</a></h2>
-<p>Robrix2 can borrow aichat's narrow live wire, but it must not directly copy <code>agent.notify</code> as the production shared action protocol.</p>
-<p>The aichat loop works because aichat owns:</p>
+<p>Robrix2 can borrow the narrow live wire from aichat, but it must not copy <code>agent.notify</code> as the production shared action protocol.</p>
+<p>The aichat loop works because it owns all of the following:</p>
 <ul>
-<li>LLM session;</li>
-<li>local state;</li>
-<li>Splash VM;</li>
+<li>LLM session.</li>
+<li>local state.</li>
+<li>Splash VM.</li>
 <li>immediate event loop.</li>
 </ul>
-<p>Robrix2 must keep shared truth in the Matrix timeline.</p>
+<p>Robrix2 shared truth must remain in the Matrix timeline. The extra constraints for the Robrix2 scenario are: do not accept event-supplied templates, do not read <code>m.replace</code> edits to change app state, and do not silently modify shared truth with local reducers.</p>
 
                     </main>
 

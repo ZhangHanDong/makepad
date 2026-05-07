@@ -1,0 +1,460 @@
+<!DOCTYPE HTML>
+<html lang="zh-CN" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>A2UI 兼容 Profile - Agent2App 协议小册</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Agent2App 协议小册</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/makepad/makepad" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="a2ui-兼容-profile"><a class="header" href="#a2ui-兼容-profile">A2UI 兼容 Profile</a></h1>
+<p><a href="https://github.com/google/A2UI/">A2UI</a> 可以作为 Agent2App 的 View Encoding，而不是替代 Agent2App Core Kernel。</p>
+<p>Agent2App 负责定义应用实例语义：AppType、Scope、DataSnapshot、Host State、ViewSpec、Action、Capability、Validation 与应用场景 profile。A2UI 负责定义可流式渲染的 UI 表达：Surface、Component、Data Model 和用户 action。</p>
+<p>因此，兼容策略是：</p>
+<pre><code class="language-text">Agent2App appplan = Agent2App 外层语义 + A2UI message bundle
+</code></pre>
+<p>不要把 Agent2App 的 <code>scope</code>、<code>app_type</code>、profile policy、权限边界等字段直接塞进 A2UI message。<a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/server_to_client.json">A2UI v0.9 server-to-client envelope</a> 是严格消息结构，每条消息只能表达一种 A2UI 操作。</p>
+<h2 id="参考链接"><a class="header" href="#参考链接">参考链接</a></h2>
+<ul>
+<li><a href="https://github.com/google/A2UI/">A2UI GitHub 仓库</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/docs/a2ui_protocol.md">A2UI v0.9 协议说明</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/server_to_client.json">A2UI v0.9 Server-to-Client Schema</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/client_to_server.json">A2UI v0.9 Client-to-Server Schema</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/common_types.json">A2UI v0.9 Common Types</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/standard_catalog.json">A2UI v0.9 Standard Catalog</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/docs/evolution_guide.md">A2UI v0.9 Evolution Guide</a></li>
+</ul>
+<h2 id="分层关系"><a class="header" href="#分层关系">分层关系</a></h2>
+<pre class="mermaid">flowchart TD
+    K[Agent2App Core Kernel]
+    K --&gt; P[App Profile: aichat / Robrix2 / Mission Room]
+    K --&gt; B[Transport Binding]
+    P --&gt; V[ViewSpec / appplan]
+    V --&gt; A[A2UI View Encoding]
+    A --&gt; R[Renderer: Makepad / Web / Native]
+</pre>
+<p>三层职责必须分开：</p>
+<ul>
+<li>Agent2App Core Kernel：定义跨本地 Agent 与远程 Agent 一致的 data/state/view/action 语义。</li>
+<li>A2UI View Encoding：定义 UI surface、component tree、render data model update 和 client action。</li>
+<li>Application Profile：定义某个宿主如何解释 AppType、Scope、权限、模板来源、data 提交流程和 state 保存策略。</li>
+</ul>
+<h2 id="a2ui-v09-映射"><a class="header" href="#a2ui-v09-映射">A2UI v0.9 映射</a></h2>
+<p>A2UI v0.9 的 server-to-client 消息包括：</p>
+<ul>
+<li><code>createSurface</code>：创建一个可渲染 surface。</li>
+<li><code>updateComponents</code>：更新该 surface 的组件列表。</li>
+<li><code>updateDataModel</code>：更新该 surface 的 data model。</li>
+<li><code>deleteSurface</code>：删除 surface。</li>
+</ul>
+<p>Agent2App 到 A2UI 的推荐映射：</p>
+<div class="table-wrapper"><table><thead><tr><th>Agent2App 概念</th><th>A2UI 概念</th><th>说明</th></tr></thead><tbody>
+<tr><td><code>app_id</code></td><td><code>surfaceId</code></td><td><code>message</code> scope 可由 Host 分配；<code>room</code>/<code>account</code> scope 应使用稳定 app id。</td></tr>
+<tr><td><code>DataSnapshot</code></td><td><code>updateDataModel.value.data</code></td><td>推荐在 render data model 的 <code>/data</code> 下提交完整 data snapshot；局部 patch 只适合有强顺序保证的 binding。</td></tr>
+<tr><td>Host State</td><td><code>updateDataModel.value.state</code></td><td>输入 draft、filter、tab 等本地状态放在 <code>/state</code> 下，不默认成为 shared truth。</td></tr>
+<tr><td><code>Template</code> / <code>ViewSpec</code></td><td><code>updateComponents.components</code></td><td>使用 A2UI component catalog 表达可验证的 UI 结构。</td></tr>
+<tr><td><code>CapabilityManifest</code></td><td><code>catalogId</code> + client capabilities</td><td>A2UI catalog 表达组件/函数能力，Agent2App manifest 继续表达 data/state/action 权限。</td></tr>
+<tr><td>Local View Action</td><td><code>action.functionCall</code></td><td>只用于宿主明确注册的本地函数，例如 <code>openUrl</code>。</td></tr>
+<tr><td>Shared Fact Action</td><td><code>action.event</code></td><td>发送给 Host/Agent 验证，再产生新的 DataSnapshot。</td></tr>
+<tr><td><code>ActionResult</code></td><td>client-to-server <code>action</code> 后的新 envelope</td><td>A2UI action 本身不是 shared truth；truth 仍由 Agent2App DataSnapshot 收敛。</td></tr>
+</tbody></table>
+</div>
+<h2 id="appplan-格式"><a class="header" href="#appplan-格式">appplan 格式</a></h2>
+<p>当 <code>appplan</code> 兼容 A2UI 时，它仍然是 Agent2App artifact，而不是单条 A2UI message。</p>
+<p>推荐格式：</p>
+<pre><code class="language-json">{
+  "agent2app": {
+    "core_version": 1,
+    "binding_version": 1,
+    "profile": "aichat",
+    "profile_version": 1,
+    "app_type": "todo",
+    "scope": "message",
+    "app_id": "todo.main"
+  },
+  "view": {
+    "format": "a2ui",
+    "version": "v0.9",
+    "messages": [
+      {
+        "version": "v0.9",
+        "createSurface": {
+          "surfaceId": "todo.main",
+          "catalogId": "https://a2ui.org/specification/v0_9/standard_catalog.json",
+          "sendDataModel": true
+        }
+      },
+      {
+        "version": "v0.9",
+        "updateComponents": {
+          "surfaceId": "todo.main",
+          "components": [
+            {
+              "id": "root",
+              "component": "Column",
+              "children": ["new_item", "add_button", "items"]
+            },
+            {
+              "id": "new_item",
+              "component": "TextField",
+              "label": "New item",
+              "value": {
+                "path": "/state/inputs/new_item/value"
+              },
+              "variant": "shortText"
+            },
+            {
+              "id": "add_button_label",
+              "component": "Text",
+              "text": "Add"
+            },
+            {
+              "id": "add_button",
+              "component": "Button",
+              "child": "add_button_label",
+              "variant": "primary",
+              "action": {
+                "event": {
+                  "name": "app.collection.add_from_input",
+                  "context": {
+                    "collection": "items",
+                    "input": "new_item"
+                  }
+                }
+              }
+            },
+            {
+              "id": "items",
+              "component": "List",
+              "children": {
+                "path": "/data/collections/items/rows",
+                "componentId": "item_template"
+              }
+            },
+            {
+              "id": "item_template",
+              "component": "Text",
+              "text": {
+                "path": "text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "version": "v0.9",
+        "updateDataModel": {
+          "surfaceId": "todo.main",
+          "path": "/",
+          "value": {
+            "data": {
+              "collections": {
+                "items": {
+                  "rows": []
+                }
+              }
+            },
+            "state": {
+              "inputs": {
+                "new_item": {
+                  "value": ""
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "permissions": {
+    "data_paths": [
+      "/data/collections/items/rows"
+    ],
+    "state_paths": [
+      "/state/inputs/new_item/value"
+    ],
+    "actions": [
+      "app.collection.add_from_input"
+    ]
+  }
+}
+</code></pre>
+<p>这个结构有两个重要边界：</p>
+<ul>
+<li><code>view.messages[*]</code> 必须是合法 A2UI v0.9 message。</li>
+<li><code>agent2app</code> 与 <code>permissions</code> 是 Agent2App 外层语义，不能要求 A2UI renderer 原生理解。</li>
+</ul>
+<h2 id="输入与本地-data-model"><a class="header" href="#输入与本地-data-model">输入与本地 Data Model</a></h2>
+<p>A2UI 的输入组件采用本地双向绑定：<code>TextField</code>、<code>CheckBox</code>、<code>Slider</code>、<code>ChoicePicker</code> 等组件在用户交互时立即更新 client-side data model。</p>
+<p>这与 Agent2App 的输入原则一致：</p>
+<ul>
+<li>输入过程不应重写 template source。</li>
+<li>每次 keypress 不应重新生成 <code>runsplash</code> 或 <code>updateComponents</code>。</li>
+<li>用户提交时，通过 action context 或 <code>sendDataModel</code> 把当前 render data model 交给 Host/Agent。</li>
+</ul>
+<p>对 aichat 来说，A2UI 兼容路径可以避免“输入一个字母重建一次 UI”的问题。输入框 draft state 属于 Host/client data model 的 <code>/state</code> 分支；业务数据属于 <code>/data</code> 分支；模板只绑定路径。</p>
+<h2 id="aichat-兼容路径"><a class="header" href="#aichat-兼容路径">aichat 兼容路径</a></h2>
+<p>aichat 可以同时支持两种 local view encoding：</p>
+<div class="table-wrapper"><table><thead><tr><th><code>view.format</code></th><th>Template 来源</th><th>渲染路径</th></tr></thead><tbody>
+<tr><td><code>runsplash</code></td><td>LLM-generated Splash</td><td>现有 Markdown + SplashHost 路径</td></tr>
+<tr><td><code>a2ui</code></td><td>A2UI component tree</td><td>A2UI component tree 映射到 Makepad widgets</td></tr>
+</tbody></table>
+</div>
+<p><code>runsplash</code> 可以继续作为当前实现路径。A2UI 则作为更通用、更容易跨 renderer 的 appplan 格式。</p>
+<p>当 <code>view.format = "a2ui"</code> 时：</p>
+<ol>
+<li>Host 校验 Agent2App 外层字段。</li>
+<li>Host 校验 A2UI message bundle。</li>
+<li>Host 根据 <code>catalogId</code> 选择 renderer。</li>
+<li>Host 把 A2UI components 映射到 Makepad widgets。</li>
+<li>Host 把 A2UI action 映射回 Agent2App action dispatcher。</li>
+</ol>
+<h2 id="robrix2-兼容路径"><a class="header" href="#robrix2-兼容路径">Robrix2 兼容路径</a></h2>
+<p>Robrix2 不应直接信任远程事件中携带的任意 Makepad template。</p>
+<p>若使用 A2UI：</p>
+<ul>
+<li>Matrix event 可以携带 Agent2App envelope。</li>
+<li>envelope 的 view 部分可以是 A2UI message bundle，或者是 profile 注册的 <code>template_id</code>。</li>
+<li>Host 必须校验 <code>catalogId</code>、component catalog、data path、state path 和 action。</li>
+<li>shared action 仍然写回事件系统，由 Agent/producer 验证后生成新的 DataSnapshot。</li>
+</ul>
+<p>Robrix2 的生产默认路径仍可使用本地静态 template。A2UI 更适合作为安全的动态 UI 表达，前提是 renderer 只支持受信 catalog。</p>
+<h2 id="mission-room-兼容路径"><a class="header" href="#mission-room-兼容路径">Mission Room 兼容路径</a></h2>
+<p>Mission Room 是 room-scoped shared app。它的 <code>surfaceId</code> 应稳定映射到：</p>
+<pre><code class="language-text">room_id + app_id
+</code></pre>
+<p>推荐：</p>
+<ul>
+<li><code>scope = "room"</code>。</li>
+<li><code>app_id = "mission.main"</code>。</li>
+<li>A2UI <code>surfaceId = "mission.main"</code>，Host 内部用 ScopeKey 隔离不同 room。</li>
+<li><code>updateDataModel</code> 使用完整 Mission Room DataSnapshot，投影到 <code>/data</code>。</li>
+<li>用户操作使用 A2UI <code>action.event</code>，再映射到 Agent2App shared fact action。</li>
+</ul>
+<h2 id="校验顺序"><a class="header" href="#校验顺序">校验顺序</a></h2>
+<p>A2UI 兼容 profile 的校验顺序：</p>
+<pre class="mermaid">flowchart TD
+    P[appplan] --&gt; A{Agent2App outer fields valid}
+    A --&gt;|no| F[Fallback]
+    A --&gt;|yes| S{ScopeKey valid}
+    S --&gt;|no| F
+    S --&gt;|yes| C{capabilities allow view format}
+    C --&gt;|no| F
+    C --&gt;|yes| V{A2UI messages validate}
+    V --&gt;|no| F
+    V --&gt;|yes| M{data/state paths and actions allowed}
+    M --&gt;|no| F
+    M --&gt;|yes| R[Render]
+</pre>
+<p>Host 必须先校验 Agent2App 外层语义，再校验 A2UI 内层消息。否则 A2UI renderer 可能渲染了一个语法正确但越权的 UI。</p>
+<h2 id="兼容结论"><a class="header" href="#兼容结论">兼容结论</a></h2>
+<p><code>appplan</code> 可以兼容 A2UI，但兼容方式应该是“包含 A2UI message bundle”，而不是“变成 A2UI message”。</p>
+<p>这样可以同时满足：</p>
+<ul>
+<li>A2UI schema 的严格性。</li>
+<li>Agent2App 对 Scope、权限、profile、data/state 边界和 shared truth 的建模。</li>
+<li>aichat 本地 Agent 与 Robrix2 远程 Agent 使用同一协议内核。</li>
+<li>Makepad、Web、Native renderer 共享同一种 declarative UI encoding。</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="07-actions.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="08-aichat-profile.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="07-actions.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="08-aichat-profile.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid.min.js"></script>
+        <script src="mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>两种运行模式 - Agent2App 协议小册</title>
+        <title>传输绑定 - Agent2App 协议小册</title>
 
 
         <!-- Custom HTML head -->
@@ -155,66 +155,77 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="两种运行模式"><a class="header" href="#两种运行模式">两种运行模式</a></h1>
-<p>Agent2View 有两种已经落地或计划落地的模式。</p>
-<h2 id="local-runtime"><a class="header" href="#local-runtime">Local Runtime</a></h2>
-<p>Local Runtime 模式用于 aichat。</p>
+                        <h1 id="传输绑定"><a class="header" href="#传输绑定">传输绑定</a></h1>
+<p>传输绑定把通用协议内核映射到具体消息承载。它不改变协议语义，只改变数据如何传输、谁能观察、失败如何降级。</p>
+<h2 id="内核到绑定的映射"><a class="header" href="#内核到绑定的映射">内核到绑定的映射</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Core Concept</th><th>Local Binding</th><th>Remote/Event Binding</th></tr></thead><tbody>
+<tr><td>AgentEndpoint</td><td>当前 LLM session / 本地工具 Agent</td><td>Matrix room Agent / 服务端 producer</td></tr>
+<tr><td>ViewSpec</td><td><code>appplan json</code> + <code>runsplash</code></td><td><code>org.octos.app</code> envelope + template id</td></tr>
+<tr><td>DataSnapshot</td><td>Host-owned data / APP_DEMO_STATE</td><td>Matrix event content</td></tr>
+<tr><td>Host State</td><td>local session state / input drafts</td><td>in-memory AgentViewSession</td></tr>
+<tr><td>Template</td><td>LLM-generated runsplash 或本地模板</td><td>本地注册静态模板</td></tr>
+<tr><td>Action</td><td><code>agent.notify(event_id, payload)</code></td><td><code>org.octos.action_response</code></td></tr>
+<tr><td>ActionResult</td><td>Host local reducer 结果或新 DataSnapshot</td><td>Agent 产生的新 snapshot event</td></tr>
+<tr><td>Failure</td><td>log/ignore 或显示错误 view</td><td>fallback 到 <code>body</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="local-binding"><a class="header" href="#local-binding">Local Binding</a></h2>
+<p>Local binding 用于 aichat 这类本地 AppGen 场景。</p>
 <pre class="mermaid">sequenceDiagram
     participant U as User
-    participant L as LLM
+    participant A as Local AgentEndpoint
+    participant H as Host
     participant M as Markdown/Splash
-    participant H as aichat Host
-    participant S as APP_DEMO_STATE
+    participant S as HostState
 
     U-&gt;&gt;H: prompt
-    H-&gt;&gt;L: prompt + current app state
-    L--&gt;&gt;H: appplan + runsplash
-    H-&gt;&gt;M: render runsplash
+    H-&gt;&gt;A: prompt + current data snapshot/capability
+    A--&gt;&gt;H: ViewSpec(appplan + runsplash)
+    H-&gt;&gt;M: render template with data + HostState
     U-&gt;&gt;M: click / type
-    M-&gt;&gt;H: agent.notify(event_id, payload)
-    H-&gt;&gt;S: validate + mutate
-    H-&gt;&gt;M: re-render visible views from raw message + state
+    M-&gt;&gt;H: Action via agent.notify
+    H-&gt;&gt;S: validate + reduce
+    H-&gt;&gt;M: re-render visible views
 </pre>
 <p>特征：</p>
 <ul>
 <li>Agent 与 Host 在同一个本地交互闭环里。</li>
-<li>Host 拥有当前 LLM session。</li>
-<li>Host 拥有 local state。</li>
-<li>Host 可以立即处理按钮事件并更新 UI。</li>
-<li><code>agent.notify</code> 是可接受的本地 reverse channel。</li>
+<li>Host 拥有当前 Agent session。</li>
+<li>Host 可以直接维护本地 data 和 HostState。</li>
+<li>Host 可以立即处理 local action 并更新 UI。</li>
+<li><code>agent.notify</code> 是 local binding 的 reverse channel，不是通用协议内核本身。</li>
 </ul>
-<h2 id="matrix-event-sourced"><a class="header" href="#matrix-event-sourced">Matrix Event-Sourced</a></h2>
-<p>Matrix Event-Sourced 模式用于 Robrix2。</p>
+<h2 id="remoteevent-binding"><a class="header" href="#remoteevent-binding">Remote/Event Binding</a></h2>
+<p>Remote/Event binding 用于 Robrix2 这类远程、可审计、事件源场景。</p>
 <pre class="mermaid">sequenceDiagram
-    participant A as Agent / Producer
-    participant MX as Matrix Timeline
-    participant R as Robrix2
-    participant AR as AppRegistry
-    participant SH as SplashHost
+    participant A as Remote AgentEndpoint / Producer
+    participant E as Event Log
+    participant H as Host
+    participant R as AppRegistry
+    participant V as View Runtime
 
-    A-&gt;&gt;MX: event with org.octos.app
-    R-&gt;&gt;MX: read original event content
-    R-&gt;&gt;AR: lookup type + validate version/state
-    AR-&gt;&gt;SH: render static template with state
-    SH--&gt;&gt;R: Splash card
-    R--&gt;&gt;R: display in RoomScreen
+    A-&gt;&gt;E: data snapshot event with ViewSpec
+    H-&gt;&gt;E: read original event content
+    H-&gt;&gt;R: lookup AppType + validate version/state
+    R-&gt;&gt;V: render registered template with data snapshot
+    V--&gt;&gt;H: app card
+    H--&gt;&gt;H: display view
 </pre>
 <p>特征：</p>
 <ul>
-<li>Matrix timeline 是共享审计日志。</li>
-<li>Agent/producer 是共享事实的来源。</li>
-<li>Robrix2 是 event consumer，不是 Agent 的私有 RPC peer。</li>
-<li>共享变更必须通过 Matrix/OctOS action response，再由 Agent 发送新 snapshot event。</li>
-<li>Robrix2 v1 不接受 LLM 生成的运行时 Splash template。</li>
+<li>共享事件日志是审计来源。</li>
+<li>Agent/producer 是共享 data 的来源。</li>
+<li>Host 是 event consumer，不是 Agent 的私有 RPC peer。</li>
+<li>共享变更必须通过 action response，再由 Agent 发送新 DataSnapshot。</li>
+<li>Host 可以做 optimistic local view update，但不得把 optimistic state 当作 shared truth。</li>
 </ul>
-<h2 id="模式差异"><a class="header" href="#模式差异">模式差异</a></h2>
-<div class="table-wrapper"><table><thead><tr><th>维度</th><th>aichat Local Runtime</th><th>Robrix2 Matrix Event-Sourced</th></tr></thead><tbody>
-<tr><td>视图来源</td><td>LLM response 中的 <code>runsplash</code></td><td>Matrix event 中的 <code>org.octos.app</code></td></tr>
-<tr><td>模板来源</td><td>LLM 生成</td><td>本地静态模板</td></tr>
-<tr><td>状态权威</td><td>本地 HostState</td><td>Agent-produced Matrix event</td></tr>
-<tr><td>action 回路</td><td><code>agent.notify</code></td><td><code>org.octos.action_response</code></td></tr>
-<tr><td>失败策略</td><td>log/ignore 或显示错误</td><td>fallback 到 <code>body</code></td></tr>
-<tr><td>适合场景</td><td>本地 demo、快速交互原型</td><td>IM 中可审计、可回放的 app card</td></tr>
+<h2 id="binding-不是应用场景"><a class="header" href="#binding-不是应用场景">Binding 不是应用场景</a></h2>
+<p>Local binding 与 Remote/Event binding 是传输绑定，不是业务场景。aichat 使用 Local binding；Robrix2 使用 Remote/Event binding；未来其它宿主可以使用同一个内核绑定到 HTTP、WebSocket 或文件同步。</p>
+<h2 id="应用场景矩阵"><a class="header" href="#应用场景矩阵">应用场景矩阵</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>场景</th><th>使用内核</th><th>Binding</th><th>Profile 重点</th></tr></thead><tbody>
+<tr><td>aichat AppGen</td><td>Agent2View Core</td><td>Local Binding</td><td>LLM-generated UI、本地 HostState、快速交互</td></tr>
+<tr><td>Robrix2 IM Card</td><td>Agent2View Core</td><td>Remote/Event Binding</td><td>Matrix timeline、静态模板、plain text fallback</td></tr>
+<tr><td>Mission Room</td><td>Agent2View Core</td><td>Remote/Event Binding</td><td>room-scoped data、shared action、human supervision</td></tr>
 </tbody></table>
 </div>
                     </main>

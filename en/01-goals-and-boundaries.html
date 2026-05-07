@@ -156,19 +156,40 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="goals-and-boundaries"><a class="header" href="#goals-and-boundaries">Goals and Boundaries</a></h1>
-<p>The core goal of Agent2App is to define how an Agent hands a structured app view to a Host for rendering, and how user operations in that view flow back to the Host or Agent.</p>
-<p>This version covers only <code>agent2view</code>.</p>
-<h2 id="goals"><a class="header" href="#goals">Goals</a></h2>
-<p><code>agent2view</code> must answer four questions:</p>
+<p>The core goal of Agent2App is to define how an Agent hands a structured app view to a Host for rendering, and how user operations inside that view return to the Host or Agent.</p>
+<p>This specification currently covers only <code>agent2view</code>.</p>
+<h2 id="core-goals"><a class="header" href="#core-goals">Core Goals</a></h2>
+<p><code>agent2view</code> must solve five problems:</p>
 <ol>
-<li>How does an Agent declare the app view it wants rendered?</li>
-<li>How does the Host validate app type, state, template, and action?</li>
-<li>How does the Host preserve state so authoritative state is not lost when widgets are destroyed?</li>
-<li>How do user actions return to the Host or Agent while keeping the shared-truth boundary clear?</li>
+<li>How an Agent declares the app view it wants rendered.</li>
+<li>How the Host validates app type, state, template, and action.</li>
+<li>How the Host stores state so authoritative state is not lost when widgets are destroyed.</li>
+<li>How user actions return to the Host or Agent while keeping shared-fact boundaries clear.</li>
+<li>How the same protocol semantics fit both local Agents and remote Agents.</li>
 </ol>
-<h2 id="two-tracks"><a class="header" href="#two-tracks">Two Tracks</a></h2>
+<h2 id="layer-boundaries"><a class="header" href="#layer-boundaries">Layer Boundaries</a></h2>
 <pre class="mermaid">flowchart TB
-    U[User request or Matrix event] --&gt; A{Agent2App track}
+    Core[Protocol Core Kernel]
+    Core --&gt; Obj[Object model]
+    Core --&gt; State[State model]
+    Core --&gt; Act[Action model]
+    Core --&gt; Val[Validation model]
+
+    Core --&gt; Bind[Transport Binding]
+    Bind --&gt; Local[Local response / in-process callback]
+    Bind --&gt; Remote[Remote event / action response]
+
+    Core --&gt; Profile[Application Profile]
+    Profile --&gt; A[aichat]
+    Profile --&gt; R[Robrix2]
+    Profile --&gt; M[Mission Room]
+</pre>
+<p>The protocol kernel does not care whether the Agent is local or remote, nor whether the transport is an LLM response, Matrix event, HTTP, WebSocket, or a future event system. The kernel defines only stable semantics: AppType, AppInstance, Scope, Snapshot, Template, Action, ActionResult, Capability, and Validation.</p>
+<p>The transport binding maps those semantics to concrete carriers. For example, aichat puts the view in a <code>runsplash</code> block inside an assistant message; Robrix2 puts the view in an <code>org.octos.app</code> envelope inside a Matrix event.</p>
+<p>The application profile defines a specific Host's capabilities, restrictions, and UX policy. aichat and Robrix2 are profiles, not two mutually exclusive protocols.</p>
+<h2 id="two-product-tracks"><a class="header" href="#two-product-tracks">Two Product Tracks</a></h2>
+<pre class="mermaid">flowchart TB
+    U[User request or external event] --&gt; A{Agent2App track}
     A --&gt;|inline view| V[agent2view]
     A --&gt;|generated project| P[agent2project]
 
@@ -181,15 +202,15 @@
 </pre>
 <h2 id="agent2view"><a class="header" href="#agent2view">Agent2View</a></h2>
 <p><code>agent2view</code> means the Agent output becomes a live view inside the Host. It is not an independent project and does not own a full process, file tree, or packaging lifecycle.</p>
-<p>It is suitable for:</p>
+<p>It fits:</p>
 <ul>
 <li>aichat inline <code>runsplash</code> demos.</li>
-<li>Robrix2 weather or news cards.</li>
+<li>Robrix2 weather/news cards.</li>
 <li>Robrix2 mission room control surfaces.</li>
 </ul>
 <h2 id="agent2project"><a class="header" href="#agent2project">Agent2Project</a></h2>
-<p><code>agent2project</code> means the Agent generates an independent Makepad project or application artifact.</p>
-<p>It must define at least:</p>
+<p><code>agent2project</code> means the Agent generates an independent Makepad project or app artifact.</p>
+<p>It must at least define:</p>
 <ul>
 <li>file tree;</li>
 <li><code>Cargo.toml</code>;</li>
@@ -200,15 +221,15 @@
 <li>Studio runnable item;</li>
 <li>export and packaging metadata.</li>
 </ul>
-<p>Agent2Project must not reuse the Agent2View runtime capability manifest. The former is a build artifact contract. The latter is a host runtime capability boundary.</p>
-<h2 id="out-of-scope"><a class="header" href="#out-of-scope">Out of Scope</a></h2>
-<p>This version does not define:</p>
+<p>Agent2Project must not reuse the Agent2View runtime capability manifest. The former is a build artifact contract; the latter is a Host runtime capability boundary.</p>
+<h2 id="out-of-scope-for-this-edition"><a class="header" href="#out-of-scope-for-this-edition">Out of Scope for This Edition</a></h2>
+<p>This edition does not define:</p>
 <ul>
-<li>code-generation project protocol;</li>
-<li>plugin marketplace;</li>
-<li>execution protocol for LLM-generated templates in the Robrix2 production path;</li>
-<li>multi-Agent resolver/template-author division of labor;</li>
-<li>automatic repair loops.</li>
+<li>a code-generation project protocol;</li>
+<li>a plugin marketplace;</li>
+<li>an execution protocol for LLM-generated templates in the Robrix2 production path;</li>
+<li>multi-Agent resolver/template-author role separation;</li>
+<li>an automatic repair loop.</li>
 </ul>
 
                     </main>

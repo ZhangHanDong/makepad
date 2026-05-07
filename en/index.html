@@ -157,25 +157,40 @@
                     <main>
                         <h1 id="preface"><a class="header" href="#preface">Preface</a></h1>
 <p><a href="../en/">English</a> | <a href="../zh/">中文</a></p>
-<p>This little book defines the Agent2App protocol for <code>agent2view</code>.</p>
-<p>It places two implementation directions that already exist under the same semantic frame:</p>
+<p>Agent2App is an umbrella term for cases where an Agent returns more than text and hands some form of application capability to a Host. There are two product tracks under that umbrella, and they must stay separate:</p>
 <ul>
-<li><code>makepad-example-aichat</code>: a local LLM generates interactive <code>runsplash</code> UI, and the host receives actions through <code>agent.notify</code> before updating local state.</li>
-<li>Robrix2: an Agent sends an <code>org.octos.app</code> envelope through a Matrix event, and the client renders a native app card inside IM by using registered AppTypes and static Splash templates.</li>
+<li><code>agent2view</code>: the Agent generates or declares a <strong>live app view inside an existing Host</strong>. The Host owns rendering, state boundaries, permission boundaries, and action dispatch. aichat inline <code>runsplash</code> UI, Robrix2 Matrix app-cards, and Mission Room all belong to this track.</li>
+<li><code>agent2project</code>: the Agent generates an <strong>independent project or application artifact</strong>. The output is no longer an in-host live view; it is a file tree, resources, crate/package metadata, state modules, event handler code, and run/export/package targets.</li>
 </ul>
-<p>The shared idea is simple: the Agent produces an app view; the Host owns rendering, state boundaries, and action boundaries.</p>
-<p>The key difference is authority. In aichat, state authority lives in the local Host. In Robrix2, shared truth lives in the Matrix event.</p>
-<pre class="mermaid">flowchart LR
-    A[Agent2App] --&gt; B[agent2view]
-    A --&gt; C[agent2project]
-    B --&gt; D[aichat local runtime]
-    B --&gt; E[Robrix2 Matrix event-sourced]
-    C -. future .-&gt; F[Makepad project artifact]
+<pre class="mermaid">flowchart TB
+    A[Agent2App]
+    A --&gt; V[agent2view: runtime app view]
+    A --&gt; P[agent2project: generated project artifact]
+
+    V --&gt; C[aichat inline AppGen]
+    V --&gt; R[Robrix2 Matrix app-card]
+    V --&gt; M[Mission Room]
+
+    P -. future .-&gt; F[files / resources / crate / run targets]
 </pre>
-<p>This book defines only <code>agent2view</code>. <code>agent2project</code> needs a separate artifact protocol.</p>
+<p>This little book defines <code>agent2view</code>: the protocol where an Agent produces an app view and the Host safely renders it while enforcing state and action boundaries. <code>agent2project</code> needs a separate artifact protocol and must not reuse the <code>agent2view</code> capability manifest as-is.</p>
+<p>The central revision in this edition is that <code>agent2view</code> first defines a <strong>shared protocol kernel</strong>, then defines transport bindings, view encodings, and application scenarios. Remote Agents and local Agents use the same kernel semantics; they differ only in message carrying, permission boundaries, state submission paths, and Host profiles.</p>
+<pre class="mermaid">flowchart TB
+    K[Agent2View Core Kernel]
+    K --&gt; B[Transport Binding]
+    B --&gt; L[Local Binding]
+    B --&gt; R[Remote / Event Binding]
+    K --&gt; E[View Encoding]
+    E --&gt; S[Makepad runsplash]
+    E --&gt; U[A2UI message bundle]
+    K --&gt; P[Application Profiles]
+    P --&gt; A[aichat AppGen Scenario]
+    P --&gt; X[Robrix2 IM App-Card Scenario]
+    X --&gt; M[Mission Room Scenario]
+</pre>
 <p><strong>How to read this book</strong></p>
-<p>Read Part I for the protocol core.</p>
-<p>Read Part II for the current host profiles.</p>
+<p>Read Part I for the protocol core. It defines the object model, state model, and action semantics shared by local and remote Agents.</p>
+<p>Read Part II for the current Host profiles. aichat and Robrix2 are application scenarios built on top of the shared kernel.</p>
 <p>Read Part III for safety, versioning, and validation.</p>
 
                     </main>

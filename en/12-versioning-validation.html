@@ -156,13 +156,48 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="versioning-compatibility-and-validation"><a class="header" href="#versioning-compatibility-and-validation">Versioning, Compatibility, and Validation</a></h1>
-<h2 id="apptype-version"><a class="header" href="#apptype-version">AppType Version</a></h2>
-<p><code>version</code> is the protocol version at the AppType level.</p>
+<p>Agent2App versioning has three layers: core version, binding version, and AppType/profile version.</p>
+<h2 id="core-version"><a class="header" href="#core-version">Core Version</a></h2>
+<p><code>core_version</code> describes the protocol kernel version.</p>
+<p>It controls:</p>
+<ul>
+<li>object model;</li>
+<li>ScopeKey semantics;</li>
+<li>Snapshot semantics;</li>
+<li>Action / ActionResult semantics;</li>
+<li>CapabilityManifest semantics;</li>
+<li>shared validation order.</li>
+</ul>
+<p>Local Agents and remote Agents must use consistent core version semantics.</p>
+<h2 id="binding-version"><a class="header" href="#binding-version">Binding Version</a></h2>
+<p><code>binding_version</code> describes the transport mapping version.</p>
+<p>For example:</p>
+<ul>
+<li>how aichat local binding encodes <code>appplan json</code>, <code>runsplash</code>, and <code>agent.notify</code>;</li>
+<li>how Robrix2 Matrix binding encodes <code>org.octos.app</code> and <code>org.octos.action_response</code>.</li>
+</ul>
+<p>Binding version changes should not change core semantics. They should only change carrier format or transport-specific metadata.</p>
+<p>When a binding carries A2UI, it should also declare a view encoding version, for example <code>view.format = "a2ui"</code> and <code>view.version = "v0.9"</code>. A2UI version changes affect only view encoding and should not change Agent2App Scope, Snapshot, or ActionResult semantics.</p>
+<h2 id="apptype--scenario-version"><a class="header" href="#apptype--scenario-version">AppType / Scenario Version</a></h2>
+<p><code>version</code> is the AppType or profile-level protocol version.</p>
+<p>It controls:</p>
+<ul>
+<li>concrete state schema;</li>
+<li>concrete template id;</li>
+<li>concrete action set;</li>
+<li>concrete profile policy.</li>
+</ul>
 <p>The Host may support multiple versions.</p>
 <p>Unsupported versions must fall back.</p>
 <h2 id="field-compatibility"><a class="header" href="#field-compatibility">Field Compatibility</a></h2>
 <p>When adding optional fields, older Hosts may ignore them.</p>
-<p>When changing the semantics of an existing field, the version must be bumped.</p>
+<p>When changing the semantics of an existing field, the relevant version must be bumped.</p>
+<p>Version bump rules:</p>
+<ul>
+<li>Change shared object semantics: bump core version.</li>
+<li>Change transport encoding: bump binding version.</li>
+<li>Change a specific AppType state/action/template semantic: bump AppType/profile version.</li>
+</ul>
 <h2 id="state-compatibility"><a class="header" href="#state-compatibility">State Compatibility</a></h2>
 <p>State schema should define:</p>
 <ul>

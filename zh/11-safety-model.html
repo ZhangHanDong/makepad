@@ -156,14 +156,16 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="安全模型"><a class="header" href="#安全模型">安全模型</a></h1>
-<p>Agent2View v0.1 的安全模型应保持短而可执行。</p>
+<p>Agent2View v0.1 的安全模型应保持短而可执行。安全规则分为协议内核规则、binding 规则和 profile 规则。</p>
 <h2 id="通用原则"><a class="header" href="#通用原则">通用原则</a></h2>
 <pre class="mermaid">flowchart TD
     I[Input] --&gt; T{registered AppType}
     T --&gt;|no| F[Fallback]
-    T --&gt;|yes| V{state validates}
+    T --&gt;|yes| V{data validates}
     V --&gt;|no| F
-    V --&gt;|yes| P{template preflight}
+    V --&gt;|yes| S{state paths allowed}
+    S --&gt;|no| F
+    S --&gt;|yes| P{template preflight}
     P --&gt;|fail| F
     P --&gt;|ok| A{action whitelist}
     A --&gt;|unknown| D[Drop / log]
@@ -172,34 +174,52 @@
 <p>原则：</p>
 <ol>
 <li>Rich UI 只为注册 AppType 渲染。</li>
-<li>每个 AppType 校验自己的 state。</li>
-<li>Robrix2 v1 template 必须本地静态。</li>
-<li>模板 preflight 必须拒绝未知 widget、未知 helper、未声明 state path。</li>
-<li>任意失败 fallback 到 plain text。</li>
+<li>每个 AppType 校验自己的 data。</li>
+<li>Template 必须经过 profile-defined preflight。</li>
+<li>Template preflight 必须拒绝未知 widget、未知 helper、未声明 data/state path。</li>
+<li>任意失败 fallback 到 profile 指定的安全表示。</li>
 <li>Action 必须按 AppType + action id 白名单分发。</li>
-<li>Widget state 不得作为共享事实。</li>
+<li>Host state 和 widget state 不得静默提升为共享事实。</li>
 </ol>
-<h2 id="aichat-安全边界"><a class="header" href="#aichat-安全边界">aichat 安全边界</a></h2>
-<p>aichat 是本地 demo/runtime：</p>
+<h2 id="本地-binding-安全边界"><a class="header" href="#本地-binding-安全边界">本地 Binding 安全边界</a></h2>
+<p>本地 binding 可以接收 LLM-generated template，但必须：</p>
+<ul>
+<li>限制 host action manifest。</li>
+<li>校验 payload。</li>
+<li>限制 template 可调用 API。</li>
+<li>拒绝或降级危险 shader、未知 widget、未知 helper。</li>
+<li>不把任意 Agent 输出提升为系统权限。</li>
+</ul>
+<p>aichat 属于这个边界。</p>
+<h2 id="远程-binding-安全边界"><a class="header" href="#远程-binding-安全边界">远程 Binding 安全边界</a></h2>
+<p>远程/event binding 必须更保守：</p>
+<ul>
+<li>不信任事件中携带的 runtime template。</li>
+<li>只渲染本地注册 AppType。</li>
+<li>只使用本地注册 template。</li>
+<li>共享 data 必须来自原始事件 content 或 producer DataSnapshot。</li>
+<li>shared action 必须通过 action response 交给 producer 验证。</li>
+</ul>
+<p>Robrix2 属于这个边界。</p>
+<h2 id="应用场景额外约束"><a class="header" href="#应用场景额外约束">应用场景额外约束</a></h2>
+<p>aichat profile：</p>
 <ul>
 <li>可以接收 LLM-generated <code>runsplash</code>。</li>
 <li>可以使用 <code>agent.notify</code>。</li>
 <li>必须限制 host action manifest。</li>
 <li>必须校验 payload。</li>
-<li>不应把任意 Agent 输出提升为系统权限。</li>
 </ul>
-<h2 id="robrix2-安全边界"><a class="header" href="#robrix2-安全边界">Robrix2 安全边界</a></h2>
-<p>Robrix2 是 Matrix client：</p>
+<p>Robrix2 profile：</p>
 <ul>
 <li>不接受 event-supplied Splash template。</li>
 <li>不接受 runtime-generated template 作为 v1 生产路径。</li>
-<li>不用 <code>agent.notify</code> 表达共享 action。</li>
+<li>不用 <code>agent.notify</code> 表达 shared action。</li>
 <li>不通过本地 reducer 静默修改 mission truth。</li>
-<li>不读取 <code>m.replace</code> edit 来改变 app state 或 action set。</li>
+<li>不读取 <code>m.replace</code> edit 来改变 app data、Host state 或 action set。</li>
 </ul>
 <h2 id="失败即降级"><a class="header" href="#失败即降级">失败即降级</a></h2>
-<p>Robrix2 的 rich rendering 是增强体验，不是消息可读性的唯一来源。</p>
-<p>任何验证失败都必须降级到 <code>body</code>。这条规则让 Matrix timeline 保持可读，也避免出现第二条未经验证的 rich-render bypass。</p>
+<p>Rich rendering 是增强体验，不是消息可读性的唯一来源。</p>
+<p>任何验证失败都必须降级到 profile 定义的安全表示。Robrix2 中这个安全表示是 <code>body</code>。aichat 中可以是错误 view、log + ignore，或保留上一份可用 view。</p>
 
                     </main>
 

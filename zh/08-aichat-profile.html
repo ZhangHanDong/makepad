@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>aichat Profile - Agent2App 协议小册</title>
+        <title>aichat 应用场景 - Agent2App 协议小册</title>
 
 
         <!-- Custom HTML head -->
@@ -155,33 +155,44 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="aichat-profile"><a class="header" href="#aichat-profile">aichat Profile</a></h1>
-<p>aichat 是 Local Runtime profile。它证明了从 LLM 生成 UI 到 host state mutation 的最小 live wire。</p>
+                        <h1 id="aichat-应用场景"><a class="header" href="#aichat-应用场景">aichat 应用场景</a></h1>
+<p>aichat 是 Agent2App Core Kernel 上的 Local AppGen 场景。它不是一套独立协议，而是通用内核使用 Local Binding 的一个宿主 profile。</p>
+<h2 id="场景定位"><a class="header" href="#场景定位">场景定位</a></h2>
+<p>aichat 证明了从 LLM 生成 UI 到 HostState mutation 的最小 live wire。</p>
+<pre class="mermaid">flowchart LR
+    Core[Agent2View Core]
+    Core --&gt; Binding[Local Binding]
+    Binding --&gt; Plan[appplan json]
+    Binding --&gt; Splash[runsplash]
+    Splash --&gt; Host[aichat Host]
+</pre>
 <h2 id="response-contract"><a class="header" href="#response-contract">Response Contract</a></h2>
 <p>aichat AppGen response 应包含一个 <code>appplan json</code> block 和一个 <code>runsplash</code> block。</p>
-<p><code>appplan</code> 是生成 UI 的计划与能力声明，不是独立项目 artifact。</p>
-<pre class="mermaid">flowchart LR
-    Prompt[User prompt] --&gt; Plan[appplan json]
-    Plan --&gt; Splash[runsplash]
-    Splash --&gt; Host[aichat host]
-</pre>
-<h2 id="host-state"><a class="header" href="#host-state">Host State</a></h2>
-<p>当前 aichat HostState 包含：</p>
+<p><code>appplan</code> 是 ViewSpec 的本地编码。它描述生成 UI 的计划、AppType、可用 data path、可用 state path、可用 action 与 required controls。</p>
+<p><code>runsplash</code> 是 Template 的本地编码。它可以由 LLM 生成，但必须受 capability manifest 限制。</p>
+<p>后续兼容 A2UI 时，<code>appplan</code> 可以包含 <code>view.format = "a2ui"</code> 和 A2UI message bundle。此时 <code>runsplash</code> 是 aichat 的 legacy/local renderer binding，不再是通用协议必需项。</p>
+<h2 id="data-与-host-state"><a class="header" href="#data-与-host-state">Data 与 Host State</a></h2>
+<p>当前 aichat demo 中，Host 同时维护 local data 和 Host state。</p>
+<p>Local data 包含：</p>
 <ul>
 <li><code>count</code></li>
 <li><code>timer</code></li>
 <li><code>calculator</code></li>
 <li><code>collections</code></li>
+</ul>
+<p>Host state 包含：</p>
+<ul>
 <li><code>inputs</code></li>
 </ul>
-<p>示例 state path：</p>
-<pre><code class="language-text">{{state.count}}
-{{state.timer.display}}
-{{state.calculator.display}}
-{{state.collection.items.rows}}
-{{state.collection.items.count}}
+<p>示例 data/state path：</p>
+<pre><code class="language-text">{{data.count}}
+{{data.timer.display}}
+{{data.calculator.display}}
+{{data.collection.items.rows}}
+{{data.collection.items.count}}
 {{state.input.new_item.value}}
 </code></pre>
+<p>这些 path 是通用内核 Data Binding 和 State Binding 在 aichat profile 中的具体表达。当前 legacy runsplash 可以继续支持 <code>{{state.count}}</code> 这类旧别名，但协议文档应优先使用 data/state 分离后的路径。</p>
 <h2 id="actions"><a class="header" href="#actions">Actions</a></h2>
 <p>Counter：</p>
 <pre><code class="language-text">inc
@@ -220,11 +231,47 @@ app.collection.clear
 <p>AI callback：</p>
 <pre><code class="language-text">ask_ai
 </code></pre>
+<h2 id="notify-live-wire"><a class="header" href="#notify-live-wire">Notify Live Wire</a></h2>
+<p>generated <code>runsplash</code> 不能直接修改 aichat 内部结构。它只能通过 <code>agent.notify(event_id, payload)</code> 发送用户意图，Host 再根据 action whitelist 和 payload schema 决定如何处理。</p>
+<pre><code class="language-splash">Button {
+    text: "+1"
+    on_click: || agent.notify("inc", {})
+}
+
+TextInput {
+    text: "{{state.input.new_item.value}}"
+    on_change: |text| agent.notify("app.input.set", {key: "new_item", text: text})
+}
+</code></pre>
+<p>aichat 的处理流程：</p>
+<pre class="mermaid">sequenceDiagram
+    participant R as runsplash callback
+    participant W as widgets::Splash
+    participant A as aichat App
+    participant D as Local data/state
+    participant UI as Visible UI
+
+    R-&gt;&gt;W: agent.notify(event_id, payload)
+    W-&gt;&gt;A: SplashAction::Notify {event_id, payload_json}
+    A-&gt;&gt;A: match whitelisted action
+    A-&gt;&gt;D: mutate data/state or send agent prompt
+    A-&gt;&gt;UI: refresh data/state templates
+</pre>
+<p>当前 aichat 支持的典型 dispatch：</p>
+<ul>
+<li><code>inc</code>、<code>dec</code>、<code>reset</code> 更新 counter。</li>
+<li><code>timer.*</code> 更新 timer。</li>
+<li><code>calculator.*</code> 更新 calculator。</li>
+<li><code>app.input.set</code> 更新 HostState 中的 input draft。</li>
+<li><code>app.collection.*</code> 更新本地 collection data。</li>
+<li><code>ask_ai</code> 把当前交互包装成 prompt 发送给所选 backend。</li>
+</ul>
+<p><code>agent.notify</code> 的关键设计点是：Template 发出 intent，Host 拥有 state mutation。它使 LLM 生成的 UI 可以交互，但不会把任意脚本提升为宿主权限。</p>
 <h2 id="collection-flow"><a class="header" href="#collection-flow">Collection Flow</a></h2>
 <pre class="mermaid">sequenceDiagram
     participant TI as TextInput
     participant H as Host
-    participant S as GenericInputsState
+    participant S as HostState inputs
     participant C as GenericCollectionsState
     participant UI as Visible runsplash UI
 
@@ -233,19 +280,26 @@ app.collection.clear
     Note over H,UI: no UI source rewrite on each keypress
     UI-&gt;&gt;H: app.collection.add_from_input {collection, input}
     H-&gt;&gt;S: take_text(input)
-    H-&gt;&gt;C: add_item(collection, text)
-    H-&gt;&gt;UI: refresh state templates
+    H-&gt;&gt;C: add_item(collection, text) as local data
+    H-&gt;&gt;UI: refresh data/state templates
 </pre>
-<h2 id="boundary"><a class="header" href="#boundary">Boundary</a></h2>
-<p>aichat 可以接收 LLM-generated <code>runsplash</code>，但必须使用 host capability manifest 限制 action 与 state path。</p>
-<p>未知 action 必须 log + ignore。</p>
-<p>非法 payload 必须 log + ignore。</p>
+<h2 id="场景边界"><a class="header" href="#场景边界">场景边界</a></h2>
+<p>aichat 可以接收 LLM-generated <code>runsplash</code>，但必须：</p>
+<ul>
+<li>使用 host capability manifest 限制 action、data path 与 state path。</li>
+<li>校验 event id。</li>
+<li>校验 payload。</li>
+<li>对未知 action log + ignore。</li>
+<li>对非法 payload log + ignore。</li>
+<li>不把任意 Agent 输出提升为系统权限。</li>
+</ul>
+<p>这些约束属于 aichat 应用场景。通用内核只要求 Template 可预检、Action 可校验、State 可投影。</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="07-actions.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="08-a2ui-compatibility.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
@@ -259,7 +313,7 @@ app.collection.clear
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="07-actions.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="08-a2ui-compatibility.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 

@@ -158,22 +158,46 @@
                         <h1 id="目标与边界"><a class="header" href="#目标与边界">目标与边界</a></h1>
 <p>Agent2App 的核心目标是定义 Agent 如何把结构化应用视图交给宿主渲染，以及用户在视图中的操作如何回到宿主或 Agent。</p>
 <p>本规范当前只覆盖 <code>agent2view</code>。</p>
-<h2 id="目标"><a class="header" href="#目标">目标</a></h2>
-<p><code>agent2view</code> 需要解决四个问题：</p>
+<h2 id="核心目标"><a class="header" href="#核心目标">核心目标</a></h2>
+<p><code>agent2view</code> 需要解决六个问题：</p>
 <ol>
 <li>Agent 如何声明要渲染的 app view。</li>
-<li>Host 如何校验 app type、state、template 与 action。</li>
-<li>Host 如何保存状态，避免 widget 销毁后丢失权威状态。</li>
+<li>Host 如何区分业务 data、运行 state 和渲染 view。</li>
+<li>Host 如何校验 app type、data、state path、template 与 action。</li>
+<li>Host 如何保存运行状态，避免 widget 销毁后丢失本地交互上下文。</li>
 <li>用户 action 如何回到 Host 或 Agent，并保持共享事实边界清晰。</li>
+<li>同一套协议语义如何同时适配本地 Agent 和远程 Agent。</li>
 </ol>
-<h2 id="两条轨道"><a class="header" href="#两条轨道">两条轨道</a></h2>
+<h2 id="分层边界"><a class="header" href="#分层边界">分层边界</a></h2>
 <pre class="mermaid">flowchart TB
-    U[User request or Matrix event] --&gt; A{Agent2App track}
+    Core[Protocol Core Kernel]
+    Core --&gt; Obj[Object model]
+    Core --&gt; Data[Data model]
+    Core --&gt; State[State model]
+    Core --&gt; View[View model]
+    Core --&gt; Act[Action model]
+    Core --&gt; Val[Validation model]
+
+    Core --&gt; Bind[Transport Binding]
+    Bind --&gt; Local[Local response / in-process callback]
+    Bind --&gt; Remote[Remote event / action response]
+
+    Core --&gt; Profile[Application Profile]
+    Profile --&gt; A[aichat]
+    Profile --&gt; R[Robrix2]
+    Profile --&gt; M[Mission Room]
+</pre>
+<p>协议内核不关心 Agent 是本地还是远程，也不关心 transport 是 LLM response、Matrix event、HTTP、WebSocket 还是未来的其它事件系统。内核只定义稳定语义：AppType、AppInstance、Scope、DataSnapshot、Host State、ViewSpec、Template、Action、ActionResult、Capability 与 Validation。</p>
+<p>Transport binding 负责把这些语义映射到具体承载格式。例如 aichat 把 view 放在 assistant message 的 <code>runsplash</code> block 中；Robrix2 把 view 放在 Matrix event 的 <code>org.octos.app</code> envelope 中。</p>
+<p>Application profile 负责定义具体宿主的能力、限制和 UX 策略。aichat 和 Robrix2 是 profile，不是两套互斥协议。</p>
+<h2 id="两条产品轨道"><a class="header" href="#两条产品轨道">两条产品轨道</a></h2>
+<pre class="mermaid">flowchart TB
+    U[User request or external event] --&gt; A{Agent2App track}
     A --&gt;|inline view| V[agent2view]
     A --&gt;|generated project| P[agent2project]
 
     V --&gt; VH[Host renders app view]
-    V --&gt; VS[Host owns state/action boundary]
+    V --&gt; VS[Host owns data/state/action boundary]
 
     P --&gt; PF[File tree]
     P --&gt; PC[Cargo.toml / src/main.rs]

@@ -156,8 +156,36 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="envelope-与-scope"><a class="header" href="#envelope-与-scope">Envelope 与 Scope</a></h1>
-<p>Robrix2 / Matrix Event-Sourced 模式使用 <code>org.octos.app</code> envelope。</p>
-<h2 id="标准-envelope"><a class="header" href="#标准-envelope">标准 Envelope</a></h2>
+<p>Envelope 是 Transport Binding 对 ViewSpec/DataSnapshot 的具体编码。Scope 是协议内核概念，不属于某个特定 transport。</p>
+<h2 id="通用-envelope-语义"><a class="header" href="#通用-envelope-语义">通用 Envelope 语义</a></h2>
+<p>一个 Agent2View envelope 至少需要表达：</p>
+<pre><code class="language-json">{
+  "type": "mission_room",
+  "core_version": 1,
+  "profile_version": 1,
+  "scope": "room",
+  "app_id": "mission.main",
+  "data": {},
+  "state": {},
+  "template_id": "mission_room.v1",
+  "capabilities": {}
+}
+</code></pre>
+<p>字段语义：</p>
+<ul>
+<li><code>type</code> 必须匹配本地注册的 AppType。</li>
+<li><code>core_version</code> 表示通用协议内核版本。</li>
+<li><code>profile_version</code> 表示 AppType/profile 版本。</li>
+<li><code>scope</code> 定义 AppInstance 的身份范围。</li>
+<li><code>app_id</code> 在 <code>room</code> 和 <code>account</code> scope 下必须提供。</li>
+<li><code>data</code> 必须是完整 DataSnapshot 内容，不是 patch。</li>
+<li><code>state</code> 是可选的 Host/render state 初值或投影，不得默认视为共享事实。</li>
+<li><code>template_id</code> 指向 profile 允许的模板。</li>
+<li><code>capabilities</code> 声明 view 可用 data path、state path、action 和 helper。</li>
+</ul>
+<p>不同 binding 可以用不同字段名编码这些语义，但不得改变语义。</p>
+<h2 id="matrix-binding-envelope"><a class="header" href="#matrix-binding-envelope">Matrix Binding Envelope</a></h2>
+<p>Robrix2 / Matrix binding 使用 <code>org.octos.app</code> envelope：</p>
 <pre><code class="language-json">{
   "body": "Plain text fallback",
   "msgtype": "m.text",
@@ -170,15 +198,19 @@
   }
 }
 </code></pre>
-<h2 id="字段语义"><a class="header" href="#字段语义">字段语义</a></h2>
 <p><code>body</code> 必须提供。它是富渲染失败时的 fallback，也应该能独立表达消息摘要。</p>
-<p><code>org.octos.app.type</code> 必须匹配本地注册的 AppType。</p>
-<p><code>org.octos.app.version</code> 表示该 AppType 的协议版本。宿主必须拒绝不支持的版本并 fallback 到 <code>body</code>。</p>
-<p><code>org.octos.app.scope</code> 可选，默认 <code>message</code>。允许值：</p>
-<pre><code class="language-text">message | room | account
-</code></pre>
-<p><code>org.octos.app.app_id</code> 在 <code>message</code> scope 可省略，在 <code>room</code> 和 <code>account</code> scope 必须提供。</p>
-<p><code>org.octos.app.initial_state</code> 必须是完整 snapshot，不是 patch。</p>
+<p>当前 <code>version</code> 是 AppType/profile version。若后续引入显式 <code>core_version</code>，旧宿主可以继续按 <code>version</code> 兼容处理。</p>
+<p><code>initial_state</code> 是当前 Matrix binding 的 legacy 字段名。若它承载 mission、weather、news、dashboard 等业务事实，Host 应把它映射为 Agent2App Core DataSnapshot 的 <code>data</code>，而不是 Host view state。</p>
+<h2 id="local-binding-envelope"><a class="header" href="#local-binding-envelope">Local Binding Envelope</a></h2>
+<p>aichat / Local binding 把 envelope 拆成：</p>
+<ul>
+<li><code>appplan json</code>：描述 AppType、data path、state path、action、required controls。</li>
+<li><code>runsplash</code>：描述 Template。</li>
+<li>Host-owned data：提供当前 DataSnapshot。</li>
+<li>HostState：提供输入 draft、selection、filter 等本地运行状态。</li>
+</ul>
+<p>这三者组合后等价于通用 ViewSpec。</p>
+<p>当 <code>appplan</code> 选择 A2UI 兼容格式时，<code>runsplash</code> 不再是必需的协议组成。<code>appplan</code> 可以在 <code>view.messages</code> 中携带 A2UI <code>createSurface</code>、<code>updateComponents</code> 和 <code>updateDataModel</code> message bundle。此时 <code>appplan</code> 仍负责 Agent2App 外层语义，A2UI 只负责 view encoding。</p>
 <h2 id="scopekey"><a class="header" href="#scopekey">ScopeKey</a></h2>
 <pre class="mermaid">flowchart TB
     S{scope}
@@ -186,17 +218,18 @@
     S --&gt; R[room]
     S --&gt; A[account]
 
-    M --&gt; MK[&quot;room_id + event_id&quot;]
-    R --&gt; RK[&quot;room_id + app_id&quot;]
+    M --&gt; MK[&quot;context_id + message_id/event_id&quot;]
+    R --&gt; RK[&quot;context_id/room_id + app_id&quot;]
     A --&gt; AK[&quot;account_id + app_id&quot;]
 </pre>
 <h2 id="message-scope"><a class="header" href="#message-scope">Message Scope</a></h2>
-<p><code>message</code> scope 表示一个 Matrix event 拥有一个独立 app instance。</p>
+<p><code>message</code> scope 表示一条消息或一次响应拥有一个独立 app instance。</p>
 <p>适用场景：</p>
 <ul>
 <li>weather card。</li>
 <li>news card。</li>
 <li>单条消息内的静态信息视图。</li>
+<li>aichat 中某条 assistant message 的独立 demo view。</li>
 </ul>
 <h2 id="room-scope"><a class="header" href="#room-scope">Room Scope</a></h2>
 <p><code>room</code> scope 表示同一房间内多条消息可以指向同一个 app instance。</p>
@@ -215,19 +248,21 @@
 </ul>
 <p>Account scope 不应替代 room-scoped truth。它只能汇总多个 room 的状态。</p>
 <h2 id="fallback-规则"><a class="header" href="#fallback-规则">Fallback 规则</a></h2>
-<p>任一环节失败，宿主必须渲染 <code>body</code>。</p>
+<p>任一环节失败，宿主必须渲染 profile 定义的安全表示。</p>
 <pre class="mermaid">flowchart TD
-    E[Matrix event] --&gt; P{parse org.octos.app}
-    P --&gt;|fail| B[render body]
-    P --&gt;|ok| T{registered type}
+    E[Envelope / ViewSpec] --&gt; P{parse}
+    P --&gt;|fail| B[Fallback]
+    P --&gt;|ok| T{registered AppType}
     T --&gt;|no| B
     T --&gt;|yes| V{supported version}
     V --&gt;|no| B
-    V --&gt;|yes| S{state validates}
+    V --&gt;|yes| D{data validates}
+    D --&gt;|no| B
+    D --&gt;|yes| S{state paths allowed}
     S --&gt;|no| B
     S --&gt;|yes| TM{template preflight}
     TM --&gt;|fail| B
-    TM --&gt;|ok| R[render Splash card]
+    TM --&gt;|ok| R[render view]
 </pre>
 
                     </main>
@@ -238,7 +273,7 @@
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="05-state-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="05-data-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -252,7 +287,7 @@
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="05-state-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="05-data-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

@@ -156,8 +156,34 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="envelope-and-scope"><a class="header" href="#envelope-and-scope">Envelope and Scope</a></h1>
-<p>Robrix2 / Matrix Event-Sourced mode uses the <code>org.octos.app</code> envelope.</p>
-<h2 id="standard-envelope"><a class="header" href="#standard-envelope">Standard Envelope</a></h2>
+<p>Envelope is the concrete encoding of ViewSpec/Snapshot by a Transport Binding. Scope is a protocol-kernel concept and does not belong to any specific transport.</p>
+<h2 id="shared-envelope-semantics"><a class="header" href="#shared-envelope-semantics">Shared Envelope Semantics</a></h2>
+<p>An Agent2View envelope must express at least:</p>
+<pre><code class="language-json">{
+  "type": "mission_room",
+  "core_version": 1,
+  "profile_version": 1,
+  "scope": "room",
+  "app_id": "mission.main",
+  "snapshot": {},
+  "template_id": "mission_room.v1",
+  "capabilities": {}
+}
+</code></pre>
+<p>Field semantics:</p>
+<ul>
+<li><code>type</code> must match a locally registered AppType.</li>
+<li><code>core_version</code> identifies the shared protocol kernel version.</li>
+<li><code>profile_version</code> identifies the AppType/profile version.</li>
+<li><code>scope</code> defines the identity range of the AppInstance.</li>
+<li><code>app_id</code> must be present under <code>room</code> and <code>account</code> scope.</li>
+<li><code>snapshot</code> must be a complete state snapshot, not a patch.</li>
+<li><code>template_id</code> points to a template allowed by the profile.</li>
+<li><code>capabilities</code> declares the state paths, actions, and helpers available to the view.</li>
+</ul>
+<p>Different bindings may encode these semantics with different field names, but they must not change the semantics.</p>
+<h2 id="matrix-binding-envelope"><a class="header" href="#matrix-binding-envelope">Matrix Binding Envelope</a></h2>
+<p>Robrix2 / Matrix binding uses the <code>org.octos.app</code> envelope:</p>
 <pre><code class="language-json">{
   "body": "Plain text fallback",
   "msgtype": "m.text",
@@ -170,15 +196,17 @@
   }
 }
 </code></pre>
-<h2 id="field-semantics"><a class="header" href="#field-semantics">Field Semantics</a></h2>
 <p><code>body</code> is required. It is the fallback when rich rendering fails, and it should also summarize the message by itself.</p>
-<p><code>org.octos.app.type</code> must match a locally registered AppType.</p>
-<p><code>org.octos.app.version</code> is the protocol version of that AppType. The Host must reject unsupported versions and fall back to <code>body</code>.</p>
-<p><code>org.octos.app.scope</code> is optional and defaults to <code>message</code>. Allowed values:</p>
-<pre><code class="language-text">message | room | account
-</code></pre>
-<p><code>org.octos.app.app_id</code> may be omitted for <code>message</code> scope. It is required for <code>room</code> and <code>account</code> scopes.</p>
-<p><code>org.octos.app.initial_state</code> must be a complete snapshot, not a patch.</p>
+<p>The current <code>version</code> is the AppType/profile version. If an explicit <code>core_version</code> is added later, older Hosts can continue to treat <code>version</code> as the compatible profile version.</p>
+<h2 id="local-binding-envelope"><a class="header" href="#local-binding-envelope">Local Binding Envelope</a></h2>
+<p>aichat / Local binding splits the envelope into:</p>
+<ul>
+<li><code>appplan json</code>: describes AppType, state paths, actions, and required controls.</li>
+<li><code>runsplash</code>: describes Template.</li>
+<li>HostState: provides the current Snapshot.</li>
+</ul>
+<p>Together, these three parts are equivalent to the shared ViewSpec.</p>
+<p>When <code>appplan</code> chooses the A2UI-compatible format, <code>runsplash</code> is no longer a required protocol part. <code>appplan</code> can carry an A2UI <code>createSurface</code>, <code>updateComponents</code>, and <code>updateDataModel</code> message bundle under <code>view.messages</code>. In that case, <code>appplan</code> still owns the Agent2App outer semantics, while A2UI only owns view encoding.</p>
 <h2 id="scopekey"><a class="header" href="#scopekey">ScopeKey</a></h2>
 <pre class="mermaid">flowchart TB
     S{scope}
@@ -186,17 +214,18 @@
     S --&gt; R[room]
     S --&gt; A[account]
 
-    M --&gt; MK[&quot;room_id + event_id&quot;]
-    R --&gt; RK[&quot;room_id + app_id&quot;]
+    M --&gt; MK[&quot;context_id + message_id/event_id&quot;]
+    R --&gt; RK[&quot;context_id/room_id + app_id&quot;]
     A --&gt; AK[&quot;account_id + app_id&quot;]
 </pre>
 <h2 id="message-scope"><a class="header" href="#message-scope">Message Scope</a></h2>
-<p><code>message</code> scope means one Matrix event owns one independent app instance.</p>
+<p><code>message</code> scope means one message or response owns an independent app instance.</p>
 <p>It fits:</p>
 <ul>
 <li>weather cards;</li>
 <li>news cards;</li>
-<li>static information views inside one message.</li>
+<li>static information views inside one message;</li>
+<li>independent demo views in aichat assistant messages.</li>
 </ul>
 <h2 id="room-scope"><a class="header" href="#room-scope">Room Scope</a></h2>
 <p><code>room</code> scope means multiple messages in the same room can point to the same app instance.</p>
@@ -213,6 +242,22 @@
 <li><code>mission_dashboard</code>;</li>
 <li>global agent operations overview.</li>
 </ul>
+<p>Account scope should not replace room-scoped truth. It can only aggregate state from multiple rooms.</p>
+<h2 id="fallback-rules"><a class="header" href="#fallback-rules">Fallback Rules</a></h2>
+<p>If any step fails, the Host must render the safe representation defined by the profile.</p>
+<pre class="mermaid">flowchart TD
+    E[Envelope / ViewSpec] --&gt; P{parse}
+    P --&gt;|fail| B[Fallback]
+    P --&gt;|ok| T{registered AppType}
+    T --&gt;|no| B
+    T --&gt;|yes| V{supported version}
+    V --&gt;|no| B
+    V --&gt;|yes| S{state validates}
+    S --&gt;|no| B
+    S --&gt;|yes| TM{template preflight}
+    TM --&gt;|fail| B
+    TM --&gt;|ok| R[render view]
+</pre>
 
                     </main>
 

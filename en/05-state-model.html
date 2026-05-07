@@ -158,7 +158,7 @@
                         <h1 id="state-model"><a class="header" href="#state-model">State Model</a></h1>
 <p>Agent2View must distinguish three layers of state.</p>
 <pre class="mermaid">flowchart TB
-    ST[Shared truth&lt;br/&gt;Agent-produced Matrix event snapshot]
+    ST[Shared truth&lt;br/&gt;producer snapshot or local authoritative state]
     HS[Host view state&lt;br/&gt;AgentViewSession / APP_DEMO_STATE]
     WS[Widget state&lt;br/&gt;focus / hover / animation / IME]
 
@@ -166,33 +166,34 @@
     HS --&gt; WS
 
     WS -. not authoritative .-&gt; HS
-    HS -. local only unless confirmed .-&gt; ST
+    HS -. local only unless committed .-&gt; ST
 </pre>
 <h2 id="shared-truth"><a class="header" href="#shared-truth">Shared Truth</a></h2>
-<p>Shared truth is the set of facts that room participants can audit and synchronize.</p>
-<p>In Robrix2, shared truth must come from the original content of a Matrix event.</p>
-<p>Shared state changes must be produced as new snapshot events by the Agent/producer. A local widget must not silently rewrite Matrix history.</p>
+<p>Shared truth is a fact that participants can audit, synchronize, or reproduce.</p>
+<p>In a remote/event binding, shared truth must come from a producer snapshot, such as the original content of a Matrix event.</p>
+<p>In a local binding, shared truth can temporarily be held by HostState, such as aichat's <code>APP_DEMO_STATE</code>. Even then, widget state must not become shared truth.</p>
+<p>Shared state changes must go through AppType policy. Remote scenarios must use a new snapshot event sent by an Agent/producer; local scenarios can update the local snapshot through a Host reducer.</p>
 <h2 id="host-view-state"><a class="header" href="#host-view-state">Host View State</a></h2>
-<p>Host view state is local state retained by the Host for rendering and interaction.</p>
+<p>Host view state is the local state kept by the Host for rendering and interaction.</p>
 <p>It is used to:</p>
 <ul>
-<li>survive widget destruction caused by <code>PortalList</code> virtualization;</li>
+<li>withstand widget destruction caused by <code>PortalList</code> virtualization;</li>
 <li>support local UI reducers;</li>
-<li>synchronize redraws for visible views that point to the same room/account scoped instance;</li>
-<li>store volatile input, selection, filter, expanded/collapsed state, and similar UI state.</li>
+<li>re-render visible views that point to the same room/account scoped instance;</li>
+<li>store volatile input, selection, filters, expanded/collapsed flags, and other UI state.</li>
 </ul>
-<p>Robrix2 v1 may keep Host view state in memory only. Persistence is future work.</p>
+<p>Robrix2 v1 may keep Host view state only in memory. Persistence is future work.</p>
 <h2 id="widget-state"><a class="header" href="#widget-state">Widget State</a></h2>
-<p>Widget state is temporary rendering state, such as:</p>
+<p>Widget state can only be temporary rendering state, for example:</p>
 <ul>
 <li>IME composition;</li>
 <li>hover/focus;</li>
 <li>scroll offset;</li>
 <li>animation progress.</li>
 </ul>
-<p>Widget state must not be the authoritative state of an AppInstance.</p>
+<p>Widget state must not become the authoritative state of an AppInstance.</p>
 <h2 id="snapshot-projection"><a class="header" href="#snapshot-projection">Snapshot Projection</a></h2>
-<p>For <code>room</code> and <code>account</code> scoped apps, the Matrix event is a complete snapshot.</p>
+<p>For <code>room</code> and <code>account</code> scoped apps, producer events should provide complete snapshots.</p>
 <pre class="mermaid">stateDiagram-v2
     [*] --&gt; NoSession
     NoSession --&gt; CleanSession: first valid snapshot
@@ -207,7 +208,17 @@
 <li>A newer valid snapshot replaces session shared state.</li>
 <li>Redrawing an older timeline item must not roll the session back.</li>
 <li>Repeated redraw of the same event must not clear local dirty reducer state.</li>
-<li>When a new producer snapshot arrives, clear dirty state because shared truth has advanced.</li>
+<li>When a new producer snapshot arrives, dirty is cleared because shared truth has advanced.</li>
+</ul>
+<h2 id="volatile-input"><a class="header" href="#volatile-input">Volatile Input</a></h2>
+<p>Draft state in an input field belongs to Host view state, not Template source.</p>
+<p>In aichat, <code>{{state.input.*.value}}</code> should not be replaced with new source on every display render; otherwise every character would trigger Markdown/Splash <code>set_text</code> and rebuild the UI.</p>
+<p>The correct model is:</p>
+<ul>
+<li>TextInput writes draft text into HostState.</li>
+<li>Template remains stable.</li>
+<li>Add/Submit actions read draft text from HostState.</li>
+<li>The rendering layer projects display values only when needed.</li>
 </ul>
 
                     </main>

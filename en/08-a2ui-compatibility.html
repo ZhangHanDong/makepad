@@ -1,0 +1,453 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>A2UI Compatibility Profile - Agent2App Protocol Little Book</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Agent2App Protocol Little Book</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/makepad/makepad" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="a2ui-compatibility-profile"><a class="header" href="#a2ui-compatibility-profile">A2UI Compatibility Profile</a></h1>
+<p><a href="https://github.com/google/A2UI/">A2UI</a> can serve as the Agent2App View Encoding. It does not replace the Agent2App Core Kernel.</p>
+<p>Agent2App defines app-instance semantics: AppType, Scope, Snapshot, Action, Capability, Validation, and application profiles. A2UI defines streamable UI representation: Surface, Component, Data Model, and user action.</p>
+<p>The compatibility strategy is:</p>
+<pre><code class="language-text">Agent2App appplan = Agent2App outer semantics + A2UI message bundle
+</code></pre>
+<p>Do not put Agent2App fields such as <code>scope</code>, <code>app_type</code>, profile policy, or permission boundaries directly inside A2UI messages. The <a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/server_to_client.json">A2UI v0.9 server-to-client envelope</a> is a strict message structure; each message can express only one A2UI operation.</p>
+<h2 id="reference-links"><a class="header" href="#reference-links">Reference Links</a></h2>
+<ul>
+<li><a href="https://github.com/google/A2UI/">A2UI GitHub repository</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/docs/a2ui_protocol.md">A2UI v0.9 Protocol</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/server_to_client.json">A2UI v0.9 Server-to-Client Schema</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/client_to_server.json">A2UI v0.9 Client-to-Server Schema</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/common_types.json">A2UI v0.9 Common Types</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/json/standard_catalog.json">A2UI v0.9 Standard Catalog</a></li>
+<li><a href="https://github.com/google/A2UI/blob/main/specification/v0_9/docs/evolution_guide.md">A2UI v0.9 Evolution Guide</a></li>
+</ul>
+<h2 id="layering"><a class="header" href="#layering">Layering</a></h2>
+<pre class="mermaid">flowchart TD
+    K[Agent2App Core Kernel]
+    K --&gt; P[App Profile: aichat / Robrix2 / Mission Room]
+    K --&gt; B[Transport Binding]
+    P --&gt; V[ViewSpec / appplan]
+    V --&gt; A[A2UI View Encoding]
+    A --&gt; R[Renderer: Makepad / Web / Native]
+</pre>
+<p>The three responsibilities must stay separate:</p>
+<ul>
+<li>Agent2App Core Kernel: defines protocol semantics shared by local Agents and remote Agents.</li>
+<li>A2UI View Encoding: defines UI surface, component tree, data model update, and client action.</li>
+<li>Application Profile: defines how a Host interprets AppType, Scope, permissions, template source, and state submission path.</li>
+</ul>
+<h2 id="a2ui-v09-mapping"><a class="header" href="#a2ui-v09-mapping">A2UI v0.9 Mapping</a></h2>
+<p>A2UI v0.9 server-to-client messages include:</p>
+<ul>
+<li><code>createSurface</code>: creates a renderable surface.</li>
+<li><code>updateComponents</code>: updates the component list of that surface.</li>
+<li><code>updateDataModel</code>: updates the data model of that surface.</li>
+<li><code>deleteSurface</code>: deletes the surface.</li>
+</ul>
+<p>Recommended Agent2App to A2UI mapping:</p>
+<div class="table-wrapper"><table><thead><tr><th>Agent2App Concept</th><th>A2UI Concept</th><th>Notes</th></tr></thead><tbody>
+<tr><td><code>app_id</code></td><td><code>surfaceId</code></td><td><code>message</code> scope may be assigned by the Host; <code>room</code>/<code>account</code> scope should use a stable app id.</td></tr>
+<tr><td><code>Snapshot</code></td><td><code>updateDataModel.value</code></td><td>Prefer committing the full snapshot at <code>/</code>; partial patches fit only bindings with strong ordering guarantees.</td></tr>
+<tr><td><code>Template</code> / <code>ViewSpec</code></td><td><code>updateComponents.components</code></td><td>Use the A2UI component catalog for a validated UI structure.</td></tr>
+<tr><td><code>CapabilityManifest</code></td><td><code>catalogId</code> + client capabilities</td><td>A2UI catalog expresses component/function capability; Agent2App manifest still expresses state/action permissions.</td></tr>
+<tr><td>Local View Action</td><td><code>action.functionCall</code></td><td>Use only for Host-registered local functions such as <code>openUrl</code>.</td></tr>
+<tr><td>Shared Fact Action</td><td><code>action.event</code></td><td>Send to the Host/Agent for validation, then produce a new Snapshot.</td></tr>
+<tr><td><code>ActionResult</code></td><td>new envelope after client-to-server <code>action</code></td><td>An A2UI action itself is not shared truth; truth still converges through Agent2App Snapshot.</td></tr>
+</tbody></table>
+</div>
+<h2 id="appplan-format"><a class="header" href="#appplan-format">appplan Format</a></h2>
+<p>When <code>appplan</code> is A2UI-compatible, it is still an Agent2App artifact, not a single A2UI message.</p>
+<p>Recommended format:</p>
+<pre><code class="language-json">{
+  "agent2app": {
+    "core_version": 1,
+    "binding_version": 1,
+    "profile": "aichat",
+    "profile_version": 1,
+    "app_type": "todo",
+    "scope": "message",
+    "app_id": "todo.main"
+  },
+  "view": {
+    "format": "a2ui",
+    "version": "v0.9",
+    "messages": [
+      {
+        "version": "v0.9",
+        "createSurface": {
+          "surfaceId": "todo.main",
+          "catalogId": "https://a2ui.org/specification/v0_9/standard_catalog.json",
+          "sendDataModel": true
+        }
+      },
+      {
+        "version": "v0.9",
+        "updateComponents": {
+          "surfaceId": "todo.main",
+          "components": [
+            {
+              "id": "root",
+              "component": "Column",
+              "children": ["new_item", "add_button", "items"]
+            },
+            {
+              "id": "new_item",
+              "component": "TextField",
+              "label": "New item",
+              "value": {
+                "path": "/inputs/new_item/value"
+              },
+              "variant": "shortText"
+            },
+            {
+              "id": "add_button_label",
+              "component": "Text",
+              "text": "Add"
+            },
+            {
+              "id": "add_button",
+              "component": "Button",
+              "child": "add_button_label",
+              "variant": "primary",
+              "action": {
+                "event": {
+                  "name": "app.collection.add_from_input",
+                  "context": {
+                    "collection": "items",
+                    "input": "new_item"
+                  }
+                }
+              }
+            },
+            {
+              "id": "items",
+              "component": "List",
+              "children": {
+                "path": "/collections/items/rows",
+                "componentId": "item_template"
+              }
+            },
+            {
+              "id": "item_template",
+              "component": "Text",
+              "text": {
+                "path": "text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "version": "v0.9",
+        "updateDataModel": {
+          "surfaceId": "todo.main",
+          "path": "/",
+          "value": {
+            "inputs": {
+              "new_item": {
+                "value": ""
+              }
+            },
+            "collections": {
+              "items": {
+                "rows": []
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "permissions": {
+    "state_paths": [
+      "/inputs/new_item/value",
+      "/collections/items/rows"
+    ],
+    "actions": [
+      "app.collection.add_from_input"
+    ]
+  }
+}
+</code></pre>
+<p>This structure has two important boundaries:</p>
+<ul>
+<li><code>view.messages[*]</code> must be valid A2UI v0.9 messages.</li>
+<li><code>agent2app</code> and <code>permissions</code> are Agent2App outer semantics; an A2UI renderer is not required to understand them natively.</li>
+</ul>
+<h2 id="input-and-local-data-model"><a class="header" href="#input-and-local-data-model">Input and Local Data Model</a></h2>
+<p>A2UI input components use local two-way binding: <code>TextField</code>, <code>CheckBox</code>, <code>Slider</code>, <code>ChoicePicker</code>, and similar components immediately update the client-side data model when the user interacts with them.</p>
+<p>This matches Agent2App input principles:</p>
+<ul>
+<li>Input should not rewrite template source.</li>
+<li>Each keypress should not regenerate <code>runsplash</code> or <code>updateComponents</code>.</li>
+<li>On user submit, the current data model is passed to the Host/Agent through action context or <code>sendDataModel</code>.</li>
+</ul>
+<p>For aichat, the A2UI-compatible path avoids rebuilding the UI after each typed character. Input draft state belongs to Host/client data model; the template only binds paths.</p>
+<h2 id="aichat-compatibility-path"><a class="header" href="#aichat-compatibility-path">aichat Compatibility Path</a></h2>
+<p>aichat can support two local view encodings:</p>
+<div class="table-wrapper"><table><thead><tr><th><code>view.format</code></th><th>Template Source</th><th>Rendering Path</th></tr></thead><tbody>
+<tr><td><code>runsplash</code></td><td>LLM-generated Splash</td><td>existing Markdown + SplashHost path</td></tr>
+<tr><td><code>a2ui</code></td><td>A2UI component tree</td><td>map A2UI component tree to Makepad widgets</td></tr>
+</tbody></table>
+</div>
+<p><code>runsplash</code> can remain the current implementation path. A2UI is the more general appplan format and is easier to share across renderers.</p>
+<p>When <code>view.format = "a2ui"</code>:</p>
+<ol>
+<li>The Host validates Agent2App outer fields.</li>
+<li>The Host validates the A2UI message bundle.</li>
+<li>The Host selects a renderer based on <code>catalogId</code>.</li>
+<li>The Host maps A2UI components to Makepad widgets.</li>
+<li>The Host maps A2UI actions back to the Agent2App action dispatcher.</li>
+</ol>
+<h2 id="robrix2-compatibility-path"><a class="header" href="#robrix2-compatibility-path">Robrix2 Compatibility Path</a></h2>
+<p>Robrix2 should not directly trust arbitrary Makepad templates carried by remote events.</p>
+<p>If A2UI is used:</p>
+<ul>
+<li>A Matrix event can carry an Agent2App envelope.</li>
+<li>The <code>view</code> part of the envelope can be an A2UI message bundle or a profile-registered <code>template_id</code>.</li>
+<li>The Host must validate <code>catalogId</code>, component catalog, state paths, and actions.</li>
+<li>Shared actions still write back to the event system, then an Agent/producer validates them and generates a new Snapshot.</li>
+</ul>
+<p>Robrix2 can keep local static templates as the production default. A2UI is better as a safe dynamic UI representation, provided the renderer supports only trusted catalogs.</p>
+<h2 id="mission-room-compatibility-path"><a class="header" href="#mission-room-compatibility-path">Mission Room Compatibility Path</a></h2>
+<p>Mission Room is a room-scoped shared app. Its <code>surfaceId</code> should stably map to:</p>
+<pre><code class="language-text">room_id + app_id
+</code></pre>
+<p>Recommended:</p>
+<ul>
+<li><code>scope = "room"</code>.</li>
+<li><code>app_id = "mission.main"</code>.</li>
+<li>A2UI <code>surfaceId = "mission.main"</code>, while the Host internally isolates different rooms with ScopeKey.</li>
+<li><code>updateDataModel</code> uses the complete Mission Room Snapshot.</li>
+<li>User operations use A2UI <code>action.event</code>, then map to Agent2App shared fact actions.</li>
+</ul>
+<h2 id="validation-order"><a class="header" href="#validation-order">Validation Order</a></h2>
+<p>Validation order for the A2UI compatibility profile:</p>
+<pre class="mermaid">flowchart TD
+    P[appplan] --&gt; A{Agent2App outer fields valid}
+    A --&gt;|no| F[Fallback]
+    A --&gt;|yes| S{ScopeKey valid}
+    S --&gt;|no| F
+    S --&gt;|yes| C{capabilities allow view format}
+    C --&gt;|no| F
+    C --&gt;|yes| V{A2UI messages validate}
+    V --&gt;|no| F
+    V --&gt;|yes| M{state paths and actions allowed}
+    M --&gt;|no| F
+    M --&gt;|yes| R[Render]
+</pre>
+<p>The Host must validate Agent2App outer semantics before validating inner A2UI messages. Otherwise, an A2UI renderer may render a syntactically valid but unauthorized UI.</p>
+<h2 id="compatibility-conclusion"><a class="header" href="#compatibility-conclusion">Compatibility Conclusion</a></h2>
+<p><code>appplan</code> can be compatible with A2UI, but compatibility should mean "contains an A2UI message bundle", not "becomes an A2UI message".</p>
+<p>This satisfies all of the following:</p>
+<ul>
+<li>strict A2UI schema validation;</li>
+<li>Agent2App modeling of Scope, permissions, profiles, and shared truth;</li>
+<li>the same protocol kernel for aichat local Agents and Robrix2 remote Agents;</li>
+<li>one declarative UI encoding shared by Makepad, Web, and Native renderers.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="07-actions.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="08-aichat-profile.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="07-actions.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="08-aichat-profile.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid.min.js"></script>
+        <script src="mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>

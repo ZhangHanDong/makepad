@@ -156,9 +156,26 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="rendering-and-templates"><a class="header" href="#rendering-and-templates">Rendering and Templates</a></h1>
-<p>Agent2View has two rendering paths: dynamic <code>runsplash</code> in aichat, and static Splash templates in Robrix2.</p>
+<p>The protocol kernel only defines Template semantics: Template projects Snapshot/HostState into UI and exposes whitelisted Actions.</p>
+<p>The Template source is decided by the profile.</p>
+<p>The Template encoding is also decided by the profile. Current encodings include Makepad <code>runsplash</code> and A2UI component trees. The former targets the current aichat implementation; the latter targets cross-renderer declarative UI.</p>
+<h2 id="core-rendering-contract"><a class="header" href="#core-rendering-contract">Core Rendering Contract</a></h2>
+<pre class="mermaid">flowchart LR
+    VS[ViewSpec] --&gt; P[Template preflight]
+    P --&gt; B[Bind state]
+    B --&gt; UI[Rendered view]
+    UI --&gt; A[Whitelisted action]
+</pre>
+<p>Rules:</p>
+<ul>
+<li>Template must be preflightable by the Host.</li>
+<li>Template can reference only state paths declared by the AppType.</li>
+<li>Template can trigger only actions declared by the AppType.</li>
+<li>Template must not set host-owned attribution fields.</li>
+<li>On failure, rendering must fall back to the safe representation defined by the profile.</li>
+</ul>
 <h2 id="aichat-rendering"><a class="header" href="#aichat-rendering">aichat Rendering</a></h2>
-<p>aichat supports LLM-generated UI:</p>
+<p>The aichat profile allows LLM-generated UI:</p>
 <pre><code class="language-markdown">```runsplash
 View {
     Label { text: "Count: {{state.count}}" }
@@ -179,8 +196,10 @@ View {
 <li>Replace <code>{{state.path}}</code> at display time.</li>
 <li>After state mutation, redraw only visible assistant messages.</li>
 <li>When an offscreen message re-enters the viewport, <code>PortalList</code> renders it from raw message plus current state.</li>
+<li>LLM-generated templates must be constrained by the capability manifest.</li>
 </ul>
-<h2 id="volatile-input"><a class="header" href="#volatile-input">Volatile Input</a></h2>
+<p>If aichat uses A2UI view encoding, the rendering flow becomes: validate the <code>appplan</code> outer semantics, validate the A2UI message bundle, map the A2UI component tree to Makepad widgets, and map A2UI actions back to the Agent2App action dispatcher.</p>
+<h2 id="stable-template-and-volatile-input"><a class="header" href="#stable-template-and-volatile-input">Stable Template and Volatile Input</a></h2>
 <p>Draft state in an input field must not rewrite the <code>runsplash</code> source on every character.</p>
 <pre><code class="language-splash">TextInput {
     text: "{{state.input.new_item.value}}"
@@ -190,7 +209,7 @@ View {
 <p>During display rendering, the Host should treat <code>{{state.input.*.value}}</code> as a volatile placeholder. This prevents every keystroke from changing the source observed by Markdown/Splash <code>set_text</code>, which would rebuild the whole UI.</p>
 <p>HostState still stores draft text. Actions such as adding an item can read that input from HostState.</p>
 <h2 id="robrix2-rendering"><a class="header" href="#robrix2-rendering">Robrix2 Rendering</a></h2>
-<p>Robrix2 v1 uses local static <code>.splash</code> templates.</p>
+<p>Robrix2 v1 profile uses local static <code>.splash</code> templates.</p>
 <pre class="mermaid">flowchart TD
     E[org.octos.app envelope]
     E --&gt; R[app_registry]

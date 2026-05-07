@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Mission Room Profile - Agent2App Protocol Little Book</title>
+        <title>Mission Room Application Scenario - Agent2App Protocol Little Book</title>
 
 
         <!-- Custom HTML head -->
@@ -155,9 +155,18 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="mission-room-profile"><a class="header" href="#mission-room-profile">Mission Room Profile</a></h1>
-<p>Mission Room is the first high-value room-scoped Agent2View app in Robrix2.</p>
+                        <h1 id="mission-room-application-scenario"><a class="header" href="#mission-room-application-scenario">Mission Room Application Scenario</a></h1>
+<p>Mission Room is the first high-value room-scoped Agent2View AppType in the Robrix2 scenario.</p>
 <p>It turns a Matrix room into a human-supervised multi-Agent mission control surface.</p>
+<h2 id="apptype-scenario-configuration"><a class="header" href="#apptype-scenario-configuration">AppType Scenario Configuration</a></h2>
+<p>Mission Room uses the shared kernel objects:</p>
+<ul>
+<li>AppType: <code>mission_room</code></li>
+<li>Scope: <code>room</code></li>
+<li>Default AppInstance: <code>mission.main</code></li>
+<li>Binding: Remote/Event Binding</li>
+<li>Shared action transport: <code>org.octos.action_response</code></li>
+</ul>
 <h2 id="app-envelope"><a class="header" href="#app-envelope">App Envelope</a></h2>
 <p>Mission Room must use <code>room</code> scope:</p>
 <pre><code class="language-json">{
@@ -173,9 +182,9 @@
 <p>Default mission app id:</p>
 <pre><code class="language-text">mission.main
 </code></pre>
-<p>Unless a room explicitly hosts multiple missions, the producer should use this default id.</p>
+<p>Unless a room explicitly carries multiple missions, the producer should use this default id.</p>
 <h2 id="mission-state-v1"><a class="header" href="#mission-state-v1">Mission State V1</a></h2>
-<p>Mission state v1 should stay explicit and small:</p>
+<p>Mission state v1 should remain explicit and small:</p>
 <pre><code class="language-json">{
   "goal": {
     "title": "Ship room-scoped agent2view runtime",
@@ -257,20 +266,20 @@
 <pre><code class="language-text">manual | supervised | autonomous | paused
 </code></pre>
 <h2 id="shared-actions"><a class="header" href="#shared-actions">Shared Actions</a></h2>
-<p>The first shared actions:</p>
+<p>First shared actions:</p>
 <pre><code class="language-text">approve_plan
 request_plan_changes
 pause_mission
 resume_mission
 </code></pre>
-<p>Later task-level actions:</p>
+<p>Future task-level actions:</p>
 <pre><code class="language-text">reassign_task
 change_priority
 mark_blocked
 request_review
 approve_result
 </code></pre>
-<p>These actions change mission truth. They must flow through <code>org.octos.action_response</code>, after which the Agent produces a new mission snapshot event.</p>
+<p>These actions change mission truth. They must go through <code>org.octos.action_response</code>, and the Agent must produce a new mission snapshot event.</p>
 <pre class="mermaid">sequenceDiagram
     participant H as Human
     participant R as Robrix2
@@ -286,11 +295,11 @@ approve_result
     R-&gt;&gt;R: update room-scoped session
 </pre>
 <h2 id="local-view-actions"><a class="header" href="#local-view-actions">Local View Actions</a></h2>
-<p>A mission card may support local actions:</p>
+<p>The mission card may support local actions:</p>
 <ul>
 <li>expand task details;</li>
 <li>select an agent;</li>
-<li>switch board/decision/blocker view;</li>
+<li>switch board/decision/blocker views;</li>
 <li>filter lanes.</li>
 </ul>
 <p>These actions should not produce Matrix shared facts.</p>

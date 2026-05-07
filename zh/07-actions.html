@@ -156,34 +156,63 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="action-协议"><a class="header" href="#action-协议">Action 协议</a></h1>
-<p>Action 是用户或 view 发出的意图。协议必须区分本地视图动作和共享事实动作。</p>
+<p>Action 是用户或 view 发出的意图。协议内核先定义 action 语义，再由 transport binding 决定如何承载。</p>
 <pre class="mermaid">flowchart TB
-    A[User action] --&gt; C{action kind}
+    A[User action] --&gt; C{Action kind}
     C --&gt; L[Local View Action]
     C --&gt; S[Shared Fact Action]
 
     L --&gt; LR[Host local reducer]
     LR --&gt; RR[Re-render local view/session]
 
-    S --&gt; AR[org.octos.action_response]
+    S --&gt; AR[Action response transport]
     AR --&gt; AG[Agent validates and applies policy]
-    AG --&gt; NE[New Matrix snapshot event]
+    AG --&gt; NE[New DataSnapshot]
 </pre>
+<h2 id="core-action"><a class="header" href="#core-action">Core Action</a></h2>
+<p>通用 Action 至少包含：</p>
+<pre><code class="language-json">{
+  "action_id": "approve_plan",
+  "kind": "shared_fact",
+  "scope_key": {
+    "scope": "room",
+    "app_id": "mission.main"
+  },
+  "payload": {}
+}
+</code></pre>
+<p><code>action_id</code> 必须在 AppType action schema 中注册。</p>
+<p><code>kind</code> 由 AppType policy 决定，可为：</p>
+<pre><code class="language-text">local_view | shared_fact | agent_callback
+</code></pre>
+<p><code>scope_key</code> 指向被操作的 AppInstance。</p>
+<p><code>payload</code> 必须按 action schema 校验。</p>
 <h2 id="local-view-action"><a class="header" href="#local-view-action">Local View Action</a></h2>
 <p>Local View Action 适用于：</p>
 <ul>
 <li>展开/折叠任务详情。</li>
 <li>选择 agent。</li>
 <li>filter/sort/tab 切换。</li>
-<li>aichat counter/timer/calculator/collection 操作。</li>
+<li>aichat 中声明为 local-only 的 demo 操作。</li>
 </ul>
 <p>Local reducer lookup 必须按 AppType + action id 白名单分发。</p>
-<p>Robrix2 不应使用无限字符串的全局 <code>agent.notify("anything")</code> 作为生产 action 面。</p>
-<h2 id="aichat-agentnotify"><a class="header" href="#aichat-agentnotify">aichat agent.notify</a></h2>
-<p>aichat 使用 <code>agent.notify(event_id, payload)</code>：</p>
+<p>Local View Action 可以更新 HostState。若本地 profile 把 counter、timer、calculator、collection 这类 demo data 也交给 Host reducer 管理，必须在 AppType policy 中明确标注为 local data owner 模式；它不得自动扩展到远程 shared data。</p>
+<h2 id="shared-fact-action"><a class="header" href="#shared-fact-action">Shared Fact Action</a></h2>
+<p>Shared Fact Action 会改变共享 data。它必须经过 Agent/producer 验证，然后产生新的 DataSnapshot。</p>
+<p>在本地 binding 中，Host reducer 可以临时扮演 producer。此时 action 仍应按 data mutation 语义校验，只是提交路径是本地 loopback，而不是远程事件日志。</p>
+<p>例如 Mission Room 中的：</p>
+<pre><code class="language-text">approve_plan
+request_plan_changes
+pause_mission
+resume_mission
+</code></pre>
+<p>这些 action 不能只靠本地 reducer 静默修改 mission truth。</p>
+<h2 id="local-binding-agentnotify"><a class="header" href="#local-binding-agentnotify">Local Binding: agent.notify</a></h2>
+<p>aichat 使用 <code>agent.notify(event_id, payload)</code> 承载 Action：</p>
 <pre><code class="language-splash">agent.notify("inc", {})
 agent.notify("app.collection.add_from_input", {collection: "items", input: "new_item"})
 </code></pre>
+<p><code>agent.notify</code> 是 aichat Local Binding 的 reverse channel。它不是通用协议内核本身，而是把 Template 内部的用户意图映射回 Host action dispatcher 的本地承载方式。</p>
 <p>实现边界：</p>
 <ul>
 <li><code>agent.notify</code> 注册在 <code>widgets/src/splash.rs</code>。</li>
@@ -191,6 +220,29 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
 <li><code>SplashAction::Notify</code> 是 bare action，不是 widget action。</li>
 <li>aichat 在 <code>handle_actions</code> 中直接遍历 <code>actions</code> 并 cast。</li>
 </ul>
+<p>调用约定：</p>
+<ul>
+<li>第一个参数是 <code>event_id</code>。它必须能转换为字符串；缺失或非法值会变成空字符串。</li>
+<li>第二个参数是 <code>payload</code>。它可以是任意 Splash value，运行时会把它序列化为 JSON 字符串。</li>
+<li><code>agent.notify</code> 不返回业务值。调用后返回 <code>nil</code>。</li>
+<li>它可以出现在 <code>Button.on_click</code>、<code>TextInput.on_change</code> 等 generated <code>runsplash</code> 回调中。</li>
+</ul>
+<p>运行时路径：</p>
+<pre class="mermaid">sequenceDiagram
+    participant UI as runsplash UI
+    participant VM as Splash VM
+    participant CX as Cx action queue
+    participant H as aichat Host
+    participant S as Host data/state
+
+    UI-&gt;&gt;VM: agent.notify(event_id, payload)
+    VM-&gt;&gt;VM: stringify event_id and JSON-encode payload
+    VM-&gt;&gt;CX: Cx::post_action(SplashAction::Notify)
+    CX-&gt;&gt;H: handle_actions
+    H-&gt;&gt;H: whitelist event_id and validate payload
+    H-&gt;&gt;S: mutate local data/state or trigger agent callback
+    H-&gt;&gt;UI: refresh visible templates
+</pre>
 <p>宿主必须：</p>
 <ul>
 <li>校验 event id。</li>
@@ -198,8 +250,20 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
 <li>对未知 event log + ignore。</li>
 <li>对非法 payload log + ignore。</li>
 </ul>
-<h2 id="robrix2-shared-action"><a class="header" href="#robrix2-shared-action">Robrix2 Shared Action</a></h2>
-<p>Robrix2 的共享 action 使用 <code>org.octos.action_response</code>。</p>
+<p>状态刷新规则：</p>
+<ul>
+<li>Host 是 data/state owner。<code>runsplash</code> 只是当前 view template。</li>
+<li>合法 action 改变 Host data/state 后，Host 重新投影可见模板。</li>
+<li>输入框 draft state 不应每个 keypress 重写 <code>runsplash</code> 源码。输入应通过 <code>agent.notify("app.input.set", ...)</code> 写入 HostState，再由提交 action 消费。</li>
+</ul>
+<p>边界：</p>
+<ul>
+<li><code>agent.notify</code> 可以承载 <code>local_view</code> 和 aichat 本地 <code>agent_callback</code> action。</li>
+<li>它不得作为 Robrix2 这类远程 shared fact action 的生产协议。</li>
+<li>远程共享 action 应使用对应 transport binding，例如 Matrix 中的 <code>org.octos.action_response</code>。</li>
+</ul>
+<h2 id="remote-binding-action_response"><a class="header" href="#remote-binding-action_response">Remote Binding: action_response</a></h2>
+<p>Robrix2 使用 <code>org.octos.action_response</code> 承载 Shared Fact Action。</p>
 <pre><code class="language-json">{
   "org.octos.action_response": {
     "action_id": "approve_plan",
@@ -218,7 +282,7 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
 <li><code>source_event_id</code> 指向产生该 action 的原始 Matrix event。</li>
 <li><code>app</code> 字段用于在同一房间多 app 实例时明确路由。</li>
 <li>Producer 负责验证 action response。</li>
-<li>Producer 应用策略后发送新的 app snapshot event。</li>
+<li>Producer 应用策略后发送新的 app DataSnapshot event。</li>
 <li>Robrix2 可以做 optimistic local view update，但不得把 optimistic state 当作 shared truth。</li>
 </ul>
 
@@ -230,7 +294,7 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="08-aichat-profile.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="08-a2ui-compatibility.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -244,7 +308,7 @@ agent.notify("app.collection.add_from_input", {collection: "items", input: "new_
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="08-aichat-profile.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="08-a2ui-compatibility.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

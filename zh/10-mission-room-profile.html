@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Mission Room Profile - Agent2App 协议小册</title>
+        <title>Mission Room 应用场景 - Agent2App 协议小册</title>
 
 
         <!-- Custom HTML head -->
@@ -155,9 +155,18 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="mission-room-profile"><a class="header" href="#mission-room-profile">Mission Room Profile</a></h1>
-<p>Mission Room 是 Robrix2 中第一个高价值 room-scoped Agent2View app。</p>
+                        <h1 id="mission-room-应用场景"><a class="header" href="#mission-room-应用场景">Mission Room 应用场景</a></h1>
+<p>Mission Room 是 Robrix2 场景下的第一个高价值 room-scoped Agent2View AppType。</p>
 <p>它把 Matrix room 变成由人类监督的多 Agent mission control surface。</p>
+<h2 id="apptype-场景配置"><a class="header" href="#apptype-场景配置">AppType 场景配置</a></h2>
+<p>Mission Room 使用通用内核对象：</p>
+<ul>
+<li>AppType：<code>mission_room</code></li>
+<li>Scope：<code>room</code></li>
+<li>默认 AppInstance：<code>mission.main</code></li>
+<li>Binding：Remote/Event Binding</li>
+<li>Shared action transport：<code>org.octos.action_response</code></li>
+</ul>
 <h2 id="app-envelope"><a class="header" href="#app-envelope">App Envelope</a></h2>
 <p>Mission Room 必须使用 <code>room</code> scope：</p>
 <pre><code class="language-json">{
@@ -174,8 +183,8 @@
 <pre><code class="language-text">mission.main
 </code></pre>
 <p>除非一个 room 明确承载多个 mission，否则 producer 应使用该默认 id。</p>
-<h2 id="mission-state-v1"><a class="header" href="#mission-state-v1">Mission State V1</a></h2>
-<p>Mission state v1 应保持显式且小：</p>
+<h2 id="mission-data-v1"><a class="header" href="#mission-data-v1">Mission Data V1</a></h2>
+<p>Mission data v1 应保持显式且小。当前 Matrix envelope 中的 <code>initial_state</code> 是 legacy 字段名，语义上承载 Mission DataSnapshot 的 <code>data</code>。</p>
 <pre><code class="language-json">{
   "goal": {
     "title": "Ship room-scoped agent2view runtime",
@@ -185,7 +194,7 @@
   "tasks": [
     {
       "id": "task-1",
-      "title": "Define AgentViewSession state model",
+      "title": "Define AgentViewSession data/state model",
       "status": "planning",
       "owner_agent": "planner",
       "priority": "high",
@@ -270,7 +279,7 @@ mark_blocked
 request_review
 approve_result
 </code></pre>
-<p>这些 action 改变 mission truth，必须通过 <code>org.octos.action_response</code>，由 Agent 产生新的 mission snapshot event。</p>
+<p>这些 action 改变 mission truth，必须通过 <code>org.octos.action_response</code>，由 Agent 产生新的 mission DataSnapshot event。</p>
 <pre class="mermaid">sequenceDiagram
     participant H as Human
     participant R as Robrix2
@@ -281,7 +290,7 @@ approve_result
     R-&gt;&gt;M: org.octos.action_response
     A-&gt;&gt;M: read response
     A-&gt;&gt;A: validate + apply policy
-    A-&gt;&gt;M: new mission_room snapshot
+    A-&gt;&gt;M: new mission_room DataSnapshot
     R-&gt;&gt;M: read new event
     R-&gt;&gt;R: update room-scoped session
 </pre>

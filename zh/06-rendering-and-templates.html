@@ -156,19 +156,36 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="渲染与模板"><a class="header" href="#渲染与模板">渲染与模板</a></h1>
-<p>Agent2View 有两条渲染路径：aichat 的动态 <code>runsplash</code>，Robrix2 的静态 Splash template。</p>
+<p>协议内核只定义 Template 的语义：Template 把 DataSnapshot 和允许暴露的 Host state 投影成 UI，并暴露经过白名单校验的 Action。</p>
+<p>Template 的来源由 profile 决定。</p>
+<p>Template 的编码也由 profile 决定。当前可用编码包括 Makepad <code>runsplash</code> 和 A2UI component tree。前者面向 aichat 当前实现，后者面向跨 renderer 的通用 declarative UI。</p>
+<h2 id="core-rendering-contract"><a class="header" href="#core-rendering-contract">Core Rendering Contract</a></h2>
+<pre class="mermaid">flowchart LR
+    VS[ViewSpec] --&gt; P[Template preflight]
+    P --&gt; B[Bind data/state]
+    B --&gt; UI[Rendered view]
+    UI --&gt; A[Whitelisted action]
+</pre>
+<p>规则：</p>
+<ul>
+<li>Template 必须能被 Host 预检。</li>
+<li>Template 只能引用 AppType 声明过的 data path 和 profile 允许暴露的 state path。</li>
+<li>Template 只能触发 AppType 声明过的 action。</li>
+<li>Template 不得设置 host-owned attribution 字段。</li>
+<li>失败时必须降级到 profile 定义的安全表示。</li>
+</ul>
 <h2 id="aichat-rendering"><a class="header" href="#aichat-rendering">aichat Rendering</a></h2>
-<p>aichat 支持 LLM 生成：</p>
+<p>aichat profile 允许 LLM 生成：</p>
 <pre><code class="language-markdown">```runsplash
 View {
-    Label { text: "Count: {{state.count}}" }
+    Label { text: "Count: {{data.count}}" }
     Button { text: "+1" on_click: || agent.notify("inc", {}) }
 }
 ```
 </code></pre>
 <p>渲染流程：</p>
 <pre class="mermaid">flowchart LR
-    Raw[raw assistant message] --&gt; Bind[render state templates]
+    Raw[raw assistant message] --&gt; Bind[render data/state templates]
     Bind --&gt; MD[Markdown set_text]
     MD --&gt; RS[runsplash block]
     RS --&gt; UI[inline live UI]
@@ -176,21 +193,23 @@ View {
 <p>规则：</p>
 <ul>
 <li>原始 assistant message 必须保留。</li>
-<li>显示时执行 <code>{{state.path}}</code> 替换。</li>
-<li>state mutation 后只重绘可见 assistant message。</li>
-<li>offscreen message 由 PortalList 在重新进入视口时从 raw message + current state 渲染。</li>
+<li>显示时执行 data/state path 替换。</li>
+<li>data 或 Host state mutation 后只重绘可见 assistant message。</li>
+<li>offscreen message 由 PortalList 在重新进入视口时从 raw message + current data/state 渲染。</li>
+<li>LLM-generated template 必须受 capability manifest 限制。</li>
 </ul>
-<h2 id="volatile-input"><a class="header" href="#volatile-input">Volatile Input</a></h2>
+<p>若 aichat 使用 A2UI view encoding，则渲染流程变为：校验 <code>appplan</code> 外层语义，校验 A2UI message bundle，把 A2UI component tree 映射到 Makepad widgets，并把 A2UI action 映射回 Agent2App action dispatcher。</p>
+<h2 id="stable-template-and-volatile-input"><a class="header" href="#stable-template-and-volatile-input">Stable Template and Volatile Input</a></h2>
 <p>输入框 draft state 不得每个字符写回 <code>runsplash</code> 源码。</p>
 <pre><code class="language-splash">TextInput {
-    text: "{{state.input.new_item.value}}"
+    text: "{{state.inputs.new_item.value}}"
     on_change: |text| agent.notify("app.input.set", {key: "new_item", text: text})
 }
 </code></pre>
-<p>宿主显示渲染时应该把 <code>{{state.input.*.value}}</code> 当作 volatile placeholder，避免每次输入导致 Markdown/Splash <code>set_text</code> 看到新源码并重建整个 UI。</p>
-<p>HostState 仍然保存 draft text；添加 item 等 action 可以从 HostState 读取该 input。</p>
+<p>宿主显示渲染时应该把 <code>/state/inputs/*/value</code> 当作 volatile placeholder，避免每次输入导致 Markdown/Splash <code>set_text</code> 看到新源码并重建整个 UI。aichat legacy <code>{{state.input.*.value}}</code> 可以继续作为兼容别名。</p>
+<p>HostState 仍然保存 draft text；添加 item 等 action 可以从 HostState 读取该 input。只有提交成功后，collection rows 这类业务事实才进入 data。</p>
 <h2 id="robrix2-rendering"><a class="header" href="#robrix2-rendering">Robrix2 Rendering</a></h2>
-<p>Robrix2 v1 使用本地静态 <code>.splash</code> template。</p>
+<p>Robrix2 v1 profile 使用本地静态 <code>.splash</code> template。</p>
 <pre class="mermaid">flowchart TD
     E[org.octos.app envelope]
     E --&gt; R[app_registry]
@@ -198,13 +217,13 @@ View {
     F --&gt; VM[View model]
     VM --&gt; SH[SplashHost]
     SH --&gt; T[static .splash template]
-    T --&gt; B[&quot;$state.* binding&quot;]
+    T --&gt; B[&quot;$data.* / $state.* binding&quot;]
     B --&gt; C[RoomScreen card]
 </pre>
 <p>模板允许：</p>
 <ul>
 <li>使用 <code>widget_manifest</code> 中允许的 Makepad widget。</li>
-<li>使用 AppType 声明过的 <code>$state.path</code>。</li>
+<li>使用 AppType 声明过的 <code>$data.path</code> 和 profile 允许暴露的 <code>$state.path</code>。</li>
 <li>使用注册过的 local render helper。</li>
 </ul>
 <p>模板禁止：</p>
@@ -213,7 +232,7 @@ View {
 <li>由 LLM 运行时生成。</li>
 <li>引用未知 widget。</li>
 <li>引用未知 helper。</li>
-<li>引用未声明 state path。</li>
+<li>引用未声明 data/state path。</li>
 <li>设置 host-owned attribution 字段，例如 <code>capability_id</code>、<code>display_name</code>、<code>icon</code>、<code>trust_badge</code>。</li>
 </ul>
 

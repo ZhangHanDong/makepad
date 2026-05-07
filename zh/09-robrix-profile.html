@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Robrix2 Profile - Agent2App 协议小册</title>
+        <title>Robrix2 应用场景 - Agent2App 协议小册</title>
 
 
         <!-- Custom HTML head -->
@@ -155,8 +155,17 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="robrix2-profile"><a class="header" href="#robrix2-profile">Robrix2 Profile</a></h1>
-<p>Robrix2 是 Matrix Event-Sourced profile。它渲染 Matrix event 历史，不拥有生产 Agent 的私有 RPC 会话。</p>
+                        <h1 id="robrix2-应用场景"><a class="header" href="#robrix2-应用场景">Robrix2 应用场景</a></h1>
+<p>Robrix2 是 Agent2App Core Kernel 上的 Matrix IM app-card 场景。它使用 Remote/Event Binding 渲染 Matrix event 历史，不拥有生产 Agent 的私有 RPC 会话。</p>
+<h2 id="场景定位"><a class="header" href="#场景定位">场景定位</a></h2>
+<pre class="mermaid">flowchart LR
+    Core[Agent2View Core]
+    Core --&gt; Binding[Remote/Event Binding]
+    Binding --&gt; Env[org.octos.app]
+    Env --&gt; Registry[AppRegistry]
+    Registry --&gt; Card[Native IM app card]
+</pre>
+<p>Robrix2 的职责是消费事件、校验 AppType、投影 DataSnapshot、渲染本地模板，并把用户 shared action 写回事件系统。</p>
 <h2 id="v1-display-cards"><a class="header" href="#v1-display-cards">V1 Display Cards</a></h2>
 <p>Robrix2 v1 card 应保持 display-only：</p>
 <ul>
@@ -175,11 +184,12 @@
     app_type: String,
     version: u32,
     template_id: String,
+    data: serde_json::Value,
     state: serde_json::Value,
     dirty: bool,
 }
 <span class="boring">}</span></code></pre></pre>
-<p>Session map 负责在 room open 期间保存状态。</p>
+<p><code>data</code> 保存从 Matrix event 投影出的业务事实，<code>state</code> 保存本地 interaction state。Session map 负责在 room open 期间保存运行状态。</p>
 <pre class="mermaid">flowchart LR
     EV[Matrix event] --&gt; SK[ScopeKey]
     SK --&gt; SM[SessionMap]
@@ -188,7 +198,7 @@
     S --&gt; V2[Visible card B]
 </pre>
 <h2 id="local-reducer-loop"><a class="header" href="#local-reducer-loop">Local Reducer Loop</a></h2>
-<p>第一批 local reducer 应保持窄：</p>
+<p>Robrix2 可以支持 local view reducer，但第一批 reducer 应保持窄：</p>
 <pre><code class="language-text">counter.inc
 counter.dec
 counter.reset
@@ -204,16 +214,16 @@ timer.reset
 </code></pre>
 <p><code>message</code> scope 只重绘一张 card。</p>
 <p><code>room</code> scope 重绘所有指向同一 <code>room_id + app_id</code> 的可见 card。</p>
-<h2 id="relationship-to-aichat"><a class="header" href="#relationship-to-aichat">Relationship to aichat</a></h2>
+<h2 id="与-aichat-的关系"><a class="header" href="#与-aichat-的关系">与 aichat 的关系</a></h2>
 <p>Robrix2 可以借鉴 aichat 的窄 live wire，但不能直接复制 <code>agent.notify</code> 作为生产共享 action 协议。</p>
 <p>aichat 的闭环成立，是因为它同时拥有：</p>
 <ul>
 <li>LLM session。</li>
-<li>local state。</li>
+<li>local data/state。</li>
 <li>Splash VM。</li>
 <li>immediate event loop。</li>
 </ul>
-<p>Robrix2 的共享事实必须留在 Matrix timeline 中。</p>
+<p>Robrix2 的共享事实必须留在 Matrix timeline 中。Robrix2 场景的额外约束是：不接受 event-supplied template，不读取 <code>m.replace</code> edit 改变 app data，不用本地 reducer 静默修改 shared truth。</p>
 
                     </main>
 

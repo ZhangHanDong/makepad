@@ -156,32 +156,32 @@
                 <div id="content" class="content">
                     <main>
                         <h1 id="状态模型"><a class="header" href="#状态模型">状态模型</a></h1>
-<p>Agent2View 必须区分三层状态。</p>
+<p>Agent2App 的 state 层只表示 Host、view runtime 或 widget 为当前交互保留的运行状态。业务事实属于 <a href="05-data-model.html">数据模型</a>，不应再混称为 state。</p>
 <pre class="mermaid">flowchart TB
-    ST[Shared truth&lt;br/&gt;Agent-produced Matrix event snapshot]
-    HS[Host view state&lt;br/&gt;AgentViewSession / APP_DEMO_STATE]
-    WS[Widget state&lt;br/&gt;focus / hover / animation / IME]
+    D[DataSnapshot&lt;br/&gt;authoritative data]
+    HS[Host State&lt;br/&gt;session / draft / dirty]
+    WS[Widget State&lt;br/&gt;focus / hover / animation / IME]
+    R[Render data model]
 
-    ST --&gt; HS
-    HS --&gt; WS
+    D --&gt; R
+    HS --&gt; R
+    R --&gt; WS
 
-    WS -. not authoritative .-&gt; HS
-    HS -. local only unless confirmed .-&gt; ST
+    WS -. ephemeral .-&gt; HS
+    HS -. commit through action .-&gt; D
 </pre>
-<h2 id="shared-truth"><a class="header" href="#shared-truth">Shared Truth</a></h2>
-<p>Shared truth 是可以被房间参与者审计和同步的事实。</p>
-<p>在 Robrix2 中，Shared truth 必须来自 Matrix event 的原始 content。</p>
-<p>共享状态变更必须由 Agent/producer 发送新 snapshot event，不得由本地 widget 静默改写 Matrix 历史。</p>
-<h2 id="host-view-state"><a class="header" href="#host-view-state">Host View State</a></h2>
-<p>Host view state 是宿主为渲染和交互保留的本地状态。</p>
+<h2 id="host-state"><a class="header" href="#host-state">Host State</a></h2>
+<p>Host state 是宿主为渲染和交互保留的本地状态。</p>
 <p>它用于：</p>
 <ul>
 <li>抵抗 <code>PortalList</code> virtualization 导致的 widget 销毁。</li>
 <li>支持本地 UI reducer。</li>
 <li>支持 room/account scoped instance 的可见 view 同步重绘。</li>
-<li>保存 volatile input、selection、filter、expanded/collapsed 等 UI 状态。</li>
+<li>保存 volatile input、selection、filter、expanded/collapsed、当前 tab 等 UI 状态。</li>
+<li>记录 optimistic update、dirty 标记和本地 pending action。</li>
 </ul>
-<p>Robrix2 初版可只在内存中保存 Host view state。持久化是后续工作。</p>
+<p>Host state 可以参与 render data model 投影，但不默认进入 DataSnapshot。只有经过 AppType action schema 和 profile policy 校验的提交，才可以把 Host state 中的值转为 data mutation。</p>
+<p>Robrix2 初版可只在内存中保存 Host state。持久化是后续工作。</p>
 <h2 id="widget-state"><a class="header" href="#widget-state">Widget State</a></h2>
 <p>Widget state 只能是临时渲染状态，例如：</p>
 <ul>
@@ -189,32 +189,45 @@
 <li>hover/focus。</li>
 <li>scroll offset。</li>
 <li>animation progress。</li>
+<li>pointer capture。</li>
 </ul>
-<p>Widget state 不得作为 AppInstance 的权威状态。</p>
-<h2 id="snapshot-projection"><a class="header" href="#snapshot-projection">Snapshot Projection</a></h2>
-<p>对 <code>room</code> 和 <code>account</code> scoped app，Matrix event 是完整 snapshot。</p>
+<p>Widget state 不得作为 AppInstance 的权威 data。若 widget 被销毁后仍需要恢复某些交互上下文，应由 Host 明确把它提升到 Host state，并受 path allowlist 限制。</p>
+<h2 id="data-projection"><a class="header" href="#data-projection">Data Projection</a></h2>
+<p>对 <code>room</code> 和 <code>account</code> scoped app，producer event 应提供完整 DataSnapshot。Host 再把 DataSnapshot 和允许暴露的 Host state 投影成 render data model。</p>
 <pre class="mermaid">stateDiagram-v2
     [*] --&gt; NoSession
-    NoSession --&gt; CleanSession: first valid snapshot
-    CleanSession --&gt; DirtySession: local reducer
+    NoSession --&gt; CleanSession: first valid DataSnapshot
+    CleanSession --&gt; DirtySession: local reducer / optimistic state
     DirtySession --&gt; DirtySession: redraw same event
-    DirtySession --&gt; CleanSession: newer producer snapshot
-    CleanSession --&gt; CleanSession: newer producer snapshot
+    DirtySession --&gt; CleanSession: newer producer DataSnapshot
+    CleanSession --&gt; CleanSession: newer producer DataSnapshot
     CleanSession --&gt; CleanSession: old event redraw ignored
 </pre>
 <p>投影规则：</p>
 <ul>
-<li>较新的合法 snapshot 替换 session shared state。</li>
-<li>较旧 timeline item 被重绘时不得回滚 session。</li>
+<li>较新的合法 DataSnapshot 替换 session data。</li>
+<li>较旧 timeline item 被重绘时不得回滚 session data。</li>
 <li>同一 event 的重复 redraw 不得清空本地 dirty reducer state。</li>
-<li>新 producer snapshot 到达时清除 dirty，因为共享事实已经前进。</li>
+<li>新 producer DataSnapshot 到达时清除对应 dirty，因为共享事实已经前进。</li>
+<li>Host state 中未提交的 draft 可保留，但必须避免覆盖更新后的 data。</li>
+</ul>
+<h2 id="volatile-input"><a class="header" href="#volatile-input">Volatile Input</a></h2>
+<p>输入框 draft state 应属于 Host state，而不是 Template source，也不是 DataSnapshot。</p>
+<p>在 aichat legacy runsplash 中，<code>{{state.input.*.value}}</code> 显示时不应每次被替换成新源码，否则每个字符都会触发 Markdown/Splash <code>set_text</code> 并重建 UI。新路径应优先写作 <code>/state/inputs/*/value</code>。</p>
+<p>正确模型是：</p>
+<ul>
+<li>TextInput 把 draft 写入 Host state。</li>
+<li>Template 保持稳定。</li>
+<li>Add/Submit action 从 Host state 读取 draft。</li>
+<li>action 通过校验后，Host 或 producer 决定是否写入 data。</li>
+<li>渲染层只在必要时投影显示值。</li>
 </ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="04-envelope-and-scope.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="05-data-model.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
@@ -228,7 +241,7 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="04-envelope-and-scope.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="05-data-model.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
