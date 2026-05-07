@@ -155,7 +155,8 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="appendix-json-examples"><a class="header" href="#appendix-json-examples">Appendix: JSON Examples</a></h1>
+                        <h1 id="appendix-json-examples-and-binding-evolution"><a class="header" href="#appendix-json-examples-and-binding-evolution">Appendix: JSON Examples and Binding Evolution</a></h1>
+<p>The examples below keep the current Matrix binding field name <code>initial_state</code>. In the core semantics of this version, it carries the AppInstance initial data, namely the <code>data</code> content of a DataSnapshot.</p>
 <h2 id="mission-room-event"><a class="header" href="#mission-room-event">Mission Room Event</a></h2>
 <pre><code class="language-json">{
   "body": "Mission update: plan is waiting for approval.",
@@ -219,6 +220,58 @@
   }
 }
 </code></pre>
+<h2 id="splash-host-api-evolution"><a class="header" href="#splash-host-api-evolution">Splash Host API Evolution</a></h2>
+<p>The current aichat generated <code>runsplash</code> uses <code>agent.notify(event_id, payload)</code> as the local reverse channel:</p>
+<pre><code class="language-splash">Button {
+    text: "+1"
+    on_click: || agent.notify("inc", {})
+}
+
+TextInput {
+    text: "{{state.input.new_item.value}}"
+    on_change: |text| agent.notify("app.input.set", {key: "new_item", text: text})
+}
+</code></pre>
+<p>This mechanism solves the controlled action boundary from Template to Host. It is not tied to the specific function name. Therefore, if Splash provides a higher-level Host API, the implementation can gradually reduce direct exposure of <code>agent.notify</code> and treat it as a legacy primitive.</p>
+<p>Recommended generated code should use semantic APIs:</p>
+<pre><code class="language-splash">Button {
+    text: "+1"
+    on_click: || app.action("inc", {})
+}
+
+TextInput {
+    text: "{{state.input.new_item.value}}"
+    on_change: |text| app.input.set("new_item", text)
+}
+
+Button {
+    text: "Add"
+    on_click: || app.collection.add_from_input("items", "new_item")
+}
+</code></pre>
+<p>The Host API should aim to:</p>
+<ul>
+<li>let generated UI express intent without directly mutating Host internals;</li>
+<li>provide a stable semantic API surface for common capabilities such as action, input, and collection;</li>
+<li>let the capability manifest declare API families instead of only free-form event strings;</li>
+<li>validate payload structure earlier at the API boundary;</li>
+<li>keep the Host as the data/state owner.</li>
+</ul>
+<p>One compatible implementation shape is:</p>
+<pre><code class="language-text">app.collection.add_from_input("items", "new_item")
+    -&gt; app.action("app.collection.add_from_input", {collection: "items", input: "new_item"})
+    -&gt; internal SplashAction::Notify
+    -&gt; Host action dispatcher
+</code></pre>
+<p>In other words, <code>agent.notify</code> may remain as an internal transport primitive at first, while generated code should prefer the <code>app.*</code> API. After the Host API becomes stable enough, <code>agent.notify</code> can be reserved for debugging, low-level compatibility, or restoring old messages.</p>
+<p>The boundary remains unchanged:</p>
+<ul>
+<li>Host API calls must pass action whitelist and payload schema validation.</li>
+<li>Unknown API/action calls must be logged and ignored.</li>
+<li>Draft state in input fields must not rewrite the <code>runsplash</code> source on every keypress.</li>
+<li>Local Host API must not be used to submit remote shared fact actions in scenarios such as Robrix2.</li>
+<li>Remote shared actions should still use their corresponding transport binding, such as <code>org.octos.action_response</code>.</li>
+</ul>
 
                     </main>
 
