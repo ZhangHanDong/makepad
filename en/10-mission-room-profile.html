@@ -1,0 +1,350 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Mission Room Profile - Agent2App Protocol Little Book</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Agent2App Protocol Little Book</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/makepad/makepad" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="mission-room-profile"><a class="header" href="#mission-room-profile">Mission Room Profile</a></h1>
+<p>Mission Room is the first high-value room-scoped Agent2View app in Robrix2.</p>
+<p>It turns a Matrix room into a human-supervised multi-Agent mission control surface.</p>
+<h2 id="app-envelope"><a class="header" href="#app-envelope">App Envelope</a></h2>
+<p>Mission Room must use <code>room</code> scope:</p>
+<pre><code class="language-json">{
+  "org.octos.app": {
+    "type": "mission_room",
+    "version": 1,
+    "scope": "room",
+    "app_id": "mission.main",
+    "initial_state": {}
+  }
+}
+</code></pre>
+<p>Default mission app id:</p>
+<pre><code class="language-text">mission.main
+</code></pre>
+<p>Unless a room explicitly hosts multiple missions, the producer should use this default id.</p>
+<h2 id="mission-state-v1"><a class="header" href="#mission-state-v1">Mission State V1</a></h2>
+<p>Mission state v1 should stay explicit and small:</p>
+<pre><code class="language-json">{
+  "goal": {
+    "title": "Ship room-scoped agent2view runtime",
+    "status": "planning"
+  },
+  "phase": "planning",
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "Define AgentViewSession state model",
+      "status": "planning",
+      "owner_agent": "planner",
+      "priority": "high",
+      "requires_human_approval": true
+    }
+  ],
+  "agents": [
+    {
+      "id": "planner",
+      "role": "planner",
+      "status": "waiting_human",
+      "current_task_id": "task-1"
+    }
+  ],
+  "pending_human_actions": [
+    {
+      "id": "approve-plan-1",
+      "kind": "approve_plan",
+      "label": "Approve proposed plan"
+    }
+  ],
+  "decisions": [],
+  "blockers": []
+}
+</code></pre>
+<h2 id="mission-model"><a class="header" href="#mission-model">Mission Model</a></h2>
+<pre class="mermaid">classDiagram
+    class Mission {
+      goal
+      phase
+    }
+    class Task {
+      id
+      title
+      status
+      owner_agent
+      priority
+    }
+    class Agent {
+      id
+      role
+      status
+      current_task_id
+    }
+    class Decision
+    class Blocker
+    class PendingHumanAction
+
+    Mission &quot;1&quot; --&gt; &quot;*&quot; Task
+    Mission &quot;1&quot; --&gt; &quot;*&quot; Agent
+    Mission &quot;1&quot; --&gt; &quot;*&quot; Decision
+    Mission &quot;1&quot; --&gt; &quot;*&quot; Blocker
+    Mission &quot;1&quot; --&gt; &quot;*&quot; PendingHumanAction
+</pre>
+<h2 id="status-values"><a class="header" href="#status-values">Status Values</a></h2>
+<p><code>goal.status</code>:</p>
+<pre><code class="language-text">planning | active | paused | completed
+</code></pre>
+<p><code>task.status</code>:</p>
+<pre><code class="language-text">planning | approved | doing | review | blocked | done
+</code></pre>
+<p><code>agent.status</code>:</p>
+<pre><code class="language-text">idle | working | blocked | waiting_human
+</code></pre>
+<p>Agent role:</p>
+<pre><code class="language-text">planner | executor | reviewer | operator
+</code></pre>
+<p>Autonomy mode:</p>
+<pre><code class="language-text">manual | supervised | autonomous | paused
+</code></pre>
+<h2 id="shared-actions"><a class="header" href="#shared-actions">Shared Actions</a></h2>
+<p>The first shared actions:</p>
+<pre><code class="language-text">approve_plan
+request_plan_changes
+pause_mission
+resume_mission
+</code></pre>
+<p>Later task-level actions:</p>
+<pre><code class="language-text">reassign_task
+change_priority
+mark_blocked
+request_review
+approve_result
+</code></pre>
+<p>These actions change mission truth. They must flow through <code>org.octos.action_response</code>, after which the Agent produces a new mission snapshot event.</p>
+<pre class="mermaid">sequenceDiagram
+    participant H as Human
+    participant R as Robrix2
+    participant A as Agent / Producer
+    participant M as Matrix room
+
+    H-&gt;&gt;R: click approve_plan
+    R-&gt;&gt;M: org.octos.action_response
+    A-&gt;&gt;M: read response
+    A-&gt;&gt;A: validate + apply policy
+    A-&gt;&gt;M: new mission_room snapshot
+    R-&gt;&gt;M: read new event
+    R-&gt;&gt;R: update room-scoped session
+</pre>
+<h2 id="local-view-actions"><a class="header" href="#local-view-actions">Local View Actions</a></h2>
+<p>A mission card may support local actions:</p>
+<ul>
+<li>expand task details;</li>
+<li>select an agent;</li>
+<li>switch board/decision/blocker view;</li>
+<li>filter lanes.</li>
+</ul>
+<p>These actions should not produce Matrix shared facts.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="09-robrix-profile.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="11-safety-model.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="09-robrix-profile.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="11-safety-model.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid.min.js"></script>
+        <script src="mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>
