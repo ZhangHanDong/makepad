@@ -1469,33 +1469,38 @@ struct ShaderBackdropVisualProfile {
     refraction_strength: f32,
     rim_strength: f32,
     chroma_strength: f32,
+    liquid_warp_strength: f32,
 }
 
 fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropVisualProfile {
     match proof {
         ShaderBackdropProof::InteriorNoChroma => ShaderBackdropVisualProfile {
-            scene_grid_strength: 0.045,
+            scene_grid_strength: 0.018,
             refraction_strength: 0.64,
             rim_strength: 0.075,
             chroma_strength: 0.0,
+            liquid_warp_strength: 0.42,
         },
         ShaderBackdropProof::Interior => ShaderBackdropVisualProfile {
-            scene_grid_strength: 0.045,
+            scene_grid_strength: 0.018,
             refraction_strength: 0.64,
             rim_strength: 0.075,
             chroma_strength: 0.18,
+            liquid_warp_strength: 0.42,
         },
         ShaderBackdropProof::Refraction => ShaderBackdropVisualProfile {
             scene_grid_strength: 0.18,
             refraction_strength: 1.0,
             rim_strength: 0.12,
             chroma_strength: 0.34,
+            liquid_warp_strength: 0.72,
         },
         _ => ShaderBackdropVisualProfile {
             scene_grid_strength: 0.18,
             refraction_strength: 0.0,
             rim_strength: 0.0,
             chroma_strength: 0.0,
+            liquid_warp_strength: 0.0,
         },
     }
 }
@@ -5175,10 +5180,12 @@ impl App {
                 refraction_strength: 0.0,
                 rim_strength: 0.0,
                 chroma_strength: 0.0,
+                liquid_warp_strength: 0.0,
             });
         let backdrop_refraction_strength = backdrop_profile.refraction_strength;
         let backdrop_rim_strength = backdrop_profile.rim_strength;
         let chroma_strength = backdrop_profile.chroma_strength;
+        let backdrop_liquid_warp_strength = backdrop_profile.liquid_warp_strength;
         let bind_backdrop_texture = matches!(
             backdrop_proof,
             Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
@@ -5235,6 +5242,7 @@ impl App {
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
                 chroma_strength: #(chroma_strength)
+                backdrop_liquid_warp_strength: #(backdrop_liquid_warp_strength)
             }
         });
 
@@ -5256,6 +5264,7 @@ impl App {
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
                 chroma_strength: #(chroma_strength)
+                backdrop_liquid_warp_strength: #(backdrop_liquid_warp_strength)
             }
         });
 
@@ -5277,6 +5286,7 @@ impl App {
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
                 chroma_strength: #(chroma_strength)
+                backdrop_liquid_warp_strength: #(backdrop_liquid_warp_strength)
             }
         });
 
@@ -5298,6 +5308,7 @@ impl App {
                 backdrop_refraction_strength: #(backdrop_refraction_strength)
                 backdrop_rim_strength: #(backdrop_rim_strength)
                 chroma_strength: #(chroma_strength)
+                backdrop_liquid_warp_strength: #(backdrop_liquid_warp_strength)
             }
         });
 
@@ -5795,11 +5806,12 @@ mod tests {
         guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value, parse_glass_backend,
         render_state_templates, render_state_templates_for_ui, resolve_glass_appearance,
-        resolve_startup_glass_appearance, should_start_window_drag, Agent, App, AppCapability,
-        AppDemoState, BackendType, CalculatorDemoState, ClaudeCodeCliAgent,
-        GenericCollectionsState, GenericInputsState, GlassBackendRequest, GlassPanelPreset,
-        GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof,
-        DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
+        Agent, App, AppCapability, AppDemoState, BackendType, CalculatorDemoState,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassBackendRequest,
+        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig,
+        ShaderBackdropProof, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -6180,6 +6192,23 @@ mod tests {
         assert!(interior.chroma_strength > 0.0);
         assert!(interior.chroma_strength < refraction.chroma_strength);
         assert_eq!(shader.chroma_strength, 0.0);
+    }
+
+    #[test]
+    fn aichat_shader_backdrop_interior_visual_profile_uses_liquid_warp() {
+        let interior = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        let no_chroma = shader_backdrop_visual_profile(ShaderBackdropProof::InteriorNoChroma);
+        let refraction = shader_backdrop_visual_profile(ShaderBackdropProof::Refraction);
+        let shader = shader_backdrop_visual_profile(ShaderBackdropProof::RawSignal);
+
+        assert!(interior.liquid_warp_strength > 0.0);
+        assert_eq!(
+            no_chroma.liquid_warp_strength,
+            interior.liquid_warp_strength
+        );
+        assert!(interior.liquid_warp_strength < refraction.liquid_warp_strength);
+        assert!(interior.scene_grid_strength < 0.03);
+        assert_eq!(shader.liquid_warp_strength, 0.0);
     }
 
     #[test]

@@ -143,6 +143,7 @@ script_mod! {
             backdrop_texture_uv_scale: uniform(vec2(1.0, 1.0))
             backdrop_refraction_strength: instance(0.0)
             backdrop_rim_strength: instance(0.0)
+            backdrop_liquid_warp_strength: instance(0.0)
             backdrop_texture: texture_2d(float)
 
             backdrop_signal_rgb: fn(uv: vec2) -> vec3 {
@@ -187,7 +188,16 @@ script_mod! {
                 let centered = uv - vec2(0.5, 0.5)
                 let edge = self.backdrop_edge_weight(uv)
                 let pull = centered * edge * self.backdrop_refraction_strength * 0.090
-                return clamp(uv + pull, vec2(0.0, 0.0), vec2(1.0, 1.0))
+                let t = self.draw_pass.time
+                let wave_a = sin((uv.y + centered.x * 0.42) * 18.0 + t * 0.95)
+                let wave_b = cos((uv.x - centered.y * 0.36) * 15.0 - t * 0.72)
+                let swirl = vec2(
+                    centered.y * wave_a - centered.x * wave_b,
+                    centered.x * wave_b + centered.y * wave_a
+                )
+                let liquid_weight = clamp(0.28 + edge * 0.72, 0.0, 1.0)
+                let liquid = swirl * liquid_weight * self.backdrop_liquid_warp_strength * 0.030
+                return clamp(uv + pull + liquid, vec2(0.0, 0.0), vec2(1.0, 1.0))
             }
 
             backdrop_texture_uv: fn(uv: vec2) -> vec2 {
