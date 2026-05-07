@@ -2929,6 +2929,8 @@ First output exactly one ```appplan json fenced block using this plan as the sou
 After the appplan block, output exactly one ```runsplash fenced block.
 Do not return diagrams, JSX, React, JavaScript, handler source files, or companion logic.
 Use only the state paths and agent.notify actions listed in the capability manifest.
+Do not generate custom shader functions in runsplash. Avoid `pixel: fn`, `vertex: fn`, `get_color: fn`, `Sdf2d`, `Pal.premul`, `vec2(...)`, `vec3(...)`, `vec4(...)`, `sin`, `cos`, `atan`, `atan2`, `smoothstep`, or animated shader math.
+For visual styling, use regular widget properties only: `draw_bg.color`, `draw_bg.border_radius`, `draw_bg.border_size`, `draw_bg.border_color`, `draw_text.color`, padding, spacing, and layout.
 Use Makepad Splash syntax, for example:
 ```runsplash
 RoundedView{{
@@ -2966,6 +2968,8 @@ Hard output rules:
 - Use only the capability manifest supplied in the user message. Do not invent host actions.
 - `use mod.prelude.widgets.*` is automatically prepended. Do not include imports.
 - Do not wrap content in Root{{}} or Window{{}}. The content is inserted into an existing container.
+- Do not generate custom shader functions. In `runsplash`, never use `pixel: fn`, `vertex: fn`, `get_color: fn`, `Sdf2d`, `Pal.premul`, vector constructors, trigonometry, `smoothstep`, or animated shader math.
+- Style generated apps with ordinary widget properties only: `draw_bg.color`, `draw_bg.border_radius`, `draw_bg.border_size`, `draw_bg.border_color`, `draw_text.color`, layout, padding, and spacing.
 
 Interactive generated UI can notify the host from button callbacks:
 
@@ -5785,6 +5789,7 @@ mod tests {
     use makepad_widgets::DVec2;
 
     use super::{
+        app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, glass_opacity_with_native_compositing_proof,
         guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
@@ -6373,6 +6378,18 @@ mod tests {
         assert!(manifest.contains("app.collection.add_from_input"));
         assert!(manifest.contains("{{state.input.new_item.value}}"));
         assert!(manifest.contains("Do not call widget methods"));
+    }
+
+    #[test]
+    fn app_generation_prompts_forbid_custom_shaders() {
+        let prompt = app_generation_prompt_with_state("生成一个番茄钟");
+        assert!(prompt.contains("Do not generate custom shader functions"));
+        assert!(prompt.contains("pixel: fn"));
+        assert!(prompt.contains("Sdf2d"));
+
+        let system = app_generation_session_system_prompt();
+        assert!(system.contains("Do not generate custom shader functions"));
+        assert!(system.contains("ordinary widget properties only"));
     }
 
     #[test]

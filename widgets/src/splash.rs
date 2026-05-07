@@ -77,6 +77,35 @@ fn is_full_script(body: &str) -> bool {
     trimmed.starts_with("let ") || trimmed.starts_with("fn ") || trimmed.starts_with("mod.")
 }
 
+fn splash_contains_untrusted_shader(body: &str) -> bool {
+    const SHADER_FUNCTION_PROPERTIES: &[&str] = &["pixel", "vertex", "get_color"];
+
+    let compact: String = body
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect();
+
+    SHADER_FUNCTION_PROPERTIES
+        .iter()
+        .any(|name| compact.contains(&format!("{name}:fn")))
+        || compact.contains("sdf2d.")
+        || compact.contains("pal.premul")
+}
+
+fn splash_shader_guard_body() -> &'static str {
+    r#"RoundedView{
+    width: Fill height: Fit
+    flow: Down spacing: 6 padding: 12
+    draw_bg.color: #x2B1D1D
+    draw_bg.border_color: #xA85A5A
+    draw_bg.border_size: 1.0
+    draw_bg.border_radius: 8.0
+    Label{text: "This generated view used an unsupported custom shader." draw_text.color: #xFFD8D8}
+    Label{text: "Ask the agent to regenerate it using normal widget properties only." draw_text.color: #xD8B8B8 draw_text.text_style.font_size: 10}
+}"#
+}
+
 impl Splash {
     /// Stable identity for the streaming script body, based on pointer address.
     fn self_id(&self) -> usize {
@@ -84,10 +113,21 @@ impl Splash {
     }
 
     fn eval_body(&mut self, cx: &mut Cx) {
-        let body = self.body.as_ref();
-        if body.is_empty() {
+        let raw_body = self.body.as_ref();
+        if raw_body.is_empty() {
             return;
         }
+        let guarded_body;
+        let body = if splash_contains_untrusted_shader(raw_body) {
+            log!(
+                "[SPLASH] blocked unsupported custom shader in generated body: {} bytes",
+                raw_body.len()
+            );
+            guarded_body = splash_shader_guard_body();
+            guarded_body
+        } else {
+            raw_body
+        };
 
         // Stop any previous tick timer
         cx.stop_timer(self.tick_timer);
@@ -199,6 +239,11 @@ impl Splash {
         let mut current = self.body.as_ref().to_string();
         current.push_str(chunk);
         self.body.set(&current);
+        if splash_contains_untrusted_shader(&current) {
+            self.eval_body(cx);
+            cx.redraw_all();
+            return;
+        }
 
         let prefix = if is_full_script(&current) {
             SPLASH_PREFIX_SCRIPT
@@ -230,6 +275,35 @@ impl Splash {
         });
 
         cx.redraw_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::splash_contains_untrusted_shader;
+
+    #[test]
+    fn splash_shader_guard_allows_plain_widget_styling() {
+        let body = r##"RoundedView{
+            height: Fit
+            draw_bg.color: #334
+            draw_bg.border_radius: 8.0
+            Label{text: "ok"}
+        }"##;
+        assert!(!splash_contains_untrusted_shader(body));
+    }
+
+    #[test]
+    fn splash_shader_guard_blocks_shader_callbacks() {
+        assert!(splash_contains_untrusted_shader(
+            "View{draw_bg +: { pixel: fn() { return #f00 } }}"
+        ));
+        assert!(splash_contains_untrusted_shader(
+            "View{draw_bg +: { get_color : fn() { return self.color } }}"
+        ));
+        assert!(splash_contains_untrusted_shader(
+            "View{draw_bg +: { let sdf = Sdf2d.viewport(self.pos) }}"
+        ));
     }
 }
 
