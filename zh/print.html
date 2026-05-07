@@ -1788,7 +1788,7 @@ cargo test -p makepad-example-aichat --release collection
     V01 --&gt; AP[Agent2Project artifact protocol]
     V01 --&gt; MD[Mission dashboard account profile]
 </pre>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="附录json-示例与绑定演进"><a class="header" href="#附录json-示例与绑定演进">附录：JSON 示例与绑定演进</a></h1>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="附录json-示例绑定演进与讨论综合"><a class="header" href="#附录json-示例绑定演进与讨论综合">附录：JSON 示例、绑定演进与讨论综合</a></h1>
 <p>下面示例沿用当前 Matrix binding 的 <code>initial_state</code> 字段名。按本版核心语义，它承载的是 AppInstance 的 initial data，也就是 DataSnapshot 的 <code>data</code> 内容。</p>
 <h2 id="mission-room-event"><a class="header" href="#mission-room-event">Mission Room Event</a></h2>
 <pre><code class="language-json">{
@@ -1905,6 +1905,269 @@ Button {
 <li>本地 Host API 不应被用于提交 Robrix2 这类远程 shared fact action。</li>
 <li>远程共享 action 仍应通过对应 transport binding，例如 <code>org.octos.action_response</code>。</li>
 </ul>
+<h2 id="会议讨论综合makepadsplash-的-agent2app-路线"><a class="header" href="#会议讨论综合makepadsplash-的-agent2app-路线">会议讨论综合：Makepad/Splash 的 Agent2App 路线</a></h2>
+<p>这组讨论把 Agent2App 从一个 aichat demo 扩展成三条互相支撑的工程路线：</p>
+<pre><code class="language-text">Local AppGen:
+    aichat 生成 inline runsplash view
+
+Room AppGen:
+    Robrix/Matrix 房间中共享、持久、可协作的 app view
+
+Software Factory:
+    用 component skills、Host API、测试 harness 和模型评估循环稳定地产出 app
+</code></pre>
+<p>共同结论是：Makepad 不应只被描述成替代 Skia 的图形层，也不应只被描述成 Flutter-like UI toolkit。更强的叙事是：Makepad + Robius + Splash 可以成为 AI 时代的跨平台 native app runtime。Splash 的作用不是替代 Rust 写所有逻辑，而是为 AI 生成 app 提供一种 token 成本低、可流式、可恢复、可嵌入 Host 的可执行模板语言。</p>
+<pre class="mermaid">flowchart TB
+    Core[Agent2App Core Kernel]
+    Core --&gt; Local[aichat Local AppGen]
+    Core --&gt; Room[Robrix Matrix Room App]
+    Core --&gt; Factory[AI App Software Factory]
+
+    Local --&gt; RS[runsplash inline view]
+    Local --&gt; HS[Host-owned data/state]
+    Local --&gt; API[Splash Host API]
+
+    Room --&gt; MX[Matrix event/state binding]
+    Room --&gt; Shared[shared room data]
+    Room --&gt; Personal[personalized view per user]
+
+    Factory --&gt; Skills[component skills]
+    Factory --&gt; Harness[model-specific harness]
+    Factory --&gt; Tests[headless/remote UI tests]
+</pre>
+<h3 id="ai-native-runtime而不是传统-framework"><a class="header" href="#ai-native-runtime而不是传统-framework">AI-native runtime，而不是传统 framework</a></h3>
+<p>传统 framework 假设主要使用者是人。Agent2App 的主要生成者是模型，约束条件不同：</p>
+<ul>
+<li>模型上下文窗口有限。</li>
+<li>不同模型能力差异很大。</li>
+<li>模型对 Splash 的训练数据少。</li>
+<li>生成 UI 和生成可靠业务逻辑是两类难度。</li>
+<li>一次性生成完整 Rust/HTML/JS app 可能可行，但 token 成本高、等待长、错误面大。</li>
+</ul>
+<p>因此 Splash 的目标应是：</p>
+<pre><code class="language-text">最小 token 成本的可执行 app 表达
+</code></pre>
+<p>也就是说，让模型生成比完整应用更短的 Splash template，让 Host 提供 data/state/action/API 边界，让 runtime 和 test harness 处理可靠性问题。</p>
+<h3 id="harness-强度应按模型和目标动态变化"><a class="header" href="#harness-强度应按模型和目标动态变化">Harness 强度应按模型和目标动态变化</a></h3>
+<p>讨论中反复出现的关键词是 harness。这里的 harness 不只是 prompt，而是一组按模型、目标设备、AppType 和错误反馈动态组合的约束：</p>
+<pre><code class="language-text">model capability
+target device
+AppType
+component skills
+Host API manifest
+runtime error feedback
+test result
+    -&gt; selected harness/context
+</code></pre>
+<p>强模型可以生成更多原创结构；弱模型应被限制在更强的模板、固定组件和更少自由度内。对小模型或本地模型，推荐路径不是“让它创造完整 app”，而是：</p>
+<pre><code class="language-text">选择组件
+填配置
+生成小 delta
+调用 Host API
+</code></pre>
+<p>这会降低创造性，但提高可用性。讨论中的判断是：可用性应是底线；fancy effect 可以按模型能力、时间预算和设备能力逐步启用。</p>
+<h3 id="component-skills-是可复用资产"><a class="header" href="#component-skills-是可复用资产">Component skills 是可复用资产</a></h3>
+<p>如果每次都让模型从零生成 calendar、todo、weather、poll、trip planner、mission room，context 会膨胀，质量也不稳定。更好的形态是把常见 UI/logic 做成 component skills：</p>
+<pre><code class="language-text">App request
+    -&gt; semantic routing
+    -&gt; load relevant component skills
+    -&gt; model emits config/delta
+    -&gt; Host/Splash runtime composes final view
+</code></pre>
+<p>例如：</p>
+<ul>
+<li>Todo / collection</li>
+<li>Calculator</li>
+<li>Timer</li>
+<li>Calendar / agenda</li>
+<li>Poll</li>
+<li>Trip planner</li>
+<li>Barcamp scheduler</li>
+<li>Mission room</li>
+<li>Dashboard / -1 screen card</li>
+</ul>
+<p>Component skills 可以是 Splash snippets、Host API wrappers、schema、示例、测试 fixtures 的组合。长期还可以批量生成和公开 Splash 示例数据集，让后续模型、LoRA 或 retrieval context 更容易学会 Splash。</p>
+<h3 id="state-owner-必须在-hostroom不在-generated-widget"><a class="header" href="#state-owner-必须在-hostroom不在-generated-widget">State owner 必须在 Host/Room，不在 generated widget</a></h3>
+<p>讨论里明确指出 generated app 是 transient 的。如果状态存在 Splash widget 实例里，滚动、重渲染、重新生成、修改 view 时都会丢失。正确边界是：</p>
+<pre><code class="language-text">Host / Matrix room owns data and shared truth
+HostState owns local draft and view state
+Splash owns current view template
+Widget instance owns only transient rendering state
+</code></pre>
+<p>因此 PortalList 或 timeline 回收 widget 并不是协议问题。可见 widget 可以释放；AppInstance、DataSnapshot 和 HostState 必须在更高层持久化。</p>
+<h3 id="robrixmatrix从-webview-widget-到-splash-room-app"><a class="header" href="#robrixmatrix从-webview-widget-到-splash-room-app">Robrix/Matrix：从 webview widget 到 Splash room app</a></h3>
+<p>Matrix 已经有 widget 概念，但当前形态更接近 iframe/webview app。它能访问 room state，也能实现协作日程表这类功能，但成本高、客户端支持重、生态使用少。</p>
+<p>Robrix + Splash 的机会是实现更轻的 native room app binding：</p>
+<pre><code class="language-text">Matrix room event / room state
+    -&gt; Robrix validates org.octos.app envelope
+    -&gt; Robrix creates AppInstance
+    -&gt; injects scoped room data into Splash VM
+    -&gt; renders Splash view inline in room
+    -&gt; user action goes through Host API
+    -&gt; producer writes Matrix event/state update
+    -&gt; all clients re-project data into their own view
+</code></pre>
+<p>这个方向支持两种重要能力：</p>
+<ul>
+<li>同一份 shared data 可以被多人协作修改。</li>
+<li>每个用户可以用自己的 view/template 显示同一份 data。</li>
+</ul>
+<p>例如家庭旅行计划可以共享 itinerary、participants、tasks，但每个成员可拥有不同 layout：日历视图、地图优先视图、任务列表视图或紧凑卡片视图。</p>
+<p>Matrix 是一种 transport binding，而不是协议内核。Agent2App 内核仍应只定义 AppInstance、DataSnapshot、Template、Action、Scope 和 Permission。Matrix binding 负责把它们编码进 room event、room state 或 widget-like event。</p>
+<pre class="mermaid">sequenceDiagram
+    participant A as Agent
+    participant M as Matrix Room
+    participant R as Robrix Host
+    participant VM as Splash VM
+    participant U as User
+    participant P as Producer
+
+    A-&gt;&gt;M: org.octos.app + Splash template
+    R-&gt;&gt;M: read room event/state
+    R-&gt;&gt;R: validate AppType, scope, capabilities
+    R-&gt;&gt;VM: inject room data projection + Host API
+    VM-&gt;&gt;U: render inline room app
+    U-&gt;&gt;VM: click/type/drag
+    VM-&gt;&gt;R: app.action(...)
+    R-&gt;&gt;R: validate action and payload
+    R-&gt;&gt;P: submit shared action
+    P-&gt;&gt;M: new DataSnapshot/action event
+    R-&gt;&gt;VM: refresh projected data
+</pre>
+<h3 id="matrix-splash-app-可以作为-room-artifact"><a class="header" href="#matrix-splash-app-可以作为-room-artifact">Matrix Splash app 可以作为 room artifact</a></h3>
+<p>讨论中确认了一个重要落点：Splash script 可以作为 room 内容的一部分存在，而不是必须作为外部下载应用包。</p>
+<p>示意结构：</p>
+<pre><code class="language-json">{
+  "org.octos.app": {
+    "type": "room_poll",
+    "version": 1,
+    "scope": "room",
+    "app_id": "poll.dinner",
+    "data": {},
+    "template": {
+      "format": "splash",
+      "code": "RoundedView{ ... }"
+    },
+    "capabilities": ["app.action", "app.collection"]
+  }
+}
+</code></pre>
+<p>这使 Robrix 能把 Agent 生成的 view 当成 chat/room 中的 rich interactive content，而不是当成独立安装应用。</p>
+<h3 id="software-factory从-demo-到可验证生产线"><a class="header" href="#software-factory从-demo-到可验证生产线">Software Factory：从 demo 到可验证生产线</a></h3>
+<p>讨论后半段提出了 software factory 的方向。目标不是手工修一个 calculator demo，而是形成持续产出 app 的闭环：</p>
+<pre><code class="language-text">App spec
+component skills
+model-specific harness
+generated Splash/Rust artifact
+headless or remote UI run
+virtual click/type/scroll
+state/action assertions
+runtime errors
+    -&gt; feedback into harness
+</code></pre>
+<p>这会把 Agent2App 从“模型能否画 UI”推进到“模型能否产出可工作的 app”。必须测试的不是只有 parse/render，还包括：</p>
+<pre class="mermaid">flowchart LR
+    Spec[App spec] --&gt; Ctx[model harness/context]
+    Ctx --&gt; Gen[generate Splash/app artifact]
+    Gen --&gt; Run[run in headless or remote Host]
+    Run --&gt; Act[virtual click/type/scroll]
+    Act --&gt; Assert[state/action assertions]
+    Assert --&gt;|pass| Keep[accept harness/app]
+    Assert --&gt;|fail| Err[collect runtime errors]
+    Err --&gt; Tune[mutate context or component skill]
+    Tune --&gt; Gen
+</pre>
+<ul>
+<li>button click 是否触发正确 action。</li>
+<li>input 是否保留 focus 和 draft state。</li>
+<li>collection add/toggle/delete 是否改变 Host data。</li>
+<li>calculator operator/equal/clear 是否正确。</li>
+<li>timer start/pause/reset 是否正确。</li>
+<li>state template refresh 是否不重建输入框源码。</li>
+</ul>
+<p>Makepad-native widgets 可以走统一 automation path。平台 native widgets 则需要 per-platform adapter，因为 iOS/macOS/Android/WebView 的生命周期、查询、事件注入和合成都不同。</p>
+<h3 id="splash-streaming-eval-与-vm-hardening"><a class="header" href="#splash-streaming-eval-与-vm-hardening">Splash streaming eval 与 VM hardening</a></h3>
+<p>当前 Splash streaming eval 的简单策略是持续尝试 eval，遇到错误就忽略，直到代码完整。这能工作，但会产生噪声，也可能进入不可恢复状态。</p>
+<p>需要强化的方向：</p>
+<ul>
+<li>按 scope/block 完整性决定何时 eval。</li>
+<li>incomplete scope 不应产生 fatal 状态。</li>
+<li>无限循环、超时、过量内存要可中断。</li>
+<li>VM 错误要可结构化返回给 harness。</li>
+<li>streaming parser 应能识别完整 widget、完整 <code>let</code>、完整 callback。</li>
+<li>重复 eval 应尽量复用稳定部分，减少闪烁和焦点丢失。</li>
+</ul>
+<p>这些不是协议内核要求，但属于 aichat/Robrix profile 的 runtime quality gate。</p>
+<h3 id="native-components-与平台合成边界"><a class="header" href="#native-components-与平台合成边界">Native components 与平台合成边界</a></h3>
+<p>Makepad 可以包装 native components，也可以提供 Makepad-native widgets。两者边界不同。</p>
+<p>Apple 平台上，native component 的内容通常不能被应用读取后再自行做 shader glass warp，因为系统合成器会保护 Safari、银行页面等内容。应用可以覆盖透明层，但如果需要读取背后内容做折射/模糊，通常必须走 Apple system compositor 或 screen capture 权限。</p>
+<p>因此 profile 应区分：</p>
+<pre><code class="language-text">Makepad-native widget:
+    可跨平台渲染、可统一测试、可做 Makepad shader/glass/vector 效果
+
+Platform-native component:
+    可复用系统能力，但测试、合成和权限是 per-platform 的
+</code></pre>
+<p>React Native 能做的 native wrapper，Makepad/Robius 原则上也能做；但 glass、readback、snapshot、automation 需要按平台处理。</p>
+<h3 id="vectorsvg-与-shader-的边界"><a class="header" href="#vectorsvg-与-shader-的边界">Vector、SVG 与 shader 的边界</a></h3>
+<p>讨论里也比较了 SVG、Splash vector 和 shader。结论不是必须生成 SVG，而是：</p>
+<ul>
+<li>小型 animated UI element、icon、arrow、micro interaction 适合 shader。</li>
+<li>大型复杂图形不应滥用 shader。</li>
+<li>Tiger/logo 这类复杂形状更适合 vector/raster pipeline。</li>
+<li>Splash 可以提供比 SVG 更贴近 Makepad 的 vector/shader DSL。</li>
+<li>标准 SVG 不是必须，AI 只需要目标 runtime 能稳定渲染的简洁表达。</li>
+</ul>
+<p>这支持一个设计原则：Agent2App Template 不必绑定到 Web/SVG 生态，应该允许 Makepad-native template encoding。</p>
+<h3 id="分发与-app-store-边界"><a class="header" href="#分发与-app-store-边界">分发与 App Store 边界</a></h3>
+<p>讨论中对 Apple 政策形成了谨慎判断：风险不在“解释型语言”本身，而在应用是否允许用户在初审后下载、生成并执行会改变 app 功能的代码，从而绕过 App Review。</p>
+<p>高风险叙事：</p>
+<pre><code class="language-text">Generate any app
+AI app store
+Run arbitrary downloaded applications
+Replace App Store
+</code></pre>
+<p>较低风险叙事：</p>
+<pre><code class="language-text">AI chat with rich interactive content
+Room-native collaborative widgets
+Configurable mini apps inside a declared Host
+Predeclared calendar/poll/collection/dashboard capabilities
+</code></pre>
+<p>因此公开产品叙事应优先强调 <code>agent2view</code>，而不是 <code>agent2project</code>。Host 应声明 primary purpose，例如 chat、collaboration、room interaction。Splash/A2UI view 是该目的下的 rich content，而不是泛用 app store 替代物。</p>
+<p>Android 和 Web/WASM 可以更激进；iOS App Store 版本应使用 predeclared capabilities 和 configurable widgets。TestFlight、Web demo、Android sideload 或桌面版可作为更自由的实验通道。</p>
+<h3 id="推荐里程碑"><a class="header" href="#推荐里程碑">推荐里程碑</a></h3>
+<pre><code class="language-text">Phase 0: Local AppGen
+    aichat 稳定生成 runsplash view，支持 Host API、state projection、basic actions。
+
+Phase 1: Host API
+    app.action / app.input / app.collection / ai.talk 替代直接暴露 agent.notify。
+
+Phase 2: Verification Harness
+    calculator、todo、timer、poll、calendar 进入自动 headless/remote test suite。
+
+Phase 3: Component Skills
+    把常见 mini app 做成 component skill + schema + examples + tests。
+
+Phase 4: Robrix Room App
+    Matrix event 中承载 app envelope + Splash template，Robrix inline render。
+
+Phase 5: Shared Collaboration
+    action 写回 Matrix event/state，多用户共享 data，每人可有 personalized view。
+
+Phase 6: Distribution Strategy
+    Web/WASM/Android 先展示完整 dynamic runtime；iOS 采用 rich chat content + predeclared capabilities。
+</code></pre>
+<h3 id="尚待确定的问题"><a class="header" href="#尚待确定的问题">尚待确定的问题</a></h3>
+<ul>
+<li>Splash Host API 的最终命名：<code>app.*</code>、<code>host.*</code> 还是 profile-specific namespace。</li>
+<li>Matrix room app 的 event schema：template 是 event content、room state，还是两者组合。</li>
+<li>AppInstance lifecycle：timeline 可见性、room membership、权限变更、历史恢复。</li>
+<li>VM resource limits：CPU、memory、timer、network、file、native API。</li>
+<li>Component skills 的 packaging：纯文本、repo artifact、Matrix event、或 Host-bundled library。</li>
+<li>per-model harness eval 的最小 app suite 和评分标准。</li>
+<li>App Store 文案和功能包装边界。</li>
+</ul>
+<p>这些问题不阻塞当前协议内核，但会决定 aichat 与 Robrix profile 的产品化路径。</p>
 
                     </main>
 
