@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent2App Protocol Little Book</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f4;
+      --fg: #202124;
+      --muted: #666a70;
+      --border: #d8d8d0;
+      --card: #ffffff;
+      --accent: #2357d6;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #15161a;
+        --fg: #f1f1ee;
+        --muted: #a4a8b0;
+        --border: #343842;
+        --card: #1d2027;
+        --accent: #89a7ff;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(760px, 100%);
+      padding: 32px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(30px, 5vw, 48px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    nav {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    a {
+      display: block;
+      padding: 16px 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--fg);
+      text-decoration: none;
+    }
+
+    a:hover {
+      border-color: var(--accent);
+    }
+
+    strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 18px;
+    }
+
+    span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Agent2App Protocol Little Book</h1>
+    <p>Select a language to read the Agent2App protocol little book.</p>
+    <nav aria-label="Language">
+      <a href="./en/">
+        <strong>English</strong>
+        <span>Agent2App Protocol Little Book</span>
+      </a>
+      <a href="./zh/">
+        <strong>中文</strong>
+        <span>Agent2App 协议小册</span>
+      </a>
+    </nav>
+  </main>
+</body>
+</html>

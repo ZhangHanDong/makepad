@@ -1,5 +1,7 @@
 # Preface
 
+[English](../en/) | [中文](../zh/)
+
 This little book defines the Agent2App protocol for `agent2view`.
 
 It places two implementation directions that already exist under the same semantic frame:
