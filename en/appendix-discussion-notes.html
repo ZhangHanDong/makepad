@@ -1,0 +1,1035 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Appendix: Meeting Notes and Roadmap Derivation - Agent2App Protocol Little Book</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            html.classList.remove('sidebar-visible');
+            html.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Agent2App Protocol Little Book</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/makepad/makepad" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="appendix-meeting-notes-and-roadmap-derivation"><a class="header" href="#appendix-meeting-notes-and-roadmap-derivation">Appendix: Meeting Notes and Roadmap Derivation</a></h1>
+<p>This appendix synthesizes the Makepad/Splash/Agent2App discussions starting from <code>Felo20260507094234.txt</code> and the later appended transcripts. The source material is automatic meeting transcription with mixed English, Chinese, and machine translation, and contains recognition errors. This appendix does not reproduce the transcript verbatim. Instead, it reconstructs the technical meaning, product judgments, disagreements, and engineering route that emerged from the discussion.</p>
+<h2 id="1-core-question"><a class="header" href="#1-core-question">1. Core Question</a></h2>
+<p>The discussions revolve around one central question:</p>
+<pre><code class="language-text">Can Makepad move from a cross-platform UI/graphics framework
+to an application runtime for the AI era?
+</code></pre>
+<p>The question breaks down into several practical issues:</p>
+<ul>
+<li>Is Splash a suitable target language for AI-generated apps?</li>
+<li>Is aichat inline <code>runsplash</code> only a demo, or a reusable Agent2App local binding?</li>
+<li>Can Robrix/Matrix host shared, persistent, collaborative AI-generated room apps?</li>
+<li>Should <code>agent.notify</code> remain public, or evolve into a clearer Splash Host API?</li>
+<li>Should app state live inside generated apps, or in the Host/Room?</li>
+<li>How can different models reliably generate working apps?</li>
+<li>How should generated UI and logic be tested?</li>
+<li>How can the product avoid mobile app store policy risks around dynamic app generation?</li>
+</ul>
+<p>The resulting direction is:</p>
+<pre><code class="language-text">Makepad + Robius + Splash
+    -&gt; AI-native cross-platform app runtime
+    -&gt; local interactive generated views
+    -&gt; room-native collaborative mini apps
+    -&gt; software factory for verified generated apps
+</code></pre>
+<h2 id="2-from-graphics-layer-to-ai-native-app-runtime"><a class="header" href="#2-from-graphics-layer-to-ai-native-app-runtime">2. From Graphics Layer to AI-native App Runtime</a></h2>
+<p>The discussion starts by revisiting an earlier positioning of Makepad as a graphics layer that could replace Skia. That framing is too low-level for the current opportunity.</p>
+<p>The stronger positioning is:</p>
+<pre><code class="language-text">Makepad as a cross-platform native app runtime for AI-generated applications.
+</code></pre>
+<p>The reasons are practical:</p>
+<ul>
+<li>OpenHarmony, Android, desktop, Web, and small-screen devices all need cross-platform UI.</li>
+<li>Developers do not want to rebuild the same app separately for every platform.</li>
+<li>Flutter, React Native, and KMP prove the demand for cross-platform development.</li>
+<li>Makepad/Robius can wrap platform APIs while keeping GPU-rendered UI.</li>
+<li>Splash can provide an AI-friendly dynamic app language.</li>
+</ul>
+<p>The discussion distinguishes Makepad from existing cross-platform frameworks:</p>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>Character</th><th>Makepad Capability</th></tr></thead><tbody>
+<tr><td>Flutter-like</td><td>self-contained UI runtime, cross-platform rendering</td><td>Makepad widgets + GPU renderer</td></tr>
+<tr><td>React Native-like</td><td>native component wrapping</td><td>Robius / platform API wrappers</td></tr>
+<tr><td>AI-native</td><td>model-generated UI/logic, Host runtime execution</td><td>Splash + Host API + harness</td></tr>
+</tbody></table>
+</div>
+<p>The goal is not only to replace existing frameworks. The goal is to capture a new pattern where AI directly emits app views, templates, deltas, or component configuration that a Host can validate and run.</p>
+<h2 id="3-splash-ai-target-language-not-a-rust-replacement"><a class="header" href="#3-splash-ai-target-language-not-a-rust-replacement">3. Splash: AI Target Language, Not a Rust Replacement</a></h2>
+<p>The group repeatedly notes that for baked apps, Rust is still preferred for much of the logic. Rust is faster, safer, and more maintainable for long-lived application code.</p>
+<p>Splash is valuable in a different use case:</p>
+<pre><code class="language-text">AI-generated streaming app / inline app / room mini app
+</code></pre>
+<p>Its advantages are:</p>
+<ul>
+<li>shorter than a full Rust app;</li>
+<li>closer to Makepad runtime than HTML/CSS/JS;</li>
+<li>streamable, parseable, and incrementally renderable;</li>
+<li>embeddable inside chat or room contexts;</li>
+<li>able to receive controlled Host APIs;</li>
+<li>capable of expressing UI and lightweight logic.</li>
+</ul>
+<p>One important conclusion is that Splash should be treated as the "lowest-token executable app representation". It does not need to be the most powerful language; it needs to let a model express a runnable app fragment with fewer tokens and a smaller error surface.</p>
+<h2 id="4-ui-generation-and-working-app-generation-are-different-problems"><a class="header" href="#4-ui-generation-and-working-app-generation-are-different-problems">4. UI Generation and Working App Generation Are Different Problems</a></h2>
+<p>The discussion separates two stages:</p>
+<pre><code class="language-text">UI generation:
+    the model generates a visible interface.
+
+Functional app generation:
+    the model generates an app that correctly handles events, state, and computation.
+</code></pre>
+<p>aichat UI generation is already fairly strong. With prompts, examples, and guards, models can generate cards, dashboards, calculators, todo UIs, heart-rate cards, and similar visual structures.</p>
+<p>Functional app generation is harder:</p>
+<ul>
+<li>A calculator can render but mishandle operators or equals.</li>
+<li>A todo UI can render but fail add/delete/toggle.</li>
+<li>An input field can lose focus if every keypress rebuilds the <code>runsplash</code> source.</li>
+<li>The model can call Host APIs that do not exist.</li>
+<li>The model can emit shader/vector code the Splash VM cannot parse.</li>
+</ul>
+<p>Therefore, Agent2App quality cannot be measured only by render success. The required loop is:</p>
+<pre><code class="language-text">click -&gt; action -&gt; state mutation -&gt; template refresh -&gt; UI remains usable
+</code></pre>
+<h2 id="5-harness-a-model-facing-constraint-system"><a class="header" href="#5-harness-a-model-facing-constraint-system">5. Harness: A Model-facing Constraint System</a></h2>
+<p>Harness is a key concept in the discussions. It is not a single prompt. It is the constraint package that puts a model in the best condition to generate a working app.</p>
+<p>A harness can include:</p>
+<ul>
+<li>Splash grammar summaries;</li>
+<li>available widget examples;</li>
+<li>Host API manifests;</li>
+<li>component skills;</li>
+<li>AppType schema;</li>
+<li>state/data paths;</li>
+<li>restrictions such as "do not write shader callbacks";</li>
+<li>runtime error feedback;</li>
+<li>test failure reports.</li>
+</ul>
+<p>Harnesses must vary by model:</p>
+<ul>
+<li>frontier models can generate more original structure;</li>
+<li>mid-tier models should compose templates and components;</li>
+<li>small or on-device models should fill config, select components, and emit small deltas.</li>
+</ul>
+<p>The discussion reaches this judgment:</p>
+<pre><code class="language-text">The same harness will not naturally work for every model.
+Every target model needs evaluation, compression, strengthening, or regeneration of the harness.
+</code></pre>
+<p>This leads to per-model harness eval:</p>
+<pre class="mermaid">flowchart TB
+    Model[Target model] --&gt; Suite[App generation suite]
+    Suite --&gt; Gen[Generate apps]
+    Gen --&gt; Run[Run in Host]
+    Run --&gt; Test[Interaction tests]
+    Test --&gt; Score[Score failures]
+    Score --&gt; Tune[Mutate harness/context]
+    Tune --&gt; Gen
+</pre>
+<h2 id="6-component-skills-do-not-regenerate-everything"><a class="header" href="#6-component-skills-do-not-regenerate-everything">6. Component Skills: Do Not Regenerate Everything</a></h2>
+<p>The discussion repeatedly mentions skills, component memory, and component libraries. The point is that common app types are finite, so the model should not regenerate full UI and logic from scratch every time.</p>
+<p>Candidate component skills:</p>
+<ul>
+<li>Todo / collection</li>
+<li>Calculator</li>
+<li>Timer</li>
+<li>Calendar / agenda</li>
+<li>Weather card</li>
+<li>Poll</li>
+<li>Trip planner</li>
+<li>Barcamp scheduler</li>
+<li>Mission Room</li>
+<li>Dashboard / -1 screen card</li>
+</ul>
+<p>Each component skill can include:</p>
+<ul>
+<li>Splash template;</li>
+<li>parameter schema;</li>
+<li>Host API requirements;</li>
+<li>state/data binding examples;</li>
+<li>allowed actions;</li>
+<li>tests;</li>
+<li>prompt examples.</li>
+</ul>
+<p>Generation becomes selection and configuration:</p>
+<pre><code class="language-text">"make a trip planner"
+    -&gt; load trip_planner skill
+    -&gt; generate data schema + view config
+    -&gt; bind app.collection / calendar APIs
+    -&gt; run tests
+</code></pre>
+<p>This is more reliable than generating a full widget tree and is more suitable for smaller models.</p>
+<h2 id="7-from-agentnotify-to-splash-host-api"><a class="header" href="#7-from-agentnotify-to-splash-host-api">7. From agent.notify to Splash Host API</a></h2>
+<p><code>agent.notify</code> caused confusion in the discussion. The name sounds like the agent is notifying AI, or notifying the Host that content is ready to render. The actual mechanism is:</p>
+<pre><code class="language-text">generated Splash view
+    -&gt; emits user intent
+    -&gt; Host validates action and payload
+    -&gt; Host mutates data/state or calls AI
+</code></pre>
+<p><code>agent.notify</code> is therefore a low-level live wire, not an ideal public API.</p>
+<p>Recommended evolution:</p>
+<pre><code class="language-splash">app.action("inc", {})
+app.input.set("new_item", text)
+app.collection.add_from_input("items", "new_item")
+ai.talk("explain this result")
+</code></pre>
+<p>Compatible implementation:</p>
+<pre><code class="language-text">app.collection.add_from_input("items", "new_item")
+    -&gt; app.action("app.collection.add_from_input", {...})
+    -&gt; internal SplashAction::Notify
+    -&gt; Host action dispatcher
+</code></pre>
+<p>The important change is not the function name itself. The important change is moving from free-form event strings to a structured Host API surface. Then the capability manifest can declare API families instead of arbitrary event strings.</p>
+<h2 id="8-state-ownership-generated-widgets-must-not-own-business-state"><a class="header" href="#8-state-ownership-generated-widgets-must-not-own-business-state">8. State Ownership: Generated Widgets Must Not Own Business State</a></h2>
+<p>The discussion notes that PortalList or timelines may recycle widgets that scroll out of view. If business state lives in the generated widget instance, it will be lost when the view is recycled or regenerated.</p>
+<p>The correct boundary is:</p>
+<pre><code class="language-text">Host / Matrix room:
+    owns data and shared truth
+
+HostState:
+    owns local draft and local view state
+
+Splash template:
+    owns the current rendering expression
+
+Widget instance:
+    owns only transient rendering resources
+</code></pre>
+<p>In aichat, input draft state should live in HostState. Todo collections should live in Host data. Mission Room shared data should live in Matrix events/state. Splash projects state; it does not own it.</p>
+<h2 id="9-robrixmatrix-from-chat-message-to-room-app"><a class="header" href="#9-robrixmatrix-from-chat-message-to-room-app">9. Robrix/Matrix: From Chat Message to Room App</a></h2>
+<p>The second major topic is whether a personal AI-generated app can be shared into a Matrix room so other people can see and collaborate on it.</p>
+<p>Matrix already provides:</p>
+<ul>
+<li>room event log;</li>
+<li>room state;</li>
+<li>persistence;</li>
+<li>synchronization;</li>
+<li>membership / identity;</li>
+<li>real-time collaboration.</li>
+</ul>
+<p>That makes Robrix/Matrix the natural remote Agent2App scenario.</p>
+<p>Matrix already has a widget concept, but it is usually a webview/iframe app. It can access room state, but it is heavy, expensive for clients to support, and rarely used in the ecosystem.</p>
+<p>Robrix + Splash can provide a lighter native room app:</p>
+<pre><code class="language-text">Agent sends app envelope
+Robrix validates it
+Robrix injects room data projection into Splash VM
+Splash renders inline room app
+User action goes through Host API
+Producer writes Matrix update
+All clients refresh view
+</code></pre>
+<p>Sequence:</p>
+<pre class="mermaid">sequenceDiagram
+    participant Agent
+    participant Room as Matrix Room
+    participant Robrix as Robrix Host
+    participant VM as Splash VM
+    participant User
+    participant Producer
+
+    Agent-&gt;&gt;Room: org.octos.app + Splash template
+    Robrix-&gt;&gt;Room: read event/state
+    Robrix-&gt;&gt;Robrix: validate AppType, scope, permissions
+    Robrix-&gt;&gt;VM: inject scoped room data + Host API
+    VM-&gt;&gt;User: render inline app
+    User-&gt;&gt;VM: click/type/drag
+    VM-&gt;&gt;Robrix: app.action(...)
+    Robrix-&gt;&gt;Producer: submit shared action
+    Producer-&gt;&gt;Room: new snapshot/action event
+    Robrix-&gt;&gt;VM: refresh projected state
+</pre>
+<h2 id="10-shared-data-personalized-views"><a class="header" href="#10-shared-data-personalized-views">10. Shared Data, Personalized Views</a></h2>
+<p>One important product point is that the same shared data can be rendered differently for different users.</p>
+<p>Example: family trip planner.</p>
+<pre><code class="language-text">shared data:
+    itinerary
+    participants
+    tasks
+    decisions
+
+User A view:
+    calendar layout
+
+User B view:
+    compact checklist
+
+User C view:
+    map-first layout
+</code></pre>
+<p>This is stronger than a conventional Matrix widget. The Agent can generate personalized views while the room keeps one shared truth.</p>
+<h2 id="11-room-artifact-splash-script-as-room-content"><a class="header" href="#11-room-artifact-splash-script-as-room-content">11. Room Artifact: Splash Script as Room Content</a></h2>
+<p>The later discussion confirms a concrete landing point: Splash script can be part of Matrix room content, not an external app package.</p>
+<p>Example:</p>
+<pre><code class="language-json">{
+  "org.octos.app": {
+    "type": "room_poll",
+    "scope": "room",
+    "app_id": "poll.dinner",
+    "data": {},
+    "template": {
+      "format": "splash",
+      "code": "RoundedView{ ... }"
+    },
+    "capabilities": ["app.action", "app.collection"]
+  }
+}
+</code></pre>
+<p>This frames it as rich interactive room content rather than arbitrary installed software.</p>
+<h2 id="12-software-factory-from-demo-to-production-line"><a class="header" href="#12-software-factory-from-demo-to-production-line">12. Software Factory: From Demo to Production Line</a></h2>
+<p>The later discussion introduces the software factory direction. The goal is to make app generation repeatable, evaluable, and self-correcting.</p>
+<p>Core loop:</p>
+<pre class="mermaid">flowchart LR
+    Spec[App spec] --&gt; Skill[component skills]
+    Skill --&gt; Harness[model harness]
+    Harness --&gt; Gen[generate app]
+    Gen --&gt; Run[run in Host]
+    Run --&gt; UI[Test UI interactions]
+    UI --&gt; Assert[assert state/actions]
+    Assert --&gt;|pass| Accept[accept app/harness]
+    Assert --&gt;|fail| Feedback[feed errors back]
+    Feedback --&gt; Harness
+</pre>
+<p>The tests must include interaction, not only static checks:</p>
+<ul>
+<li>Does click emit the right action?</li>
+<li>Does TextInput keep focus?</li>
+<li>Does payload match schema?</li>
+<li>Does state update correctly?</li>
+<li>Does view refresh preserve draft state?</li>
+<li>Does generated code trigger VM errors?</li>
+</ul>
+<p>This is the correct route for stabilizing calculator, todo, timer, and similar demos.</p>
+<h2 id="13-one-shot-and-iterative-generation"><a class="header" href="#13-one-shot-and-iterative-generation">13. One-shot and Iterative Generation</a></h2>
+<p>Rick notes that AI can generate working Makepad apps when it gets a feedback loop. One-shot remains harder. The goal is not to reject iteration; the goal is to move most iteration offline.</p>
+<p>Recommended shape:</p>
+<pre><code class="language-text">offline:
+    use automated tests to optimize harness
+
+online:
+    user request should succeed as often as possible in one shot
+</code></pre>
+<p>The model may iterate many times during harness development, but the user-facing path should feel immediate.</p>
+<h2 id="14-splash-streaming-eval-and-vm-hardening"><a class="header" href="#14-splash-streaming-eval-and-vm-hardening">14. Splash Streaming Eval and VM Hardening</a></h2>
+<p>Current streaming eval is simple: keep feeding tokens into the VM, ignore errors, and retry until it works. That is enough for early demos, but it needs hardening.</p>
+<p>Required improvements:</p>
+<ul>
+<li>evaluate only when scope/block is complete;</li>
+<li>incomplete code must not poison VM state;</li>
+<li>infinite loops must be interruptible;</li>
+<li>unrecoverable errors must be isolated;</li>
+<li>errors must be structured and returned to the harness;</li>
+<li>repeated eval should reduce flicker and focus loss.</li>
+</ul>
+<p>This is central to AI streaming app UX.</p>
+<h2 id="15-native-components-and-platform-limits"><a class="header" href="#15-native-components-and-platform-limits">15. Native Components and Platform Limits</a></h2>
+<p>The discussion also touches native components. Makepad/Robius can wrap platform components, but platform automation and compositing differ.</p>
+<p>Apple platforms are especially constrained:</p>
+<ul>
+<li>native component contents often cannot be read by the application;</li>
+<li>custom shader glass cannot freely read Safari or banking views;</li>
+<li>transparent overlays are possible;</li>
+<li>readback-based blur/refraction usually requires system compositor support or screen capture permission.</li>
+</ul>
+<p>Profiles should distinguish:</p>
+<div class="table-wrapper"><table><thead><tr><th>Type</th><th>Strength</th><th>Limitation</th></tr></thead><tbody>
+<tr><td>Makepad-native widget</td><td>unified rendering, unified testing, shader/vector/glass effects</td><td>component capabilities must be implemented in Makepad</td></tr>
+<tr><td>Platform-native component</td><td>reuse system capability, React Native-like</td><td>lifecycle, testing, compositing, permissions are per-platform</td></tr>
+</tbody></table>
+</div>
+<h2 id="16-svg-vector-and-shader"><a class="header" href="#16-svg-vector-and-shader">16. SVG, Vector, and Shader</a></h2>
+<p>The group discusses SVG, but the conclusion is not to depend on SVG. A Makepad-native vector/shader DSL is more appropriate.</p>
+<p>Principles:</p>
+<ul>
+<li>small icons, arrows, and micro animations fit shaders;</li>
+<li>large complex graphics should not abuse shaders;</li>
+<li>complex logos or illustrations fit vector/raster pipelines better;</li>
+<li>Splash can define an expression simpler than SVG and friendlier to streaming parsing.</li>
+</ul>
+<p>Template encoding can therefore be Makepad-native; it does not need to follow Web/SVG.</p>
+<h2 id="17-webwasmwebgpu-as-distribution-path"><a class="header" href="#17-webwasmwebgpu-as-distribution-path">17. Web/WASM/WebGPU as Distribution Path</a></h2>
+<p>Makepad Web, WASM, and WebGPU appear in the discussion as a practical distribution route.</p>
+<p>The value is not only technical. It reduces demo friction:</p>
+<pre><code class="language-text">protocol book
+    + web AI chat demo
+    + inline generated Splash app
+    -&gt; easier evangelism
+</code></pre>
+<p>If iOS App Store policy limits the native dynamic runtime, Web/WASM remains an important fallback.</p>
+<h2 id="18-distribution-and-app-store-risk"><a class="header" href="#18-distribution-and-app-store-risk">18. Distribution and App Store Risk</a></h2>
+<p>The later discussion focuses on Apple policy. The risk is not interpretation itself. The risk is:</p>
+<pre><code class="language-text">download/generate/execute new code after review
+change app functionality
+bypass App Review
+become an App Store replacement
+</code></pre>
+<p>High-risk framing:</p>
+<pre><code class="language-text">generate any app
+AI app store
+run arbitrary downloaded apps
+build full apps from prompts
+</code></pre>
+<p>Lower-risk framing:</p>
+<pre><code class="language-text">AI chat with rich interactive content
+room-native collaborative widgets
+configurable mini apps
+predeclared calendar/poll/dashboard capabilities
+</code></pre>
+<p>This is why the <code>agent2view</code> / <code>agent2project</code> distinction matters. aichat and Robrix should emphasize <code>agent2view</code>, not arbitrary full app generation.</p>
+<h2 id="19-product-framing-platform-not-a-single-killer-app"><a class="header" href="#19-product-framing-platform-not-a-single-killer-app">19. Product Framing: Platform, Not a Single Killer App</a></h2>
+<p>One important sentence in the discussion is that the goal is not a single killer app, but a platform.</p>
+<p>Possible product story:</p>
+<pre><code class="language-text">AI chat becomes a workspace.
+Workspace can generate interactive mini apps.
+Mini apps can be shared.
+Shared apps collaborate on room data.
+Users collect and personalize app views.
+</code></pre>
+<p>Better demos than a calculator include:</p>
+<ul>
+<li>family trip planner;</li>
+<li>room poll plus;</li>
+<li>barcamp scheduler;</li>
+<li>mission room dashboard;</li>
+<li>personal -1 screen dashboard;</li>
+<li>smart home card.</li>
+</ul>
+<p>These require shared state, collaboration, persistence, or personalized views, and therefore show Agent2App's actual value.</p>
+<h2 id="20-second-device--1-screen-and-personal-app-collection"><a class="header" href="#20-second-device--1-screen-and-personal-app-collection">20. Second Device, -1 Screen, and Personal App Collection</a></h2>
+<p>The source discussions also contain an important product line: Agent2App does not only happen inside a chat window. It can also happen on a second device, a personal dashboard, a <code>-1 screen</code>, or a small embedded display.</p>
+<p>The <code>-1 screen</code> idea is similar to the personal information feed to the left of a phone home screen: schedule, weather, reminders, health, device status, travel plans, and other content are pushed by context instead of being opened manually as separate apps. The discussion also compared this with Huawei Atom Services, Android-style micro apps, and widget-like experiences on Apple and other systems.</p>
+<p>This gives Agent2App a different surface from a chat message:</p>
+<pre><code class="language-text">chat inline app:
+    the user asks inside a conversation, and the Agent returns an interactive view.
+
+personal -1 screen:
+    the Host organizes views automatically from user activity, room state, calendar, and device state.
+
+second-device app:
+    a small device continuously displays the most relevant generated view or control panel.
+</code></pre>
+<p>The product surface can therefore be split into three layers:</p>
+<div class="table-wrapper"><table><thead><tr><th>Surface</th><th>Trigger</th><th>Typical Content</th><th>State Source</th></tr></thead><tbody>
+<tr><td>Chat inline</td><td>User request or Agent reply</td><td>calculator, todo, poll, trip card</td><td>message scope / local HostState</td></tr>
+<tr><td>Room app</td><td>Room event or collaborative task</td><td>mission room, barcamp scheduler, shared planner</td><td>Matrix room state/event</td></tr>
+<tr><td>Personal dashboard</td><td>Context-driven</td><td>-1 screen, health summary, home device card</td><td>account scope / device connectors</td></tr>
+</tbody></table>
+</div>
+<p>This also explains why the discussions repeatedly emphasize platform instead of a single killer app. If users can keep, customize, and share Agent-generated views, they can form a personal app collection:</p>
+<pre><code class="language-text">Agent generates view
+    -&gt; user edits or personalizes it
+    -&gt; Host stores template + data binding
+    -&gt; user shares it to a room or device
+    -&gt; other users fork their own view while sharing data
+</code></pre>
+<p>The protocol should distinguish:</p>
+<ul>
+<li>shared data: facts shared by multiple people, such as trip plans, tasks, polls, and room state;</li>
+<li>personal view: a user's own layout, filter, language, and visualization;</li>
+<li>device projection: different renderings of the same AppInstance on phone, desktop, small screen, or Web.</li>
+</ul>
+<h2 id="21-workspace-crdt-and-multi-process-collaboration"><a class="header" href="#21-workspace-crdt-and-multi-process-collaboration">21. Workspace, CRDT, and Multi-process Collaboration</a></h2>
+<p>The discussion also introduced a "chat app as workspace" idea. A complex app is not always a one-prompt interaction; it may need a workspace:</p>
+<ul>
+<li>chat thread: the collaboration record between user and Agent;</li>
+<li>markdown spec: continuously updated requirements, design, and constraints;</li>
+<li>generated code/template: the currently runnable artifact;</li>
+<li>shared memory: structured state readable and writable by both Agent and running app;</li>
+<li>open documents: documents, running apps, and stored values visible to the Agent.</li>
+</ul>
+<p>The difference from a VS Code/browser harness is that the Agent2App Host is not merely a chat box. It is a workspace runtime. It can launch apps, read open documents, list stored values, inject context into apps, and feed runtime results back to the Agent.</p>
+<p>The source discussion also mentioned CRDT/shared documents. This does not have to be part of the Agent2App kernel, but it is a good synchronization layer for multi-process and multi-device scenarios:</p>
+<pre class="mermaid">flowchart LR
+    Chat[Chat Thread] --&gt; Spec[Markdown Spec]
+    Spec --&gt; Agent[Agent]
+    Agent --&gt; App[Generated App]
+    App --&gt; Memory[Shared Memory / CRDT]
+    Memory --&gt; Agent
+    Memory --&gt; Device[Second Device]
+    Memory --&gt; Room[Matrix Room]
+</pre>
+<p>This explains two future extensions:</p>
+<ul>
+<li>the same workspace can drive a desktop app, mobile preview, and second-device display;</li>
+<li>a complex app can evolve inside a spec workspace before becoming a shareable Agent2App artifact.</li>
+</ul>
+<p>For this little book, this should remain roadmap material rather than core kernel material. Future <code>agent2project</code> or complex <code>agent2view</code> flows will need workspace artifacts, spec documents, shared-memory bindings, and artifact lifecycle rules.</p>
+<h3 id="agent2app-studio-and-host-should-be-separate"><a class="header" href="#agent2app-studio-and-host-should-be-separate">Agent2App Studio and Host Should Be Separate</a></h3>
+<p>The appended discussion clarified a product boundary: the mini app generation harness should not be directly embedded into Robrix. Robrix can consume, run, share, and collaborate on generated apps, but it does not need to own the full generator, tester, and spec workspace.</p>
+<p>A better split is:</p>
+<pre><code class="language-text">Agent2App Studio:
+    chat with Agent
+    edit spec / PRD / markdown workspace
+    generate Splash template or app artifact
+    run tests and produce receipt
+    package/share the result
+
+Agent2App Host:
+    import artifact
+    validate manifest and capabilities
+    inject state/data
+    render view
+    dispatch actions
+</code></pre>
+<p>Robrix is a Host and a room/collaboration surface; aichat is a local demo Host; future Hosts may include Web Hosts, Android Hosts, WeChat-like Hosts, or dedicated runners. Separating the creator from the Host has several benefits:</p>
+<ul>
+<li>Robrix does not become overloaded by the full app factory.</li>
+<li>A standalone Studio can focus on harnesses, tests, specs, and trust receipts.</li>
+<li>The same artifact can be opened or shared by multiple Hosts.</li>
+<li>The protocol can become a standard instead of a private Robrix feature.</li>
+</ul>
+<p>The clearer product relation is:</p>
+<pre><code class="language-text">Studio creates.
+Host runs.
+Room shares.
+Protocol connects them.
+</code></pre>
+<h2 id="22-device-connectors-local-ai-and-privacy-boundaries"><a class="header" href="#22-device-connectors-local-ai-and-privacy-boundaries">22. Device Connectors, Local AI, and Privacy Boundaries</a></h2>
+<p>A large part of the discussion concerns personal AI, encrypted rooms, local models, and smart home devices. The core question is: if data lives in encrypted rooms, local devices, a home network, or private user services, a remote Agent may not be allowed to read it.</p>
+<p>Agent2App should therefore distinguish three Agent types:</p>
+<div class="table-wrapper"><table><thead><tr><th>Agent Type</th><th>Location</th><th>Data It Can Reasonably Access</th><th>Risk</th></tr></thead><tbody>
+<tr><td>Remote Agent</td><td>Cloud model service</td><td>Explicit user prompt, redacted context, public APIs</td><td>Strong privacy boundary; cannot directly read encrypted rooms</td></tr>
+<tr><td>Local Agent</td><td>User device</td><td>Local files, encrypted room cache, personal calendar summaries</td><td>Weaker compute, platform limits</td></tr>
+<tr><td>Home/Edge Agent</td><td>Home server, Home Assistant, Raspberry Pi-like device</td><td>Smart home, sensors, LAN devices</td><td>Device heterogeneity, many protocols, complex permissions</td></tr>
+</tbody></table>
+</div>
+<p>This matters for Robrix/Molly-like scenarios. If a user wants a morning summary of what happened across encrypted rooms, the natural implementation is a local model reading the user's local room cache on a trusted device or home server, not sending plaintext to a remote service.</p>
+<p>Smart home is another typical case. The discussion mentions washing machines, dishwashers, power meters, e-ink displays, Home Assistant, and open-protocol devices. Agent2App's value is not to replace every device app, but to combine device protocols, data connectors, and dynamic views:</p>
+<pre><code class="language-text">device connector:
+    read status / submit command
+
+Agent:
+    understand user intent
+    generate or select view
+
+Host:
+    enforce permission
+    execute action
+    render device dashboard
+</code></pre>
+<p>A reasonable abstraction is:</p>
+<pre><code class="language-text">Data Source:
+    Matrix room, calendar, health data, home device, file, MCP connector
+
+Action Sink:
+    room event, calendar update, Home Assistant call, device command
+
+View:
+    Splash template / A2UI compatible plan / native component projection
+</code></pre>
+<p>Small devices should be treated separately. Makepad fits desktop, mobile, Web/WASM, and devices with a GPU or stronger CPU. It is not directly a UI runtime for microcontrollers. For controllers with only a few hundred KB of RAM, a more realistic path is:</p>
+<pre><code class="language-text">microcontroller:
+    specialized firmware / thin client / screen driver
+
+phone or home server:
+    Agent + Host runtime + state owner
+
+small screen:
+    receives projected view or simple command UI
+</code></pre>
+<p>This does not weaken Makepad's role. It places Makepad at the layer it fits best: cross-platform native UI, interactive views, device dashboards, Web/WASM demos, and richer second-device experiences.</p>
+<h3 id="rooted-android--linux-box-phone-as-research-device"><a class="header" href="#rooted-android--linux-box-phone-as-research-device">Rooted Android / Linux-box Phone as Research Device</a></h3>
+<p>The appended discussion also mentions a freer experimentation shape: using a rooted or unlocked Android phone as a Linux-box-like research device. This is not the default product shape for normal users; it is a way to explore next-generation Agent UI, system APIs, background execution, microphone usage, device control, and second-device experiences.</p>
+<p>This research device profile is useful because it can:</p>
+<ul>
+<li>bypass some normal mobile app sandbox limits for rapid system-level experiments;</li>
+<li>run local Agents, voice listeners, or device control flows for longer periods;</li>
+<li>access more system APIs and explore "Agent UI as operating environment";</li>
+<li>serve as a high-freedom experiment surface before Web, desktop, or standard Android products.</li>
+</ul>
+<p>It should not be mixed into the core protocol. The protocol should describe artifacts, capabilities, state/actions, and Host validation; rooted Android is only an implementation profile:</p>
+<pre><code class="language-text">Standard Host:
+    follows mobile platform rules
+    uses declared capabilities
+    suitable for product distribution
+
+Research Device Host:
+    has elevated device access
+    useful for UI/system experiments
+    not a baseline requirement
+</code></pre>
+<h2 id="23-trust-delivery-spec-test-receipt-and-hash"><a class="header" href="#23-trust-delivery-spec-test-receipt-and-hash">23. Trust Delivery: Spec, Test Receipt, and Hash</a></h2>
+<p>The source discussion contains another important point: how does a user trust an Agent-generated app?</p>
+<p>A complex app should not only present a nice UI. It should also provide a delivery receipt, similar to a consumer product warranty card or a software supply-chain build/test receipt:</p>
+<pre><code class="language-text">This is what the app is supposed to do.
+This is what input was given to the Agent.
+This is what artifact was generated.
+This is what tests passed.
+This is what permissions it needs.
+This is what changed since the last version.
+</code></pre>
+<p>For <code>agent2view</code>, this receipt can be lightweight:</p>
+<pre><code class="language-json">{
+  "app_id": "trip.family",
+  "template_hash": "sha256:...",
+  "data_schema_hash": "sha256:...",
+  "input_summary": "family trip planner with shared tasks",
+  "model": "frontier-model-x",
+  "capabilities": ["app.action", "app.collection", "room.write"],
+  "tests": [
+    {"name": "add_task", "status": "pass"},
+    {"name": "toggle_task", "status": "pass"}
+  ]
+}
+</code></pre>
+<p>For <code>agent2project</code>, the receipt should be heavier and may include PRD, spec, source hash, dependencies, test recording, generation logs, human review notes, and release targets.</p>
+<p>This connects to the workspace direction: complex apps should have a readable markdown spec that is updated as the Agent builds. Users or reviewers should not have to trust a black-box output. They can inspect:</p>
+<ul>
+<li>original requirement;</li>
+<li>Agent decomposition;</li>
+<li>generated template/code;</li>
+<li>permission declaration;</li>
+<li>test results;</li>
+<li>change history.</li>
+</ul>
+<p>This is also valuable for explaining Agent2App externally: not "AI generated a black-box app", but "AI generated an interactive artifact with spec, permissions, tests, and traceable hashes".</p>
+<h3 id="splash-app-artifact-share-and-open-like-a-file"><a class="header" href="#splash-app-artifact-share-and-open-like-a-file">Splash App Artifact: Share and Open Like a File</a></h3>
+<p>The most important new concept in the appended discussion is that a Splash app should not only live inside a chat message or markdown code block. It should become a savable, draggable, shareable artifact that multiple Hosts can implement.</p>
+<p>The discussion uses an image-file analogy:</p>
+<pre><code class="language-text">drag image into browser
+    -&gt; browser displays image
+
+drag Splash app into Robrix
+    -&gt; Robrix validates and renders app
+</code></pre>
+<p>This implies an Agent2App artifact envelope. It may be a <code>.splashapp</code> file, Matrix event content, share-sheet payload, URL payload, zip/package, or Host internal stored object, but the core fields should remain consistent:</p>
+<pre><code class="language-json">{
+  "agent2app_artifact": {
+    "version": "0.1",
+    "kind": "agent2view",
+    "app_id": "trip.family",
+    "title": "Family Trip Planner",
+    "template": {
+      "format": "splash",
+      "hash": "sha256:...",
+      "code": "RoundedView{ ... }"
+    },
+    "data_schema": {
+      "hash": "sha256:...",
+      "schema": {}
+    },
+    "capabilities": [
+      "app.action",
+      "app.collection",
+      "room.write"
+    ],
+    "initial_data": {},
+    "receipt": {
+      "input_hash": "sha256:...",
+      "tests": [
+        {"name": "render", "status": "pass"},
+        {"name": "add_task", "status": "pass"}
+      ]
+    }
+  }
+}
+</code></pre>
+<p>The artifact should support several entry points:</p>
+<ul>
+<li>Drag-and-drop: into Robrix, aichat, Agent2App Studio, or another Host.</li>
+<li>Share sheet: from Studio to room, chat, device, or file.</li>
+<li>Matrix event: persisted as room content.</li>
+<li>Local file: saved, versioned, copied, reviewed.</li>
+<li>URL/deep link: Web demo or mobile preview.</li>
+</ul>
+<p>The key point is that Robrix is only one Host implementation, not the protocol itself. If a WeChat-like client, Web client, desktop runner, or another Makepad app implements the same artifact contract, it should be able to open the same Agent2App artifact.</p>
+<p>This also reinforces the boundary between <code>agent2view</code> and <code>agent2project</code>:</p>
+<pre><code class="language-text">agent2view artifact:
+    template + data schema + capabilities + receipt
+    imported by an existing Host
+    Host owns permission and execution boundary
+
+agent2project artifact:
+    file tree + package metadata + resources + build/run/export targets
+    becomes an independent software project
+    needs a heavier lifecycle and review process
+</code></pre>
+<h2 id="24-self-evolution-distilling-runtime-and-components-from-logs"><a class="header" href="#24-self-evolution-distilling-runtime-and-components-from-logs">24. Self-evolution: Distilling Runtime and Components from Logs</a></h2>
+<p>The current appendix already describes harness eval, but the source discussion goes further into self-evolution or "dreaming": the Host does not merely run an app once; it can improve the system from interaction history, errors, and performance data in the background.</p>
+<p>The system can distill:</p>
+<ul>
+<li>which generated views users keep, delete, or modify;</li>
+<li>which Host APIs are often called together and should become a higher-level API;</li>
+<li>which Splash function hot paths should move into native Rust components;</li>
+<li>which component skill examples cause more VM/runtime errors;</li>
+<li>which models fail more often on a given AppType and need a stronger harness;</li>
+<li>which UIs render visually but fail interaction tests.</li>
+</ul>
+<p>The loop is:</p>
+<pre class="mermaid">flowchart TB
+    Logs[Interaction / Runtime Logs] --&gt; Analyze[Offline Analysis]
+    Analyze --&gt; Skill[Improve Component Skill]
+    Analyze --&gt; API[Refine Host API]
+    Analyze --&gt; Native[Move Hot Path to Rust]
+    Analyze --&gt; Harness[Retune Model Harness]
+    Harness --&gt; Gen[Next Generation]
+    Skill --&gt; Gen
+    API --&gt; Gen
+    Native --&gt; Gen
+</pre>
+<p>There are two feedback types:</p>
+<ul>
+<li>online repair: when a user request fails, the Agent retries from the error;</li>
+<li>offline evolution: at night, during charging, or in CI, the system analyzes many logs and improves harnesses, skills, Host APIs, and runtime.</li>
+</ul>
+<p>The source discussion also notes that "looking only at code is blind"; screenshot or vision-based evaluation may be needed. The software factory should therefore test more than structure and actions:</p>
+<ul>
+<li>whether visuals actually render;</li>
+<li>whether important content is inside the viewport;</li>
+<li>whether generated visuals such as waveforms, charts, and icons match intent;</li>
+<li>whether shader/vector errors degrade the visual output.</li>
+</ul>
+<p>This directly addresses aichat demo failures: UI code was generated, but a drawing did not appear; or the view rendered, but click, input, focus, and state refresh were unstable.</p>
+<h2 id="25-more-granular-app-store-boundary"><a class="header" href="#25-more-granular-app-store-boundary">25. More Granular App Store Boundary</a></h2>
+<p>The current appendix already covers Apple policy risk, but the discussion makes the boundary more granular. The issue is not only whether interpreted code is allowed; it is about primary purpose, dynamic functionality changes, review bypass, and whether the product looks like an App Store replacement.</p>
+<p>The operational split is:</p>
+<div class="table-wrapper"><table><thead><tr><th>Shape</th><th>Risk Judgment</th><th>Reason</th></tr></thead><tbody>
+<tr><td>Rich interactive content inside a chat app</td><td>Lower</td><td>Primary purpose remains chat/collaboration</td></tr>
+<tr><td>Matrix room app / poll / calendar picker</td><td>Low to medium</td><td>Similar to rich content inside messages; capabilities should be predeclared</td></tr>
+<tr><td>Predeclared configurable mini app</td><td>Lower</td><td>Host declares capability; Agent configures data/view</td></tr>
+<tr><td>Arbitrary prompt to full running app</td><td>High</td><td>Easy to read as bypassing App Review</td></tr>
+<tr><td>AI app store / generated project runner</td><td>High</td><td>Close to replacing the App Store</td></tr>
+<tr><td>Web/WASM demo</td><td>Lower</td><td>Browser/Web is already a dynamic-content environment</td></tr>
+<tr><td>Standalone runner app</td><td>Uncertain</td><td>Depends on platform review, distribution shape, and primary purpose</td></tr>
+</tbody></table>
+</div>
+<p>For iOS, product language should avoid:</p>
+<pre><code class="language-text">Make any app.
+Run arbitrary downloaded apps.
+AI App Store.
+</code></pre>
+<p>Safer language is:</p>
+<pre><code class="language-text">Rich interactive chat content.
+Room-native collaborative widgets.
+Configurable mini apps inside a declared Host.
+Personal dashboard views over user-approved data.
+</code></pre>
+<p>Android, Web/WASM, desktop, and TestFlight can carry more aggressive experiments. iOS App Store builds should emphasize chat/collaboration primary purpose, predeclared capabilities, user-authorized data sources, and configurable views.</p>
+<p>This reinforces the <code>agent2view</code> / <code>agent2project</code> split: <code>agent2view</code> can be interactive content inside a Host; <code>agent2project</code> involves a full project, binary, publishing, and review, and therefore needs a separate protocol and product story.</p>
+<p>Native clients should also follow this split. A full Agent2App Studio/native client can create, test, and manage artifacts; Robrix or an iOS chat Host should import, validate, and run artifacts only within declared capabilities. This helps preserve primary purpose:</p>
+<pre><code class="language-text">Agent2App Studio:
+    primary purpose = create and verify app artifacts
+
+Robrix:
+    primary purpose = chat / room collaboration
+    Agent2App = rich interactive room content
+
+Runner / Preview:
+    primary purpose = preview declared app artifacts
+    distribution risk depends on platform policy
+</code></pre>
+<h2 id="26-promotion-route-problem-statement-demo-and-community"><a class="header" href="#26-promotion-route-problem-statement-demo-and-community">26. Promotion Route: Problem Statement, Demo, and Community</a></h2>
+<p>The discussions repeatedly note that Agent2App is a problem many people have not fully seen yet. Industry attention is still mostly on coding agents, text chat, and tool calling, rather than "Agents directly generate, run, test, and share app views".</p>
+<p>Promotion therefore needs three things together:</p>
+<pre><code class="language-text">problem statement:
+    Why are text-only Agents insufficient?
+    Why do AI-generated apps need Host/runtime/protocol?
+
+spec:
+    Agent2App core kernel
+    bindings and scenarios
+    safety and validation
+
+demo:
+    aichat local inline app
+    Robrix room app
+    Web/WASM public demo
+</code></pre>
+<p>Potential showcase directions include OpenHarmony, Matrix, European markets, second devices, and smart home. Rather than writing oral meeting dates as a plan, the product strategy can be:</p>
+<ul>
+<li>use Web/WASM demo to reduce trial friction;</li>
+<li>use Matrix/Robrix demo to show shared apps and persistence;</li>
+<li>use <code>-1 screen</code> / smart home card to show personal dashboard;</li>
+<li>use component skills and test receipts to show trustworthy generation;</li>
+<li>use A2UI compatibility to show ecosystem alignment instead of isolated invention.</li>
+</ul>
+<p>Community strategy can start with enthusiast communities: Home Assistant, Matrix, open-source Android ROMs, Makepad/Rust developers, and AI coding power users. These users are more likely to value local control, open protocols, privacy, dynamic UI, and verifiable generation.</p>
+<p>The appended discussion also sharpens the standardization story: do not say "Robrix has a feature"; say "Robrix implements the Agent2App artifact/protocol". If WeChat-like Hosts, Web clients, native chat clients, or room app Hosts can implement the protocol, the external value becomes clearer.</p>
+<p>A useful framing is:</p>
+<pre><code class="language-text">Agent2App is a portable artifact and host protocol.
+Robrix is one implementation.
+aichat is one local development host.
+Agent2App Studio is one creation environment.
+Other hosts can implement the same import/render/action contract.
+</code></pre>
+<p>This matches the A2UI compatibility direction: the protocol should define kernel, artifact, capability, and binding, rather than be tied to one product name.</p>
+<h2 id="27-recommended-route"><a class="header" href="#27-recommended-route">27. Recommended Route</a></h2>
+<p>The combined route can be split into these phases:</p>
+<pre><code class="language-text">Phase 0: Local AppGen
+    aichat reliably generates inline runsplash.
+
+Phase 1: Host API
+    app.* API replaces public agent.notify.
+
+Phase 2: Verification Harness
+    calculator/todo/timer/poll/calendar enter automated tests.
+
+Phase 3: Component Skills
+    common mini apps become componentized.
+
+Phase 4: Robrix Room App
+    Matrix events carry app envelope + Splash template.
+
+Phase 5: Shared Collaboration
+    actions write back to Matrix, all members sync data, each member owns a view.
+
+Phase 6: Distribution Strategy
+    Web/Android show dynamic runtime aggressively; iOS uses rich chat content + predeclared capabilities.
+
+Phase 7: Workspace and Trust Receipts
+    spec workspace, test receipt, hash, and permission card enter artifact lifecycle.
+
+Phase 8: Device and Local AI Scenarios
+    second device, -1 screen, Home Assistant, and encrypted-room local summaries enter profile exploration.
+
+Phase 9: Self-evolution
+    logs, tests, and visual evaluation continuously improve harnesses, skills, Host APIs, and native components.
+
+Phase 10: Portable Artifact
+    define .splashapp / Agent2App artifact manifest with drag-and-drop, share sheet, Matrix event, and local file support.
+
+Phase 11: Multi-Host Standardization
+    Robrix, aichat, Web Host, native runner, and WeChat-like Host share the import/render/action contract.
+</code></pre>
+<h2 id="28-items-to-add-to-protocol-or-implementation"><a class="header" href="#28-items-to-add-to-protocol-or-implementation">28. Items to Add to Protocol or Implementation</a></h2>
+<p>Protocol:</p>
+<ul>
+<li>Define Agent2App artifact envelope / <code>.splashapp</code> manifest.</li>
+<li>State that Robrix is a Host implementation, not the protocol itself.</li>
+<li>Add import/render/action contract for other Hosts.</li>
+<li>Add artifact transport through drag-and-drop, share sheet, deep link, and Matrix event.</li>
+<li>Matrix Splash app binding.</li>
+<li>Template as a room artifact.</li>
+<li>Host API capability families.</li>
+<li>Generated views do not own shared state.</li>
+<li>App Store risk belongs mainly to <code>agent2project</code>, not every <code>agent2view</code>.</li>
+<li>Extension points for workspace artifact, test receipt, and template/data hash.</li>
+<li>Data Source / Action Sink / View connector model.</li>
+</ul>
+<p>Implementation:</p>
+<ul>
+<li><code>app.action</code> / <code>app.input</code> / <code>app.collection</code> / <code>ai.talk</code>.</li>
+<li>VM resource limits.</li>
+<li>Streaming eval scope detection.</li>
+<li>Structured runtime errors.</li>
+<li>Remote/headless widget interaction tests.</li>
+<li>Screenshot/vision-based visual evaluation.</li>
+<li>Per-model harness eval suite.</li>
+<li>Component skill registry.</li>
+<li>Self-evolution log pipeline.</li>
+<li>Local Agent profile for encrypted room data.</li>
+<li>Standalone Agent2App Studio prototype.</li>
+<li>Artifact import/export in Robrix and aichat.</li>
+<li>Multi-client Host API profiles: native, web, text/TUI, messaging, room Host.</li>
+<li>Research device Host profile for rooted/unlocked Android.</li>
+</ul>
+<p>Documentation and promotion:</p>
+<ul>
+<li>Agent2App problem statement.</li>
+<li>Makepad/Splash vs A2UI vs Matrix widget comparison.</li>
+<li>Web/WASM demo.</li>
+<li>Trip planner / room poll / mission room as the main demo, not calculator.</li>
+<li><code>-1 screen</code>, second-device, and smart home dashboard demo story.</li>
+<li>iOS/Android/Web/desktop distribution boundary.</li>
+<li>Product responsibility split between Agent2App Studio, Host, Room, and Runner.</li>
+<li>Promotion language that says "Robrix implements the protocol", not "the protocol equals Robrix".</li>
+</ul>
+<h2 id="29-final-judgment"><a class="header" href="#29-final-judgment">29. Final Judgment</a></h2>
+<p>The discussions converge on a clear position:</p>
+<pre><code class="language-text">Agent2App is not "let AI generate arbitrary apps and bypass platform review".
+
+Agent2App is the ability for Agents to generate, update, and personalize
+interactive views inside Host-owned data/state/action/permission boundaries.
+</code></pre>
+<p>Splash is Makepad's key tool for this direction. It needs Host APIs, component skills, harness eval, VM hardening, trust receipts, portable artifacts, workspace artifacts, local Agent profiles, multi-Host import/render/action contracts, and Robrix/Matrix binding to move from demo to platform capability.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="appendix-json.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="appendix-json.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="mermaid.min.js"></script>
+        <script src="mermaid-init.js"></script>
+
+
+    </div>
+    </body>
+</html>
