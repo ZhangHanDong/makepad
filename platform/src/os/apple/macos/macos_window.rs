@@ -310,6 +310,27 @@ impl MacosWindow {
         )
     }
 
+    pub(crate) fn native_glass_geometry_snapshot_enabled_from_value(value: Option<&str>) -> bool {
+        matches!(value, Some("1" | "true"))
+    }
+
+    pub(crate) fn native_glass_geometry_snapshot_enabled() -> bool {
+        Self::native_glass_geometry_snapshot_enabled_from_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    pub(crate) fn native_glass_window_geometry_changed(
+        old_geom: &WindowGeom,
+        new_geom: &WindowGeom,
+    ) -> bool {
+        old_geom.position != new_geom.position
+            || old_geom.inner_size != new_geom.inner_size
+            || (old_geom.dpi_factor - new_geom.dpi_factor).abs() > 0.001
+    }
+
     fn above_metal_probe_frame(bounds: NSRect) -> NSRect {
         let inset_x = 76.0f64.min(bounds.size.width * 0.18);
         let inset_y = 64.0f64.min(bounds.size.height * 0.18);
@@ -2081,6 +2102,50 @@ mod tests {
         assert!(line.contains("appkit=(20.0,240.0,100.0,40.0)"));
         assert!(line.contains("z_order=7"));
         assert!(line.contains("visible=true"));
+    }
+
+    #[test]
+    fn native_glass_geometry_snapshot_env_accepts_truthy_values() {
+        assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("1")));
+        assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("true")));
+        assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
+        assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn native_glass_window_geometry_changed_detects_position_size_and_dpi() {
+        let base = WindowGeom {
+            dpi_factor: 2.0,
+            position: Vec2d { x: 10.0, y: 20.0 },
+            inner_size: Vec2d { x: 900.0, y: 700.0 },
+            ..WindowGeom::default()
+        };
+        let mut moved = base.clone();
+        moved.position.x += 10.0;
+        let mut resized = base.clone();
+        resized.inner_size.y += 24.0;
+        let mut dpi_changed = base.clone();
+        dpi_changed.dpi_factor = 1.0;
+        let mut dpi_jitter = base.clone();
+        dpi_jitter.dpi_factor = 2.0005;
+
+        assert!(!MacosWindow::native_glass_window_geometry_changed(
+            &base, &base
+        ));
+        assert!(MacosWindow::native_glass_window_geometry_changed(
+            &base, &moved
+        ));
+        assert!(MacosWindow::native_glass_window_geometry_changed(
+            &base, &resized
+        ));
+        assert!(MacosWindow::native_glass_window_geometry_changed(
+            &base,
+            &dpi_changed
+        ));
+        assert!(!MacosWindow::native_glass_window_geometry_changed(
+            &base,
+            &dpi_jitter
+        ));
     }
 
     #[test]

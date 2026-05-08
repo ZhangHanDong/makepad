@@ -645,6 +645,17 @@ impl Cx {
                             &re.old_geom,
                             &re.new_geom,
                         );
+                    } else if MacosWindow::native_glass_geometry_snapshot_enabled()
+                        && MacosWindow::native_glass_window_geometry_changed(
+                            &re.old_geom,
+                            &re.new_geom,
+                        )
+                    {
+                        window.cocoa_window.log_native_glass_frame_snapshot(
+                            "geometry-change",
+                            &re.old_geom,
+                            &re.new_geom,
+                        );
                     }
                     window.window_geom = re.new_geom.clone();
                     self.windows[re.window_id].window_geom = re.new_geom.clone();
