@@ -62,6 +62,8 @@ visual work on the ShaderBackdrop or hybrid route.
 
 ## Current Evidence
 
-The latest Step 96 screenshot comparison showed the candidate changes the full
-900x700 framebuffer and produces an opaque final image. This proves lower scene
-composition. It does not prove native Liquid Glass sampling quality.
+The latest Step 96 Studio screenshot for `lower-scene-pass` shows the lower
+scene gradient/grid framebuffer. This proves lower scene pass rendering and
+routing. It does not prove final user-visible native composition or native
+Liquid Glass sampling quality, because Studio screenshots do not capture the
+full native overlay stack.

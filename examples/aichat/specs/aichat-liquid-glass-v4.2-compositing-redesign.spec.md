@@ -142,12 +142,13 @@ Step 96 evidence:
   records a dedicated aichat pass with `DrawPassSurfaceRole::LowerScene`.
 - Studio release logs include `native-lower-scene-pass=draw` and
   `native-interleave-layer-probe lower-scene-role=draw`.
-- Screenshot comparison against plain `macos-native-clear` changed the full
-  900x700 framebuffer, with `lower-scene-pass` producing an opaque final image.
+- Studio screenshot output for `lower-scene-pass` captures the lower scene
+  gradient/grid framebuffer.
 
-This proves the lower scene pass reaches final macOS composition. It does not
-yet prove recognizable native Liquid Glass refraction or blur over that lower
-scene.
+This proves the lower scene pass is being rendered and routed to the lower
+scene surface. It does not yet prove the final user-visible AppKit composition
+or recognizable native Liquid Glass refraction/blur over that lower scene,
+because Studio screenshots do not capture the full native overlay stack.
 
 ### D. Native-Hosted Glass Islands
 
@@ -254,9 +255,10 @@ Makepad-rendered `ShaderBackdropInterior`, while the current native targets are
 described as `AppleNativeUnderlay` diagnostics/proofs.
 
 Step 96 reopens the native interleave route as a prototype candidate by proving
-a Makepad-owned lower scene pass can reach final composition. The route remains
-unaccepted for production until visual validation confirms that native glass
-visibly samples that lower scene with recognizable Liquid Glass treatment.
+a Makepad-owned lower scene pass can be rendered and routed to the lower scene
+surface. The route remains unaccepted for production until visual validation
+confirms that native glass visibly samples that lower scene with recognizable
+Liquid Glass treatment.
 
 ## Non-Goals
 
