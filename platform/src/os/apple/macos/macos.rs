@@ -78,6 +78,25 @@ fn requested_above_metal_glass_probe_style_from_env() -> Option<MacosNativeGlass
     }
 }
 
+fn new_macos_ca_metal_layer(metal_cx: &MetalCx, delegate: ObjcId) -> ObjcId {
+    let ca_layer: ObjcId = unsafe { msg_send![class!(CAMetalLayer), new] };
+    unsafe {
+        let () = msg_send![ca_layer, setDevice: metal_cx.device];
+        let () = msg_send![ca_layer, setPixelFormat: MTLPixelFormat::BGRA8Unorm];
+        let () = msg_send![ca_layer, setPresentsWithTransaction: NO];
+        let () = msg_send![ca_layer, setMaximumDrawableCount: 3];
+        let () = msg_send![ca_layer, setDisplaySyncEnabled: YES];
+        let () = msg_send![ca_layer, setNeedsDisplayOnBoundsChange: YES];
+        let () = msg_send![ca_layer, setAutoresizingMask: (1 << 4) | (1 << 1)];
+        let () = msg_send![ca_layer, setAllowsNextDrawableTimeout: NO];
+        let () = msg_send![ca_layer, setDelegate: delegate];
+        let () = msg_send![ca_layer, setOpaque: NO];
+        let () =
+            msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)];
+    }
+    ca_layer
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MacosMetalSurfaceRole {
     // Current single-surface behavior. Future AppleNativeInterleave work can
@@ -106,24 +125,11 @@ impl MetalWindow {
         is_fullscreen: bool,
         macos_config: MacosWindowConfig,
     ) -> MetalWindow {
-        let ca_layer: ObjcId = unsafe { msg_send![class!(CAMetalLayer), new] };
-
         let mut cocoa_window = Box::new(MacosWindow::new(window_id, macos_config));
 
         cocoa_window.init(title, inner_size, position, is_fullscreen, macos_config);
+        let ca_layer = new_macos_ca_metal_layer(metal_cx, cocoa_window.view);
         unsafe {
-            let () = msg_send![ca_layer, setDevice: metal_cx.device];
-            let () = msg_send![ca_layer, setPixelFormat: MTLPixelFormat::BGRA8Unorm];
-            let () = msg_send![ca_layer, setPresentsWithTransaction: NO];
-            let () = msg_send![ca_layer, setMaximumDrawableCount: 3];
-            let () = msg_send![ca_layer, setDisplaySyncEnabled: YES];
-            let () = msg_send![ca_layer, setNeedsDisplayOnBoundsChange: YES];
-            let () = msg_send![ca_layer, setAutoresizingMask: (1 << 4) | (1 << 1)];
-            let () = msg_send![ca_layer, setAllowsNextDrawableTimeout: NO];
-            let () = msg_send![ca_layer, setDelegate: cocoa_window.view];
-            let () = msg_send![ca_layer, setOpaque: NO];
-            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)];
-
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
             let () = msg_send![view, setWantsLayer: YES];
@@ -149,24 +155,11 @@ impl MetalWindow {
         position: Vec2d,
         parent_window: ObjcId,
     ) -> MetalWindow {
-        let ca_layer: ObjcId = unsafe { msg_send![class!(CAMetalLayer), new] };
-
         let mut cocoa_window = Box::new(MacosWindow::new_popup(window_id));
 
         cocoa_window.init_popup(size, position, parent_window);
+        let ca_layer = new_macos_ca_metal_layer(metal_cx, cocoa_window.view);
         unsafe {
-            let () = msg_send![ca_layer, setDevice: metal_cx.device];
-            let () = msg_send![ca_layer, setPixelFormat: MTLPixelFormat::BGRA8Unorm];
-            let () = msg_send![ca_layer, setPresentsWithTransaction: NO];
-            let () = msg_send![ca_layer, setMaximumDrawableCount: 3];
-            let () = msg_send![ca_layer, setDisplaySyncEnabled: YES];
-            let () = msg_send![ca_layer, setNeedsDisplayOnBoundsChange: YES];
-            let () = msg_send![ca_layer, setAutoresizingMask: (1 << 4) | (1 << 1)];
-            let () = msg_send![ca_layer, setAllowsNextDrawableTimeout: NO];
-            let () = msg_send![ca_layer, setDelegate: cocoa_window.view];
-            let () = msg_send![ca_layer, setOpaque: NO];
-            let () = msg_send![ca_layer, setBackgroundColor: CGColorCreateGenericRGB(0.0, 0.0, 0.0, 0.0)];
-
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
             let () = msg_send![view, setWantsLayer: YES];
