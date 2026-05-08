@@ -21,6 +21,7 @@ Source: `widgets/src/glass_panel.rs`.
 | `GlassIconButton` | `GlassButton` | Compact square icon/action button. |
 | `GlassPrimaryButton` | `GlassButton` | Prominent commit/send button. |
 | `GlassNavButton` | `GlassButton` | Sidebar navigation row button. |
+| `GlassUtilityButton` | `GlassButton` | Low-emphasis copy/delete/cancel button. |
 | `GlassComposer` | `GlassPanel` | Input composer surface; may opt into native descriptors. |
 | `GlassSidebar` | `GlassPanel` | Persistent navigation surface; may opt into native descriptors. |
 | `GlassCard` | `RoundedView` | Message/readability surface; no per-message native panels. |
@@ -36,6 +37,7 @@ Source: `examples/aichat/src/main.rs`.
 | `IconButton` | `GlassIconButton` | Used by `attach_button`, `mention_button`, and `tools_button`. |
 | `SendButton` | `GlassPrimaryButton` | Keeps the local circular send-button shader. |
 | sidebar nav rows | `GlassNavButton` | Covers sidebar navigation and settings controls. |
+| utility actions | `GlassUtilityButton` | Covers cancel, copy, and delete controls. |
 | `User` / `Assistant` templates | `GlassCard` | Preserves rounded readability card behavior. |
 | `sidebar` | `GlassSidebar` | Keeps native descriptor settings; one of the four native panels. |
 | `composer` | `GlassComposer` | Keeps native descriptor settings; one of the four native panels. |
@@ -43,16 +45,13 @@ Source: `examples/aichat/src/main.rs`.
 
 ## Remaining ButtonFlat Exceptions
 
-These remain app-local `ButtonFlat` users:
-
-- `cancel_button`
-- message `copy_button`
-- message `delete_button`
+No remaining app-local `ButtonFlat` exceptions are known in the hand-authored
+aichat UI surface.
 
 Recommended follow-up:
 
 - `GlassNavButton` is implemented for sidebar navigation rows.
-- Add a quieter `GlassUtilityButton` variant for copy/delete/cancel controls.
+- `GlassUtilityButton` is implemented for copy/delete/cancel controls.
 - Keep message utility buttons Makepad-rendered; do not make them native
   interactive controls in v4.1/v4.2.
 

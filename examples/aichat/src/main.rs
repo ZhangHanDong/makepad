@@ -484,16 +484,9 @@ script_mod! {
                     width: Fill
                     height: Fit
                     align: Align{x: 1.0}
-                    delete_button := ButtonFlat {
-                        width: Fit
-                        height: Fit
-                        padding: Inset{top: 2 bottom: 2 left: 6 right: 6}
+                    delete_button := GlassUtilityButton {
                         margin: Inset{top: 2 right: 2}
                         text: "x"
-                        draw_text +: {
-                            color: #888
-                            text_style +: { font_size: 9 }
-                        }
                     }
                 }
             }
@@ -619,27 +612,13 @@ script_mod! {
                     width: Fill
                     height: Fit
                     align: Align{x: 1.0}
-                    copy_button := ButtonFlat {
-                        width: Fit
-                        height: Fit
-                        padding: Inset{top: 2 bottom: 2 left: 6 right: 6}
+                    copy_button := GlassUtilityButton {
                         margin: Inset{top: 2 right: 2}
                         text: "copy"
-                        draw_text +: {
-                            color: #888
-                            text_style +: { font_size: 9 }
-                        }
                     }
-                    delete_button := ButtonFlat {
-                        width: Fit
-                        height: Fit
-                        padding: Inset{top: 2 bottom: 2 left: 6 right: 6}
+                    delete_button := GlassUtilityButton {
                         margin: Inset{top: 2 right: 2}
                         text: "x"
-                        draw_text +: {
-                            color: #888
-                            text_style +: { font_size: 9 }
-                        }
                     }
                 }
             }
@@ -1096,7 +1075,7 @@ script_mod! {
 
                                     View { width: Fill height: 1 }
 
-                                    cancel_button := ButtonFlat {
+                                    cancel_button := GlassUtilityButton {
                                         text: "Cancel"
                                         width: 72
                                         height: 32
