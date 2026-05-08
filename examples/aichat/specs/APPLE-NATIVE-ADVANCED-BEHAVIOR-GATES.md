@@ -31,7 +31,7 @@ The current production path remains:
 |---|---|---|---|
 | Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; static spacing is part of Phase C | Static descriptor field only | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
 | Scroll edge glass | Scroll widgets remain Makepad-rendered; no native scroll-edge descriptor exists | Not implemented | Define whether scroll edge glass is a semantic Makepad style, a native panel region, or a platform-specific control behavior. |
-| Fullscreen | `WindowGeom.is_fullscreen` exists; release notes list fullscreen as a limitation | Not supported as native glass guarantee | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
+| Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit | Explicit fullscreen fallback, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; no native glass display migration validation exists | Not implemented | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | No local runtime evidence beyond the known limitation list | Not implemented | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | aichat applies a Makepad-only inactive multiplier on focus changes | Partial Makepad styling only | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
@@ -51,6 +51,9 @@ The current production path remains:
 - Native panel frames continue to match Makepad panel geometry.
 - If fullscreen is disabled for a native backend, the disable path is explicit
   and logged instead of silently degrading.
+- The current Step 53 fallback logs `fullscreen-native-fallback=shader` on
+  enter and `fullscreen-native-restore=apple-native-underlay` on exit; this is
+  not full native fullscreen support.
 
 ### Multi-display
 

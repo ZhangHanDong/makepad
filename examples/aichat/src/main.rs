@@ -1309,6 +1309,13 @@ struct GlassConfigResolution {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct NativeFullscreenFallbackTransition {
+    appearance: GlassAppearance,
+    restore_appearance: Option<GlassAppearance>,
+    log: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct ShaderBackdropVisualProfile {
     scene_grid_strength: f32,
     refraction_strength: f32,
@@ -3950,6 +3957,8 @@ pub struct App {
     #[rust]
     glass_appearance: GlassAppearance,
     #[rust]
+    fullscreen_native_restore_appearance: Option<GlassAppearance>,
+    #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
     shader_backdrop_scene_texture: Option<Texture>,
@@ -4974,8 +4983,80 @@ impl App {
         self.ui.redraw(cx);
     }
 
+    fn native_fullscreen_fallback_transition(
+        appearance: GlassAppearance,
+        restore_appearance: Option<GlassAppearance>,
+        is_fullscreen: bool,
+    ) -> NativeFullscreenFallbackTransition {
+        if is_fullscreen {
+            if restore_appearance.is_none()
+                && matches!(appearance.substrate, GlassSubstrate::MacosNative { .. })
+            {
+                return NativeFullscreenFallbackTransition {
+                    appearance: GlassAppearance::default(),
+                    restore_appearance: Some(appearance),
+                    log: Some("fullscreen-native-fallback=shader reason=fullscreen-enter"),
+                };
+            }
+
+            return NativeFullscreenFallbackTransition {
+                appearance,
+                restore_appearance,
+                log: None,
+            };
+        }
+
+        if let Some(restored) = restore_appearance {
+            return NativeFullscreenFallbackTransition {
+                appearance: restored,
+                restore_appearance: None,
+                log: Some("fullscreen-native-restore=apple-native-underlay reason=fullscreen-exit"),
+            };
+        }
+
+        NativeFullscreenFallbackTransition {
+            appearance,
+            restore_appearance,
+            log: None,
+        }
+    }
+
+    fn handle_native_fullscreen_fallback(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
+        if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
+            return;
+        }
+
+        let transition = Self::native_fullscreen_fallback_transition(
+            self.glass_appearance,
+            self.fullscreen_native_restore_appearance,
+            event.new_geom.is_fullscreen,
+        );
+        if transition.appearance == self.glass_appearance
+            && transition.restore_appearance == self.fullscreen_native_restore_appearance
+        {
+            return;
+        }
+
+        self.glass_appearance = transition.appearance;
+        self.fullscreen_native_restore_appearance = transition.restore_appearance;
+        if let Some(log_line) = transition.log {
+            log!("[liquid-glass] {}", log_line);
+        }
+
+        let opacity = self
+            .ui
+            .slider(cx, ids!(opacity_slider))
+            .value()
+            .unwrap_or(DEFAULT_GLASS_OPACITY);
+        self.apply_glass_appearance(cx, self.glass_appearance, opacity);
+    }
+
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
+        AICHAT_NATIVE_GLASS_ACTIVE.store(
+            matches!(appearance.substrate, GlassSubstrate::MacosNative { .. }),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let mut glass = glass_opacity_values(opacity, appearance.panel_preset())
             .with_inactive_multiplier(self.glass_inactive_multiplier);
         let backdrop_proof = appearance.backdrop.map(|config| config.proof);
@@ -5508,6 +5589,7 @@ impl AppMain for App {
         app.shader_backdrop_blur_h_texture = None;
         app.shader_backdrop_blur_v_texture = None;
         app.shader_backdrop_render_size = vec2(0.0, 0.0);
+        app.fullscreen_native_restore_appearance = None;
         let glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
         let glass = resolve_startup_glass_appearance(glass_backend.as_deref());
         if let Some(warning) = glass.warning {
@@ -5531,6 +5613,7 @@ impl AppMain for App {
             self.handle_native_substrate_resolved(cx, event);
         }
         if let Event::WindowGeomChange(event) = event {
+            self.handle_native_fullscreen_fallback(cx, event);
             self.handle_shader_backdrop_window_geom_change(cx, event);
         }
 
@@ -5671,10 +5754,10 @@ mod tests {
         render_state_templates, render_state_templates_for_ui, resolve_glass_appearance,
         resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
         Agent, App, AppCapability, AppDemoState, BackendType, CalculatorDemoState,
-        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassBackendRequest,
-        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig,
-        ShaderBackdropProof, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -5873,6 +5956,58 @@ mod tests {
             resolved.warning,
             Some("AppleNativeInterleave requires renderer split; falling back to shader")
         );
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_fallback_suppresses_native() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        };
+
+        let transition = App::native_fullscreen_fallback_transition(native, None, true);
+
+        assert_eq!(transition.appearance, GlassAppearance::default());
+        assert_eq!(transition.restore_appearance, Some(native));
+        assert_eq!(
+            transition.log,
+            Some("fullscreen-native-fallback=shader reason=fullscreen-enter")
+        );
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_fallback_restores_native() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Regular,
+            },
+            backdrop: None,
+        };
+
+        let transition = App::native_fullscreen_fallback_transition(
+            GlassAppearance::default(),
+            Some(native),
+            false,
+        );
+
+        assert_eq!(transition.appearance, native);
+        assert_eq!(transition.restore_appearance, None);
+        assert_eq!(
+            transition.log,
+            Some("fullscreen-native-restore=apple-native-underlay reason=fullscreen-exit")
+        );
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_fallback_ignores_shader() {
+        let transition =
+            App::native_fullscreen_fallback_transition(GlassAppearance::default(), None, true);
+
+        assert_eq!(transition.appearance, GlassAppearance::default());
+        assert_eq!(transition.restore_appearance, None);
+        assert_eq!(transition.log, None);
     }
 
     #[test]
