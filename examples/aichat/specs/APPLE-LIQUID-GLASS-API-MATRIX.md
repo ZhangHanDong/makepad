@@ -68,6 +68,8 @@ iOS/iPadOS:
   creates a `UIGlassContainerEffect`, inserts a `UIVisualEffectView` container
   below `MTKView`, and adds passthrough panel `UIVisualEffectView`s backed by
   `UIGlassEffect`.
+- Step 73 extends selector preflight to the UIView/CALayer selectors used by
+  the installer before it attaches native glass views.
 
 Decision for Phase B:
 
@@ -134,6 +136,7 @@ Decision for Phase B:
 | iOS/iPadOS | `UIGlassContainerEffect` | initializer | yes | Step 71 calls `alloc/init` dynamically after class preflight. |
 | iOS/iPadOS | `UIGlassEffect` | `init(style:)` | yes | Step 71 calls `initWithStyle:` dynamically after selector preflight. |
 | iOS/iPadOS | `UIVisualEffectView` | `init(effect:)` | yes | Step 71 creates container and panel visual effect views dynamically. |
+| iOS/iPadOS | `UIView` / `UIVisualEffectView` / `CALayer` | frame, input, hierarchy, and corner selectors | yes | Step 73 preflights installer selectors including `setFrame:`, `setUserInteractionEnabled:`, `insertSubview:belowSubview:`, `addSubview:`, `layer`, `setMasksToBounds:`, and `setCornerRadius:`. |
 
 ## Color and Units
 

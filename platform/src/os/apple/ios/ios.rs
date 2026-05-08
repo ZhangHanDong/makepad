@@ -97,6 +97,8 @@ fn ios_native_glass_class_name_bytes(class_name: &'static str) -> &'static [u8] 
         "UIVisualEffectView" => b"UIVisualEffectView\0",
         "UIGlassContainerEffect" => b"UIGlassContainerEffect\0",
         "UIGlassEffect" => b"UIGlassEffect\0",
+        "UIView" => b"UIView\0",
+        "CALayer" => b"CALayer\0",
         _ => b"\0",
     }
 }
@@ -127,14 +129,21 @@ fn ios_native_glass_selector_preflight_result_from_missing_selector(
     }
 }
 
-fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 6] {
+fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 13] {
     [
         ("UIVisualEffectView", "initWithEffect:"),
         ("UIVisualEffectView", "contentView"),
+        ("UIVisualEffectView", "setFrame:"),
+        ("UIVisualEffectView", "setUserInteractionEnabled:"),
+        ("UIVisualEffectView", "addSubview:"),
+        ("UIVisualEffectView", "layer"),
         ("UIGlassEffect", "initWithStyle:"),
         ("UIGlassEffect", "setTintColor:"),
         ("UIGlassEffect", "setInteractive:"),
         ("UIGlassContainerEffect", "setSpacing:"),
+        ("UIView", "insertSubview:belowSubview:"),
+        ("CALayer", "setMasksToBounds:"),
+        ("CALayer", "setCornerRadius:"),
     ]
 }
 
@@ -157,6 +166,24 @@ fn ios_native_glass_selector_exists(class_name: &'static str, selector_name: &'s
                     msg_send![class, instancesRespondToSelector: sel!(contentView)];
                 responds == YES
             }
+            "setFrame:" => {
+                let responds: BOOL = msg_send![class, instancesRespondToSelector: sel!(setFrame:)];
+                responds == YES
+            }
+            "setUserInteractionEnabled:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setUserInteractionEnabled:)];
+                responds == YES
+            }
+            "addSubview:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(addSubview:)];
+                responds == YES
+            }
+            "layer" => {
+                let responds: BOOL = msg_send![class, instancesRespondToSelector: sel!(layer)];
+                responds == YES
+            }
             "initWithStyle:" => {
                 let responds: BOOL =
                     msg_send![class, instancesRespondToSelector: sel!(initWithStyle:)];
@@ -175,6 +202,21 @@ fn ios_native_glass_selector_exists(class_name: &'static str, selector_name: &'s
             "setSpacing:" => {
                 let responds: BOOL =
                     msg_send![class, instancesRespondToSelector: sel!(setSpacing:)];
+                responds == YES
+            }
+            "insertSubview:belowSubview:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(insertSubview:belowSubview:)];
+                responds == YES
+            }
+            "setMasksToBounds:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setMasksToBounds:)];
+                responds == YES
+            }
+            "setCornerRadius:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setCornerRadius:)];
                 responds == YES
             }
             _ => false,
@@ -1804,16 +1846,23 @@ mod tests {
     }
 
     #[test]
-    fn ios_native_glass_required_selector_checks_include_backend_selectors() {
+    fn ios_native_glass_required_selector_checks_include_installer_selectors() {
         assert_eq!(
             ios_native_glass_required_selector_checks(),
             [
                 ("UIVisualEffectView", "initWithEffect:"),
                 ("UIVisualEffectView", "contentView"),
+                ("UIVisualEffectView", "setFrame:"),
+                ("UIVisualEffectView", "setUserInteractionEnabled:"),
+                ("UIVisualEffectView", "addSubview:"),
+                ("UIVisualEffectView", "layer"),
                 ("UIGlassEffect", "initWithStyle:"),
                 ("UIGlassEffect", "setTintColor:"),
                 ("UIGlassEffect", "setInteractive:"),
                 ("UIGlassContainerEffect", "setSpacing:"),
+                ("UIView", "insertSubview:belowSubview:"),
+                ("CALayer", "setMasksToBounds:"),
+                ("CALayer", "setCornerRadius:"),
             ]
         );
     }
