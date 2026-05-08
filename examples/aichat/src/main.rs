@@ -1582,6 +1582,10 @@ fn initial_glass_opacity() -> f64 {
     }
 }
 
+fn native_display_backing_scale_changed(old_dpi: f64, new_dpi: f64) -> bool {
+    (old_dpi - new_dpi).abs() > 0.001
+}
+
 fn native_compositing_proof_transparent_overlay() -> bool {
     native_compositing_proof_transparent_overlay_from_value(
         std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF")
@@ -5051,6 +5055,37 @@ impl App {
         self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
 
+    fn handle_native_display_change_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
+        if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
+            return;
+        }
+        if !matches!(
+            self.glass_appearance.substrate,
+            GlassSubstrate::MacosNative { .. }
+        ) {
+            return;
+        }
+        if !native_display_backing_scale_changed(
+            event.old_geom.dpi_factor,
+            event.new_geom.dpi_factor,
+        ) {
+            return;
+        }
+
+        log!(
+            "[liquid-glass] native-display-change old_dpi={:.3} new_dpi={:.3} old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) size=({:.1},{:.1}) fullscreen={}",
+            event.old_geom.dpi_factor,
+            event.new_geom.dpi_factor,
+            event.old_geom.position.x,
+            event.old_geom.position.y,
+            event.new_geom.position.x,
+            event.new_geom.position.y,
+            event.new_geom.inner_size.x,
+            event.new_geom.inner_size.y,
+            event.new_geom.is_fullscreen
+        );
+    }
+
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         AICHAT_NATIVE_GLASS_ACTIVE.store(
@@ -5613,6 +5648,7 @@ impl AppMain for App {
             self.handle_native_substrate_resolved(cx, event);
         }
         if let Event::WindowGeomChange(event) = event {
+            self.handle_native_display_change_probe(cx, event);
             self.handle_native_fullscreen_fallback(cx, event);
             self.handle_shader_backdrop_window_geom_change(cx, event);
         }
@@ -5750,14 +5786,15 @@ mod tests {
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, glass_opacity_with_native_compositing_proof,
         guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
-        native_compositing_proof_transparent_overlay_from_value, parse_glass_backend,
-        render_state_templates, render_state_templates_for_ui, resolve_glass_appearance,
-        resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
-        Agent, App, AppCapability, AppDemoState, BackendType, CalculatorDemoState,
-        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
-        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        native_compositing_proof_transparent_overlay_from_value,
+        native_display_backing_scale_changed, parse_glass_backend, render_state_templates,
+        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
+        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
+        AppDemoState, BackendType, CalculatorDemoState, ClaudeCodeCliAgent,
+        GenericCollectionsState, GenericInputsState, GlassAppearance, GlassBackendRequest,
+        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig,
+        ShaderBackdropProof, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[test]
@@ -6008,6 +6045,18 @@ mod tests {
         assert_eq!(transition.appearance, GlassAppearance::default());
         assert_eq!(transition.restore_appearance, None);
         assert_eq!(transition.log, None);
+    }
+
+    #[test]
+    fn aichat_native_display_change_probe_detects_dpi_change() {
+        assert!(native_display_backing_scale_changed(1.0, 2.0));
+        assert!(native_display_backing_scale_changed(2.0, 1.0));
+    }
+
+    #[test]
+    fn aichat_native_display_change_probe_ignores_jitter() {
+        assert!(!native_display_backing_scale_changed(2.0, 2.0005));
+        assert!(!native_display_backing_scale_changed(1.0004, 1.0));
     }
 
     #[test]

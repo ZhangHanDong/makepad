@@ -32,7 +32,7 @@ The current production path remains:
 | Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; static spacing is part of Phase C | Static descriptor field only | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
 | Scroll edge glass | Scroll widgets remain Makepad-rendered; no native scroll-edge descriptor exists | Not implemented | Define whether scroll edge glass is a semantic Makepad style, a native panel region, or a platform-specific control behavior. |
 | Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit | Explicit fullscreen fallback, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
-| Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; no native glass display migration validation exists | Not implemented | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
+| Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active | Probe only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | No local runtime evidence beyond the known limitation list | Not implemented | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | aichat applies a Makepad-only inactive multiplier on focus changes | Partial Makepad styling only | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
 | Popup/modal native glass | Makepad has popup/modal widgets and popup windows; no native glass transient-window policy exists | Not implemented | Define separate-window z-order, focus, dismissal, hit-test, and native surface ownership before creating AppKit `NSPanel` or UIKit `UIWindow` glass. |
@@ -62,6 +62,9 @@ The current production path remains:
 - Native frames are computed from Makepad logical units after the backing-scale
   change.
 - The result is documented as supported or as an explicit fallback.
+- The current Step 54 probe records `native-display-change` for backing-scale
+  changes, but it does not by itself prove panel alignment or complete
+  multi-display support.
 
 ### Inactive window
 
