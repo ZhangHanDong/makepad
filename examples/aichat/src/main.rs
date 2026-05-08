@@ -779,15 +779,12 @@ script_mod! {
                             }
                         }
 
-                        nav_chat := ButtonFlat {
-                            width: Fill
+                        nav_chat := GlassNavButton {
                             height: 38
                             text: "●  会话"
-                            align: Align{x: 0.0 y: 0.5}
                             padding: Inset{left: 14 right: 12}
                             draw_text +: {
                                 color: ai_cream
-                                text_style +: { font_size: 12 }
                             }
                             draw_bg +: {
                                 color: #x0B6B67AA
@@ -798,15 +795,12 @@ script_mod! {
                             }
                         }
 
-                        nav_appgen := ButtonFlat {
-                            width: Fill
+                        nav_appgen := GlassNavButton {
                             height: 38
                             text: "◇  App 生成"
-                            align: Align{x: 0.0 y: 0.5}
                             padding: Inset{left: 14 right: 12}
                             draw_text +: {
                                 color: ai_cream_dim
-                                text_style +: { font_size: 12 }
                             }
                             draw_bg +: {
                                 color: #x00000000
@@ -817,76 +811,20 @@ script_mod! {
                             }
                         }
 
-                        nav_search := ButtonFlat {
-                            width: Fill
-                            height: 30
+                        nav_search := GlassNavButton {
                             text: "⌕  搜索"
-                            align: Align{x: 0.0 y: 0.5}
-                            padding: Inset{left: 4 right: 4}
-                            draw_text +: {
-                                color: #xE4D4B6
-                                text_style +: { font_size: 12 }
-                            }
-                            draw_bg +: {
-                                color: #00000000
-                                color_hover: #xEAD8B814
-                                border_size: 0.0
-                                border_radius: 8.0
-                            }
                         }
 
-                        nav_plugins := ButtonFlat {
-                            width: Fill
-                            height: 30
+                        nav_plugins := GlassNavButton {
                             text: "⌘  插件"
-                            align: Align{x: 0.0 y: 0.5}
-                            padding: Inset{left: 4 right: 4}
-                            draw_text +: {
-                                color: #xE4D4B6
-                                text_style +: { font_size: 12 }
-                            }
-                            draw_bg +: {
-                                color: #00000000
-                                color_hover: #xEAD8B814
-                                border_size: 0.0
-                                border_radius: 8.0
-                            }
                         }
 
-                        nav_automation := ButtonFlat {
-                            width: Fill
-                            height: 30
+                        nav_automation := GlassNavButton {
                             text: ">  自动化"
-                            align: Align{x: 0.0 y: 0.5}
-                            padding: Inset{left: 4 right: 4}
-                            draw_text +: {
-                                color: #xE4D4B6
-                                text_style +: { font_size: 12 }
-                            }
-                            draw_bg +: {
-                                color: #00000000
-                                color_hover: #xEAD8B814
-                                border_size: 0.0
-                                border_radius: 8.0
-                            }
                         }
 
-                        nav_project := ButtonFlat {
-                            width: Fill
-                            height: 30
+                        nav_project := GlassNavButton {
                             text: "#  项目"
-                            align: Align{x: 0.0 y: 0.5}
-                            padding: Inset{left: 4 right: 4}
-                            draw_text +: {
-                                color: #xE4D4B6
-                                text_style +: { font_size: 12 }
-                            }
-                            draw_bg +: {
-                                color: #00000000
-                                color_hover: #xEAD8B814
-                                border_size: 0.0
-                                border_radius: 8.0
-                            }
                         }
 
                         Label {
@@ -904,21 +842,11 @@ script_mod! {
 
                         View { width: Fill height: Fill }
 
-                        settings_button := ButtonFlat {
-                            width: Fill
+                        settings_button := GlassNavButton {
                             height: 32
                             text: "*  设置"
-                            align: Align{x: 0.0 y: 0.5}
-                            padding: Inset{left: 4 right: 4}
                             draw_text +: {
                                 color: #xF3E3C7
-                                text_style +: { font_size: 12 }
-                            }
-                            draw_bg +: {
-                                color: #00000000
-                                color_hover: #xEAD8B814
-                                border_size: 0.0
-                                border_radius: 8.0
                             }
                         }
                     }

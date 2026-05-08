@@ -392,6 +392,28 @@ script_mod! {
         }
     }
 
+    mod.widgets.GlassNavButton = mod.widgets.GlassButton{
+        width: Fill
+        height: 30
+        align: Align{x: 0.0 y: 0.5}
+        padding: Inset{left: 4 right: 4}
+        draw_text +: {
+            color: #xE4D4B6
+            color_hover: #xF3E3C7
+            text_style +: { font_size: 12 }
+        }
+        draw_bg +: {
+            color: #x00000000
+            color_hover: #xEAD8B814
+            color_down: #xEAD8B81E
+            color_focus: #xEAD8B814
+            border_color: #x00000000
+            border_color_hover: #xEAD8B82A
+            border_size: 0.0
+            border_radius: 8.0
+        }
+    }
+
     mod.widgets.GlassComposer = mod.widgets.GlassPanel{
         flow: Down
         padding: Inset{left: 18 top: 14 right: 14 bottom: 12}

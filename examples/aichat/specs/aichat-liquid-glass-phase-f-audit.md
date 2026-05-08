@@ -20,6 +20,7 @@ Source: `widgets/src/glass_panel.rs`.
 | `GlassButton` | `ButtonFlat` | Regular glass-aware button. |
 | `GlassIconButton` | `GlassButton` | Compact square icon/action button. |
 | `GlassPrimaryButton` | `GlassButton` | Prominent commit/send button. |
+| `GlassNavButton` | `GlassButton` | Sidebar navigation row button. |
 | `GlassComposer` | `GlassPanel` | Input composer surface; may opt into native descriptors. |
 | `GlassSidebar` | `GlassPanel` | Persistent navigation surface; may opt into native descriptors. |
 | `GlassCard` | `RoundedView` | Message/readability surface; no per-message native panels. |
@@ -34,29 +35,23 @@ Source: `examples/aichat/src/main.rs`.
 | `PillButton` | `GlassButton` | Used by composer pill actions such as `clear_button`. |
 | `IconButton` | `GlassIconButton` | Used by `attach_button`, `mention_button`, and `tools_button`. |
 | `SendButton` | `GlassPrimaryButton` | Keeps the local circular send-button shader. |
+| sidebar nav rows | `GlassNavButton` | Covers sidebar navigation and settings controls. |
 | `User` / `Assistant` templates | `GlassCard` | Preserves rounded readability card behavior. |
 | `sidebar` | `GlassSidebar` | Keeps native descriptor settings; one of the four native panels. |
 | `composer` | `GlassComposer` | Keeps native descriptor settings; one of the four native panels. |
 | sidebar/main divider | `GlassVSeparator` | Replaces the raw vertical `SolidView` divider. |
 
-## ButtonFlat Exceptions
+## Remaining ButtonFlat Exceptions
 
 These remain app-local `ButtonFlat` users:
 
-- `nav_chat`
-- `nav_appgen`
-- `nav_search`
-- `nav_plugins`
-- `nav_automation`
-- `nav_project`
-- `settings_button`
 - `cancel_button`
 - message `copy_button`
 - message `delete_button`
 
 Recommended follow-up:
 
-- Add a `GlassNavButton` variant for sidebar navigation rows.
+- `GlassNavButton` is implemented for sidebar navigation rows.
 - Add a quieter `GlassUtilityButton` variant for copy/delete/cancel controls.
 - Keep message utility buttons Makepad-rendered; do not make them native
   interactive controls in v4.1/v4.2.
