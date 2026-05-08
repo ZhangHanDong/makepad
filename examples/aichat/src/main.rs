@@ -1637,6 +1637,30 @@ fn native_inactive_probe_enabled() -> bool {
     )
 }
 
+fn native_fullscreen_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true"))
+}
+
+fn native_fullscreen_probe_enabled() -> bool {
+    native_fullscreen_probe_enabled_from_value(
+        std::env::var("AICHAT_NATIVE_FULLSCREEN_PROBE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_fullscreen_probe_should_start(
+    state: WindowNativeSubstrateState,
+    style: Option<WindowNativeSubstrateStyle>,
+    already_started: bool,
+) -> bool {
+    !already_started && state == WindowNativeSubstrateState::Installed && style.is_some()
+}
+
+fn native_fullscreen_probe_should_continue_wait(frame: u32) -> bool {
+    frame < 180
+}
+
 fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active: bool) -> f64 {
     if active {
         return 1.0;
@@ -4109,6 +4133,16 @@ pub struct App {
     #[rust]
     native_spacing_probe_next_frame: NextFrame,
     #[rust]
+    native_fullscreen_probe_started: bool,
+    #[rust]
+    native_fullscreen_probe_waiting_enter: bool,
+    #[rust]
+    native_fullscreen_probe_wait_frame: u32,
+    #[rust]
+    native_fullscreen_probe_exit_pending: bool,
+    #[rust]
+    native_fullscreen_probe_next_frame: NextFrame,
+    #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
     shader_backdrop_scene_texture: Option<Texture>,
@@ -5253,6 +5287,34 @@ impl App {
         self.apply_glass_appearance(cx, self.glass_appearance, opacity);
     }
 
+    fn start_native_fullscreen_probe(&mut self, cx: &mut Cx) {
+        self.native_fullscreen_probe_started = true;
+        self.native_fullscreen_probe_waiting_enter = true;
+        self.native_fullscreen_probe_wait_frame = 0;
+        log!("[liquid-glass] native-fullscreen-probe=request-enter");
+        self.ui.window(cx, ids!(main_window)).fullscreen(cx);
+        self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+    }
+
+    fn handle_native_fullscreen_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
+        if !native_fullscreen_probe_enabled() {
+            return;
+        }
+        if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
+            return;
+        }
+
+        if event.new_geom.is_fullscreen && !event.old_geom.is_fullscreen {
+            log!("[liquid-glass] native-fullscreen-probe=observed-enter");
+            self.native_fullscreen_probe_waiting_enter = false;
+            self.native_fullscreen_probe_exit_pending = true;
+            self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+        } else if !event.new_geom.is_fullscreen && event.old_geom.is_fullscreen {
+            log!("[liquid-glass] native-fullscreen-probe=observed-exit");
+            self.native_fullscreen_probe_exit_pending = false;
+        }
+    }
+
     fn handle_native_display_change_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
         if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
             return;
@@ -5594,6 +5656,15 @@ impl App {
                 log!("[liquid-glass] {}", line);
             }
         }
+        if native_fullscreen_probe_enabled()
+            && native_fullscreen_probe_should_start(
+                event.state,
+                event.style,
+                self.native_fullscreen_probe_started,
+            )
+        {
+            self.start_native_fullscreen_probe(cx);
+        }
 
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } => {
@@ -5841,23 +5912,40 @@ impl MatchEvent for App {
     }
 
     fn handle_next_frame(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
-        if !self.native_spacing_probe_active {
-            return;
-        }
-        if !event.set.contains(&self.native_spacing_probe_next_frame) {
-            return;
+        if self.native_spacing_probe_active
+            && event.set.contains(&self.native_spacing_probe_next_frame)
+        {
+            self.native_spacing_probe_frame = self.native_spacing_probe_frame.wrapping_add(1);
+            self.apply_native_spacing_probe(cx);
+            if native_spacing_probe_should_continue(self.native_spacing_probe_frame) {
+                self.native_spacing_probe_next_frame = cx.new_next_frame();
+            } else {
+                self.native_spacing_probe_active = false;
+                log!(
+                    "[liquid-glass] native-spacing-animation-probe=stop frame={}",
+                    self.native_spacing_probe_frame
+                );
+            }
         }
 
-        self.native_spacing_probe_frame = self.native_spacing_probe_frame.wrapping_add(1);
-        self.apply_native_spacing_probe(cx);
-        if native_spacing_probe_should_continue(self.native_spacing_probe_frame) {
-            self.native_spacing_probe_next_frame = cx.new_next_frame();
-        } else {
-            self.native_spacing_probe_active = false;
-            log!(
-                "[liquid-glass] native-spacing-animation-probe=stop frame={}",
-                self.native_spacing_probe_frame
-            );
+        if self.native_fullscreen_probe_exit_pending
+            && event.set.contains(&self.native_fullscreen_probe_next_frame)
+        {
+            self.native_fullscreen_probe_exit_pending = false;
+            log!("[liquid-glass] native-fullscreen-probe=request-exit");
+            self.ui.window(cx, ids!(main_window)).disable_fullscreen(cx);
+        } else if self.native_fullscreen_probe_waiting_enter
+            && event.set.contains(&self.native_fullscreen_probe_next_frame)
+        {
+            self.native_fullscreen_probe_wait_frame =
+                self.native_fullscreen_probe_wait_frame.wrapping_add(1);
+            if native_fullscreen_probe_should_continue_wait(self.native_fullscreen_probe_wait_frame)
+            {
+                self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+            } else {
+                self.native_fullscreen_probe_waiting_enter = false;
+                log!("[liquid-glass] native-fullscreen-probe=timeout phase=enter");
+            }
         }
     }
 
@@ -5915,6 +6003,7 @@ impl AppMain for App {
         if let Event::WindowGeomChange(event) = event {
             self.handle_native_display_change_probe(cx, event);
             self.handle_native_fullscreen_fallback(cx, event);
+            self.handle_native_fullscreen_probe(cx, event);
             self.handle_shader_backdrop_window_geom_change(cx, event);
         }
 
@@ -6044,7 +6133,7 @@ impl AppMain for App {
 
 #[cfg(test)]
 mod tests {
-    use makepad_widgets::DVec2;
+    use makepad_widgets::{DVec2, WindowNativeSubstrateState, WindowNativeSubstrateStyle};
 
     use super::{
         app_generation_prompt_with_state, app_generation_session_system_prompt,
@@ -6053,15 +6142,17 @@ mod tests {
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
-        native_display_backing_scale_changed, native_inactive_probe_enabled_from_value,
-        native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
-        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
-        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
-        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
-        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
-        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
-        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
-        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_display_backing_scale_changed, native_fullscreen_probe_enabled_from_value,
+        native_fullscreen_probe_should_continue_wait, native_fullscreen_probe_should_start,
+        native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
+        native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
+        native_spacing_probe_spacing_for_frame, parse_glass_backend, render_state_templates,
+        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
+        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
+        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6314,6 +6405,45 @@ mod tests {
         assert_eq!(transition.appearance, GlassAppearance::default());
         assert_eq!(transition.restore_appearance, None);
         assert_eq!(transition.log, None);
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_probe_env_accepts_truthy_values() {
+        assert!(native_fullscreen_probe_enabled_from_value(Some("1")));
+        assert!(native_fullscreen_probe_enabled_from_value(Some("true")));
+        assert!(!native_fullscreen_probe_enabled_from_value(None));
+        assert!(!native_fullscreen_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_probe_starts_only_for_installed_native() {
+        assert!(native_fullscreen_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            false,
+        ));
+        assert!(!native_fullscreen_probe_should_start(
+            WindowNativeSubstrateState::ClassMissing,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            false,
+        ));
+        assert!(!native_fullscreen_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            None,
+            false,
+        ));
+        assert!(!native_fullscreen_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassRegular),
+            true,
+        ));
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_probe_enter_wait_has_timeout() {
+        assert!(native_fullscreen_probe_should_continue_wait(0));
+        assert!(native_fullscreen_probe_should_continue_wait(179));
+        assert!(!native_fullscreen_probe_should_continue_wait(180));
     }
 
     #[test]
