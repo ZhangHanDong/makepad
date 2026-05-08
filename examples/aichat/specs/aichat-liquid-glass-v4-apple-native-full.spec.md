@@ -525,6 +525,10 @@ aichat needs these first:
 descriptors through normal `GlassPanel` properties, but nav controls remain
 Makepad-rendered in v4.1/v4.2.
 
+`GlassCard` is a semantic Makepad readability surface for messages and
+generated content. The current implementation preserves rounded-card rendering
+and does not create per-message native panels.
+
 `GlassComposer` is a semantic Makepad surface for text input and composer
 actions. It may opt into native descriptors through normal `GlassPanel`
 properties, but it does not replace Makepad text input with a native AppKit or

@@ -434,6 +434,14 @@ script_mod! {
             noise_strength: 0.004
         }
     }
+
+    mod.widgets.GlassCard = mod.widgets.RoundedView{
+        show_bg: true
+        draw_bg +: {
+            color: #x0B2A22E6
+            radius: 12.0
+        }
+    }
 }
 
 #[derive(Clone)]

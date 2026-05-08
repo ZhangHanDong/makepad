@@ -386,7 +386,7 @@ script_mod! {
             smooth_tail: true
             selectable: true
 
-            User := RoundedView {
+            User := GlassCard {
                 width: Fill
                 height: Fit
                 margin: Inset{top: 4 bottom: 4 left: 50 right: 8}
@@ -498,7 +498,7 @@ script_mod! {
                 }
             }
 
-            Assistant := RoundedView {
+            Assistant := GlassCard {
                 width: Fill
                 height: Fit
                 margin: Inset{top: 4 bottom: 4 left: 8 right: 50}
