@@ -80,3 +80,7 @@ The following are not enough to claim scroll edge glass support:
 `GlassScrollEdge` and `GlassScrollEdgeBottom` now exist as Makepad-rendered
 semantic widgets. They are not native panels and are not yet wired to aichat
 scroll-state wiring.
+
+Step 59 adds aichat wiring in the chat list overlay. The edges are hidden for
+empty state and visible for non-empty chat content. Scroll-state-driven edge
+strength based on exact scroll offset remains future work.

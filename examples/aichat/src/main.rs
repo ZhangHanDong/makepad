@@ -942,6 +942,20 @@ script_mod! {
                             }
 
                             chat_list := ChatList {}
+
+                            scroll_top_edge := GlassScrollEdge {
+                                visible: false
+                            }
+
+                            scroll_bottom_edge_host := View {
+                                width: Fill
+                                height: Fill
+                                visible: false
+                                flow: Down
+                                align: Align{y: 1.0}
+
+                                GlassScrollEdgeBottom {}
+                            }
                         }
 
                         composer_row := View {
@@ -4295,6 +4309,13 @@ impl App {
         self.ui
             .view(cx, ids!(empty_state))
             .set_visible(cx, show_empty_state);
+        let show_scroll_edges = !show_empty_state;
+        self.ui
+            .view(cx, ids!(scroll_top_edge))
+            .set_visible(cx, show_scroll_edges);
+        self.ui
+            .view(cx, ids!(scroll_bottom_edge_host))
+            .set_visible(cx, show_scroll_edges);
     }
 
     fn send_prompt_to_agent(
