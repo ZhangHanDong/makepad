@@ -29,6 +29,33 @@ insertion, resize alignment, and State 4 installation. It is not enough for full
 native interior Liquid Glass because Makepad foreground content is above the
 native glass view.
 
+## Current macOS Renderer Entrypoints
+
+The first `AppleNativeInterleave` prototype must change the renderer at the
+native surface boundary, not only in aichat widget code. The current inspected
+entrypoints are:
+
+| Area | Current entrypoint | Interleave implication |
+| --- | --- | --- |
+| Surface creation | `platform/src/os/apple/macos/macos.rs::MetalWindow::new` creates one `CAMetalLayer`, configures it, and assigns it to the view with `setLayer: ca_layer`. | A real interleave needs at least lower and upper Makepad-presented native surfaces instead of a single primary layer. |
+| Popup surface creation | `platform/src/os/apple/macos/macos.rs::MetalWindow::new_popup` repeats the same one-`CAMetalLayer` setup for popup windows. | Popup/modal native glass remains a separate phase; the first interleave prototype should stay on the main window path. |
+| Window repaint | `platform/src/os/apple/macos/macos.rs::Cx::handle_repaint` resizes `metal_window.ca_layer`, obtains `nextDrawable`, and renders the window pass with `DrawPassMode::Drawable` or `DrawPassMode::Resizing`. | The split prototype needs a way to decide which window pass draws to the lower surface and which draws to the upper surface. |
+| Offscreen passes | Child/standalone draw passes use `DrawPassMode::Texture`. | This remains useful for shader backdrop work, but it is not hosted as a native layer behind Apple glass and therefore does not prove native interleave. |
+| Render pass and screenshot | `platform/src/os/apple/metal.rs::Cx::draw_pass` binds either an `MTKView` render pass descriptor, a drawable texture, or offscreen textures. `build_screenshot_struct` currently copies from the presented window texture for `DrawPassMode::Drawable` / `MTKView`. | Studio screenshot behavior must be explicitly defined once there are lower and upper presented surfaces; capturing only one presented window texture may no longer represent the full real composition. |
+
+The first implementation slice should therefore introduce an internal renderer
+surface model before exposing the backend. A useful minimal shape is:
+
+```text
+MacosMetalSurfaceRole::Primary     // current behavior
+MacosMetalSurfaceRole::LowerScene  // future native-glass sampling source
+MacosMetalSurfaceRole::UpperUi     // future Makepad foreground/input surface
+```
+
+The initial landed code for that model should preserve `Primary` behavior until
+the lower/upper surface creation and draw routing are implemented and visually
+validated.
+
 ## Required Interleave Shape
 
 A real `AppleNativeInterleave` backend needs a native hierarchy closer to:
