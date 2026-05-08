@@ -36,7 +36,7 @@ Current conclusion: not complete.
 | Makepad widget export | `GlassContainer`, `GlassPanel.native`, native collector tests in `widgets/src/glass_panel.rs` | Landed. |
 | aichat wiring | `examples/aichat/src/main.rs` uses one `GlassContainer` and four native panels | Landed for AppleNativeUnderlay. |
 | Phase F semantic layer | `aichat-liquid-glass-phase-f-audit.md`; `GlassButton`, variants, separators, toolbar, shell/sidebar/main/composer/card surfaces | Landed for Makepad-rendered controls. |
-| Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; spec states native controls remain separate from panel descriptors | Research only; not implemented. |
+| Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; `APPLE-NATIVE-INTERACTIVE-CONTROLS-POLICY.md`; spec states native controls remain separate from panel descriptors | Research and policy only; not implemented. |
 | UIKit backend | `aichat-liquid-glass-step-44-ios-native-glass-unsupported.spec`; iOS emits explicit unsupported fallback | UIKit backend is not implemented. |
 | UIKit SDK gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no `UIGlassEffect` / `UIGlassContainerEffect` | Blocked until iOS 26 SDK/runtime validation. |
 | Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; underlay cannot produce recognizable interior treatment | full native interior Liquid Glass is not implemented. |
