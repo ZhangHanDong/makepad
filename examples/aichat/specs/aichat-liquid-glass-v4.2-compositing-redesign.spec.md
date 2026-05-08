@@ -3,8 +3,9 @@
 ## Status
 
 Prototype route decision recorded. The dedicated above-Metal probe is
-implemented; full production integration is intentionally deferred to the
-selected `ShaderBackdropInterior` route.
+implemented. A later `lower-scene-pass` probe proves that aichat can render a
+dedicated Makepad pass into the macOS lower scene surface while keeping the
+normal UI pass primary. Full production integration is still not landed.
 
 v4.2 follows the v4.1 native proof work. v4.1 proved that Makepad can create
 Apple native glass views and align them with aichat panels. It did not prove
@@ -24,6 +25,7 @@ Related documents:
 - [aichat-liquid-glass-step-15-above-metal-probe.spec](aichat-liquid-glass-step-15-above-metal-probe.spec)
 - [aichat-liquid-glass-step-16-two-layer-interleave-probe.spec](aichat-liquid-glass-step-16-two-layer-interleave-probe.spec)
 - [aichat-liquid-glass-step-17-input-studio-probe.spec](aichat-liquid-glass-step-17-input-studio-probe.spec)
+- [aichat-liquid-glass-step-96-aichat-lower-scene-pass-probe.spec](aichat-liquid-glass-step-96-aichat-lower-scene-pass-probe.spec)
 - [aichat-liquid-glass-v4.2-above-metal-probe-result.md](aichat-liquid-glass-v4.2-above-metal-probe-result.md)
 - [aichat-liquid-glass-v4.2-route-decision.md](aichat-liquid-glass-v4.2-route-decision.md)
 
@@ -117,7 +119,7 @@ native glass panel
 Metal layer for content above glass
 ```
 
-Status: possible but high risk.
+Status: partially proved, still high risk.
 
 This is the closest native-API route for full glass if AppKit can sample the
 lower Metal layer through native glass. It requires splitting Makepad rendering
@@ -130,8 +132,22 @@ Risks:
 
 - Multiple Metal layers per window complicate draw ordering, input mapping,
   Studio screenshots, resize, DPI, focus, and damage tracking.
-- It may still fail if AppKit cannot use the Metal layer as useful glass input.
+- It may still fail if AppKit cannot use the lower scene Metal surface as
+  useful glass input rather than simply compositing it as a flat background.
 - Scrolling content and generated UI would need explicit layer assignment.
+
+Step 96 evidence:
+
+- `makepad-example-aichat-macos-native-clear-interleave-lower-scene-pass`
+  records a dedicated aichat pass with `DrawPassSurfaceRole::LowerScene`.
+- Studio release logs include `native-lower-scene-pass=draw` and
+  `native-interleave-layer-probe lower-scene-role=draw`.
+- Screenshot comparison against plain `macos-native-clear` changed the full
+  900x700 framebuffer, with `lower-scene-pass` producing an opaque final image.
+
+This proves the lower scene pass reaches final macOS composition. It does not
+yet prove recognizable native Liquid Glass refraction or blur over that lower
+scene.
 
 ### D. Native-Hosted Glass Islands
 
@@ -224,7 +240,7 @@ Names are illustrative; final naming should match implementation evidence.
 
 ## v4.2 Decision
 
-The selected route is `ShaderBackdropInterior`.
+The original selected route was `ShaderBackdropInterior`.
 
 The above-Metal probe proved that a native AppKit glass view can be visible
 above the Makepad Metal layer in real macOS window composition, but that
@@ -236,6 +252,11 @@ upper Makepad Metal surfaces; v4.2 does not implement that split.
 Therefore the next complete interior Liquid Glass implementation should be a
 Makepad-rendered `ShaderBackdropInterior`, while the current native targets are
 described as `AppleNativeUnderlay` diagnostics/proofs.
+
+Step 96 reopens the native interleave route as a prototype candidate by proving
+a Makepad-owned lower scene pass can reach final composition. The route remains
+unaccepted for production until visual validation confirms that native glass
+visibly samples that lower scene with recognizable Liquid Glass treatment.
 
 ## Non-Goals
 

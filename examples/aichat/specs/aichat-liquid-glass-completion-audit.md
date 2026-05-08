@@ -40,7 +40,7 @@ Current conclusion: not complete.
 | Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; `APPLE-NATIVE-INTERACTIVE-CONTROLS-POLICY.md`; spec states native controls remain separate from panel descriptors | Research and policy only; not implemented. |
 | UIKit backend | `aichat-liquid-glass-step-44-ios-native-glass-unsupported.spec`; Step 68 adds Objective-C runtime class preflight for `UIVisualEffectView`, `UIGlassContainerEffect`, and `UIGlassEffect`; Step 69 prepares a UIKit underlay host view with `MTKView` as a child; Step 70 adds selector preflight; Step 71 adds a dynamic installer skeleton that creates a container `UIVisualEffectView` below `MTKView` and passthrough panel `UIVisualEffectView`s when preflight passes; Step 72 adds iOS raw style overrides; Step 73 expands selector preflight to installer UIView/CALayer selectors; Step 74 adds shared batch equivalence reused by iOS; Step 76 reports iOS regular/clear through `WindowNativeSubstrateResolvedEvent` style variants; Step 77 maps those events in aichat | Installer skeleton landed; not runtime-validated on iOS 26. |
 | UIKit SDK/runtime gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no typed `UIGlassEffect` / `UIGlassContainerEffect`; Step 68/70/73 can distinguish missing runtime classes/selectors; Step 72 allows raw style override if `regular=0` / `clear=1` is wrong | Blocked until iOS 26 runtime validation proves class availability, selector names, style raw values, visual output, rotation, safe area, keyboard, split view, and Stage Manager behavior. |
-| Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; underlay cannot produce recognizable interior treatment | full native interior Liquid Glass is not implemented. |
+| Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; `aichat-liquid-glass-step-96-aichat-lower-scene-pass-probe.spec`; Step 96 proves a dedicated aichat `DrawPassSurfaceRole::LowerScene` pass reaches final macOS composition, but does not yet prove recognizable native Liquid Glass refraction/blur over that scene | Not complete: AppleNativeInterleave is now partially proved as a prototype route, but full native interior Liquid Glass is not implemented. |
 | AppleNativeInterleave backend name | `aichat-liquid-glass-step-48-native-interleave-backend-guard.spec`; `AICHAT_GLASS_BACKEND=apple-native-interleave` falls back to shader with a renderer-split warning | Guarded as reserved, not implemented. |
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md` | Requirements recorded; no prototype implementation yet. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals | Separate route, not full Apple-native support. |
@@ -64,15 +64,18 @@ Recent verified gates:
   produced `state=4`, `style=clear`, `containers=1`,
   `panels_installed=4`, `panels_failed=0`.
 
-These gates prove the current macOS AppleNativeUnderlay path and semantic
-widget layer. They do not prove UIKit support, native interactive controls,
-advanced native behavior, or full native interior Liquid Glass.
+These gates prove the current macOS AppleNativeUnderlay path, semantic widget
+layer, and the Step 96 lower scene pass routing prototype. They do not prove
+UIKit support, native interactive controls, advanced native behavior, or full
+native interior Liquid Glass.
 
 ## Incomplete Requirements
 
 - UIKit backend is not runtime-validated beyond the dynamic installer skeleton.
 - Native interactive controls are not implemented.
-- full native interior Liquid Glass is not implemented.
+- full native interior Liquid Glass is not implemented; Step 96 proves lower
+  scene pass routing, but native glass visual sampling over that lower scene
+  still needs manual visual validation and production integration.
 - Phase H is not implemented.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
@@ -88,10 +91,11 @@ advanced native behavior, or full native interior Liquid Glass.
    `regular=0` / `clear=1` is wrong, use `AICHAT_IOS_GLASS_STYLE_REGULAR_RAW`
    and `AICHAT_IOS_GLASS_STYLE_CLEAR_RAW` to validate corrected values before
    changing defaults.
-2. If full Apple-native interior glass remains a requirement, build an
-   `AppleNativeInterleave` prototype with lower Metal content, native glass,
-   and upper Makepad foreground content. The current underlay path is not
-   sufficient.
+2. If full Apple-native interior glass remains a requirement, visually validate
+   the Step 96 `AppleNativeInterleave` prototype: prove that native glass
+   visibly samples the aichat lower scene pass with recognizable blur/refraction,
+   then split production aichat rendering into lower scene and upper UI passes.
+   The current underlay path is not sufficient.
 3. Before enabling native interactive controls, define event ownership and
    hit-test forwarding for AppKit/UIKit controls.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
