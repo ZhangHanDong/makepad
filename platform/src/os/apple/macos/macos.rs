@@ -86,6 +86,7 @@ fn requested_native_interleave_layer_probe_from_env() -> Option<MacosInterleaveP
     {
         Some("1") | Some("true") | Some("on") => Some(MacosInterleaveProbeMode::LifecycleDrawable),
         Some("lower-scene-clear") => Some(MacosInterleaveProbeMode::LowerSceneClear),
+        Some("lower-scene-mirror") => Some(MacosInterleaveProbeMode::LowerSceneMirror),
         _ => None,
     }
 }
@@ -179,7 +180,7 @@ fn install_native_interleave_layer_probe(
         MacosInterleaveProbeMode::LifecycleDrawable => {
             install_lifecycle_probe_layer(parent_layer, probe_layer)
         }
-        MacosInterleaveProbeMode::LowerSceneClear => {
+        MacosInterleaveProbeMode::LowerSceneClear | MacosInterleaveProbeMode::LowerSceneMirror => {
             install_lower_scene_probe_host_view(primary_view, probe_layer, inner_size)
         }
     };
@@ -198,6 +199,7 @@ fn install_native_interleave_layer_probe(
         host_view,
         ca_layer: probe_layer,
         drawable_checked: false,
+        lower_scene_route_logged: false,
     }
 }
 
@@ -215,6 +217,7 @@ enum MacosMetalSurfaceRole {
 enum MacosInterleaveProbeMode {
     LifecycleDrawable,
     LowerSceneClear,
+    LowerSceneMirror,
 }
 
 #[derive(Clone)]
@@ -224,6 +227,7 @@ struct MacosInterleaveProbeLayer {
     host_view: Option<ObjcId>,
     ca_layer: ObjcId,
     drawable_checked: bool,
+    lower_scene_route_logged: bool,
 }
 
 #[derive(Clone)]
@@ -387,6 +391,32 @@ impl MetalWindow {
             true
         } else {
             false
+        }
+    }
+
+    fn next_lower_scene_mirror_drawable(&mut self) -> Option<ObjcId> {
+        let Some(probe) = self.native_interleave_probe_layer.as_mut() else {
+            return None;
+        };
+        if probe.mode != MacosInterleaveProbeMode::LowerSceneMirror {
+            return None;
+        }
+        unsafe {
+            let lower_scene_drawable: ObjcId = msg_send![probe.ca_layer, nextDrawable];
+            if lower_scene_drawable == nil {
+                if !probe.lower_scene_route_logged {
+                    probe.lower_scene_route_logged = true;
+                    crate::log!(
+                        "[liquid-glass] native-interleave-layer-probe lower-scene-mirror=failed"
+                    );
+                }
+                return None;
+            }
+            if !probe.lower_scene_route_logged {
+                probe.lower_scene_route_logged = true;
+                crate::log!("[liquid-glass] native-interleave-layer-probe lower-scene-mirror=draw");
+            }
+            Some(lower_scene_drawable)
         }
     }
 }
@@ -633,6 +663,16 @@ impl Cx {
                             MacosMetalSurfaceRole::LowerScene | MacosMetalSurfaceRole::UpperUi => {}
                         }
                         metal_window.resize_core_animation_layer(metal_cx);
+                        if let Some(lower_scene_drawable) =
+                            metal_window.next_lower_scene_mirror_drawable()
+                        {
+                            self.passes[*draw_pass_id].set_time(time_now);
+                            self.draw_pass(
+                                *draw_pass_id,
+                                metal_cx,
+                                DrawPassMode::Drawable(lower_scene_drawable),
+                            );
+                        }
                         let drawable: ObjcId =
                             unsafe { msg_send![metal_window.ca_layer, nextDrawable] };
                         if drawable == nil {
