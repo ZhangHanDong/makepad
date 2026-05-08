@@ -1275,6 +1275,9 @@ enum GlassSubstrate {
     MacosNative {
         style: MacosGlassStyle,
     },
+    IosNative {
+        style: MacosGlassStyle,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1382,7 +1385,27 @@ impl GlassAppearance {
                     GlassPanelPreset::ShaderDefault
                 }
             }
-            GlassSubstrate::MacosNative { .. } => GlassPanelPreset::NativeOverlay,
+            GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. } => {
+                GlassPanelPreset::NativeOverlay
+            }
+        }
+    }
+}
+
+impl GlassSubstrate {
+    fn is_native(self) -> bool {
+        matches!(
+            self,
+            GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. }
+        )
+    }
+
+    fn native_style(self) -> Option<MacosGlassStyle> {
+        match self {
+            GlassSubstrate::MacosNative { style } | GlassSubstrate::IosNative { style } => {
+                Some(style)
+            }
+            GlassSubstrate::ShaderOnly => None,
         }
     }
 }
@@ -1661,14 +1684,60 @@ fn native_fullscreen_probe_should_continue_wait(frame: u32) -> bool {
     frame < 180
 }
 
+fn native_substrate_resolved_appearance(
+    state: WindowNativeSubstrateState,
+    style: Option<WindowNativeSubstrateStyle>,
+) -> GlassAppearance {
+    match (state, style) {
+        (
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassRegular),
+        ) => GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Regular,
+            },
+            backdrop: None,
+        },
+        (
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+        ) => GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        },
+        (
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::IosGlassRegular),
+        ) => GlassAppearance {
+            substrate: GlassSubstrate::IosNative {
+                style: MacosGlassStyle::Regular,
+            },
+            backdrop: None,
+        },
+        (
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::IosGlassClear),
+        ) => GlassAppearance {
+            substrate: GlassSubstrate::IosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        },
+        _ => GlassAppearance::default(),
+    }
+}
+
 fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active: bool) -> f64 {
     if active {
         return 1.0;
     }
 
-    match appearance.substrate {
-        GlassSubstrate::MacosNative { .. } => NATIVE_INACTIVE_GLASS_MULTIPLIER,
-        GlassSubstrate::ShaderOnly => INACTIVE_GLASS_MULTIPLIER,
+    if appearance.substrate.is_native() {
+        NATIVE_INACTIVE_GLASS_MULTIPLIER
+    } else {
+        INACTIVE_GLASS_MULTIPLIER
     }
 }
 
@@ -1677,9 +1746,7 @@ fn native_inactive_probe_log_line(
     active: bool,
     multiplier: f64,
 ) -> Option<String> {
-    let GlassSubstrate::MacosNative { style } = appearance.substrate else {
-        return None;
-    };
+    let style = appearance.substrate.native_style()?;
     let style = match style {
         MacosGlassStyle::Regular => "regular",
         MacosGlassStyle::Clear => "clear",
@@ -5365,7 +5432,7 @@ impl App {
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         AICHAT_NATIVE_GLASS_ACTIVE.store(
-            matches!(appearance.substrate, GlassSubstrate::MacosNative { .. }),
+            appearance.substrate.is_native(),
             std::sync::atomic::Ordering::Relaxed,
         );
         let mut glass = glass_opacity_values(opacity, appearance.panel_preset())
@@ -5445,19 +5512,12 @@ impl App {
             backdrop_proof,
             Some(ShaderBackdropProof::TextureSignal | ShaderBackdropProof::ScreenTextureSignal)
         );
-        let use_native_panels = matches!(appearance.substrate, GlassSubstrate::MacosNative { .. });
-        let native_style = match appearance.substrate {
-            GlassSubstrate::MacosNative {
-                style: MacosGlassStyle::Clear,
-            } => makepad_widgets::glass_panel::GlassNativeStyle::Clear,
+        let use_native_panels = appearance.substrate.is_native();
+        let native_style = match appearance.substrate.native_style() {
+            Some(MacosGlassStyle::Clear) => makepad_widgets::glass_panel::GlassNativeStyle::Clear,
             _ => makepad_widgets::glass_panel::GlassNativeStyle::Regular,
         };
-        if matches!(
-            appearance.substrate,
-            GlassSubstrate::MacosNative {
-                style: MacosGlassStyle::Clear
-            }
-        ) {
+        if appearance.substrate.native_style() == Some(MacosGlassStyle::Clear) {
             glass = glass.with_native_clear_multiplier();
         }
         let compositing_proof = std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF").ok();
@@ -5618,32 +5678,9 @@ impl App {
             return;
         }
 
-        self.glass_appearance = match (event.state, event.style) {
-            (
-                WindowNativeSubstrateState::Installed,
-                Some(WindowNativeSubstrateStyle::MacosGlassRegular),
-            ) => GlassAppearance {
-                substrate: GlassSubstrate::MacosNative {
-                    style: MacosGlassStyle::Regular,
-                },
-                backdrop: None,
-            },
-            (
-                WindowNativeSubstrateState::Installed,
-                Some(WindowNativeSubstrateStyle::MacosGlassClear),
-            ) => GlassAppearance {
-                substrate: GlassSubstrate::MacosNative {
-                    style: MacosGlassStyle::Clear,
-                },
-                backdrop: None,
-            },
-            _ => GlassAppearance::default(),
-        };
+        self.glass_appearance = native_substrate_resolved_appearance(event.state, event.style);
         AICHAT_NATIVE_GLASS_ACTIVE.store(
-            matches!(
-                self.glass_appearance.substrate,
-                GlassSubstrate::MacosNative { .. }
-            ),
+            self.glass_appearance.substrate.is_native(),
             std::sync::atomic::Ordering::Relaxed,
         );
 
@@ -5667,7 +5704,7 @@ impl App {
         }
 
         match self.glass_appearance.substrate {
-            GlassSubstrate::MacosNative { .. } => {
+            GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. } => {
                 log!(
                     "[liquid-glass] app-substrate=apple-native-underlay state={:?} reason={}",
                     event.state,
@@ -6146,13 +6183,13 @@ mod tests {
         native_fullscreen_probe_should_continue_wait, native_fullscreen_probe_should_start,
         native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
         native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
-        native_spacing_probe_spacing_for_frame, parse_glass_backend, render_state_templates,
-        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
-        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
-        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
-        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
+        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
+        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
+        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
+        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
+        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6326,6 +6363,45 @@ mod tests {
     }
 
     #[test]
+    fn aichat_ios_native_substrate_event_resolves_to_native_overlay() {
+        let appearance = native_substrate_resolved_appearance(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::IosGlassClear),
+        );
+
+        assert_eq!(
+            appearance.substrate,
+            GlassSubstrate::IosNative {
+                style: MacosGlassStyle::Clear
+            }
+        );
+        assert_eq!(appearance.panel_preset(), GlassPanelPreset::NativeOverlay);
+    }
+
+    #[test]
+    fn aichat_ios_native_substrate_event_requires_installed_state() {
+        let appearance = native_substrate_resolved_appearance(
+            WindowNativeSubstrateState::PreflightFailed,
+            Some(WindowNativeSubstrateStyle::IosGlassClear),
+        );
+
+        assert_eq!(appearance, GlassAppearance::default());
+    }
+
+    #[test]
+    fn aichat_ios_native_uses_native_overlay_preset() {
+        let appearance = GlassAppearance {
+            substrate: GlassSubstrate::IosNative {
+                style: MacosGlassStyle::Regular,
+            },
+            backdrop: None,
+        };
+
+        assert!(appearance.substrate.is_native());
+        assert_eq!(appearance.panel_preset(), GlassPanelPreset::NativeOverlay);
+    }
+
+    #[test]
     fn aichat_startup_glass_resolution_waits_for_platform_result() {
         let pending = resolve_startup_glass_appearance(Some("macos-native"));
         assert_eq!(pending.appearance.substrate, GlassSubstrate::ShaderOnly);
@@ -6403,6 +6479,22 @@ mod tests {
             App::native_fullscreen_fallback_transition(GlassAppearance::default(), None, true);
 
         assert_eq!(transition.appearance, GlassAppearance::default());
+        assert_eq!(transition.restore_appearance, None);
+        assert_eq!(transition.log, None);
+    }
+
+    #[test]
+    fn aichat_ios_native_does_not_enter_macos_fullscreen_fallback() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::IosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        };
+
+        let transition = App::native_fullscreen_fallback_transition(native, None, true);
+
+        assert_eq!(transition.appearance, native);
         assert_eq!(transition.restore_appearance, None);
         assert_eq!(transition.log, None);
     }
