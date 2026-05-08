@@ -521,6 +521,10 @@ aichat needs these first:
 - `GlassCard`: message card/readability surface, native glass optional
 - `GlassComposer`: input surface with stronger readability and controls
 
+`GlassSidebar` is a semantic Makepad navigation surface. It may opt into native
+descriptors through normal `GlassPanel` properties, but nav controls remain
+Makepad-rendered in v4.1/v4.2.
+
 `GlassComposer` is a semantic Makepad surface for text input and composer
 actions. It may opt into native descriptors through normal `GlassPanel`
 properties, but it does not replace Makepad text input with a native AppKit or

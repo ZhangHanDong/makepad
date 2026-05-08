@@ -412,6 +412,28 @@ script_mod! {
             noise_strength: 0.003
         }
     }
+
+    mod.widgets.GlassSidebar = mod.widgets.GlassPanel{
+        width: 298
+        height: Fill
+        flow: Down
+        padding: Inset{left: 14 top: 14 right: 14 bottom: 14}
+        spacing: 10
+        draw_bg +: {
+            tint_color: #x0A3A30
+            tint_alpha: 0.78
+            border_color: #xEAD8B8
+            border_alpha: 0.20
+            border_width: 0.0
+            corner_radius: 0.0
+            halo_strength: 0.0
+            halo_radius: 0.0
+            highlight_strength: 0.16
+            highlight_band_height: 54.0
+            chroma_strength: 0.0
+            noise_strength: 0.004
+        }
+    }
 }
 
 #[derive(Clone)]

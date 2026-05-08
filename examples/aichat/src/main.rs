@@ -720,7 +720,7 @@ script_mod! {
                             noise_strength: 0.004
                         }
 
-                    sidebar := GlassPanel {
+                    sidebar := GlassSidebar {
                         width: 298
                         height: Fill
                         native: true
