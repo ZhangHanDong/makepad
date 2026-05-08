@@ -897,6 +897,11 @@ impl MacosWindow {
                 msg_send![native_container, respondsToSelector: set_spacing_sel];
             if can_set_spacing == YES {
                 let () = msg_send![native_container, setSpacing: container.spacing];
+                crate::log!(
+                    "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
+                    container.id,
+                    container.spacing
+                );
             }
 
             let mut panels: Vec<&NativeGlassPanelDescriptor> = container
@@ -2026,6 +2031,26 @@ mod tests {
         assert!(MacosWindow::native_glass_batch_equivalent(&a, &b));
 
         a.containers[0].panels[0].rect.size.x += 2.0;
+        assert!(!MacosWindow::native_glass_batch_equivalent(&a, &b));
+    }
+
+    #[test]
+    fn native_glass_batch_equivalent_detects_spacing_change() {
+        let a = NativeGlassBatch {
+            window_id: WindowId(0, 0),
+            containers: vec![NativeGlassContainerDescriptor {
+                id: LiveId(1),
+                rect: Rect {
+                    pos: Vec2d { x: 0.0, y: 0.0 },
+                    size: Vec2d { x: 900.0, y: 700.0 },
+                },
+                spacing: 20.0,
+                panels: Vec::new(),
+            }],
+        };
+        let mut b = a.clone();
+        b.containers[0].spacing = 28.0;
+
         assert!(!MacosWindow::native_glass_batch_equivalent(&a, &b));
     }
 

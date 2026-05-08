@@ -29,7 +29,7 @@ The current production path remains:
 
 | Feature | Current evidence | Current status | Implementation gate |
 |---|---|---|---|
-| Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; static spacing is part of Phase C | Static descriptor field only | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
+| Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; Step 56 logs `native-container-spacing` and tests spacing changes invalidate native batches | Static mapping plus probe only; animated morph transitions remain unproven | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
 | Scroll edge glass | Scroll widgets remain Makepad-rendered; no native scroll-edge descriptor exists | Not implemented | Define whether scroll edge glass is a semantic Makepad style, a native panel region, or a platform-specific control behavior. |
 | Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit | Explicit fullscreen fallback, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active | Probe only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
@@ -44,6 +44,9 @@ The current production path remains:
 - A test or Studio run shows changing spacing while panels stay aligned.
 - Logs identify the container id and updated spacing.
 - Resize after an animated spacing change does not leave stale panels.
+- The current Step 56 spacing probe verifies batch invalidation and logs
+  `native-container-spacing`, but it does not implement animated morph
+  transitions.
 
 ### Fullscreen
 
