@@ -87,6 +87,7 @@ fn requested_native_interleave_layer_probe_from_env() -> Option<MacosInterleaveP
         Some("1") | Some("true") | Some("on") => Some(MacosInterleaveProbeMode::LifecycleDrawable),
         Some("lower-scene-clear") => Some(MacosInterleaveProbeMode::LowerSceneClear),
         Some("lower-scene-mirror") => Some(MacosInterleaveProbeMode::LowerSceneMirror),
+        Some("lower-scene-role") => Some(MacosInterleaveProbeMode::LowerSceneRole),
         _ => None,
     }
 }
@@ -180,7 +181,9 @@ fn install_native_interleave_layer_probe(
         MacosInterleaveProbeMode::LifecycleDrawable => {
             install_lifecycle_probe_layer(parent_layer, probe_layer)
         }
-        MacosInterleaveProbeMode::LowerSceneClear | MacosInterleaveProbeMode::LowerSceneMirror => {
+        MacosInterleaveProbeMode::LowerSceneClear
+        | MacosInterleaveProbeMode::LowerSceneMirror
+        | MacosInterleaveProbeMode::LowerSceneRole => {
             install_lower_scene_probe_host_view(primary_view, probe_layer, inner_size)
         }
     };
@@ -219,6 +222,7 @@ enum MacosInterleaveProbeMode {
     LifecycleDrawable,
     LowerSceneClear,
     LowerSceneMirror,
+    LowerSceneRole,
 }
 
 #[derive(Clone)]
@@ -447,6 +451,12 @@ impl MetalWindow {
             Some(lower_scene_drawable)
         }
     }
+
+    fn forces_lower_scene_role(&self) -> bool {
+        self.native_interleave_probe_layer
+            .as_ref()
+            .is_some_and(|probe| probe.mode == MacosInterleaveProbeMode::LowerSceneRole)
+    }
 }
 
 fn defer_platform_op(platform_ops: &mut Vec<CxOsOp>, op: CxOsOp) -> bool {
@@ -623,6 +633,9 @@ impl Cx {
     ) -> MacosMetalSurfaceRole {
         let _ = draw_pass_id;
         let _current_role = metal_window.surface_role;
+        if metal_window.forces_lower_scene_role() {
+            return MacosMetalSurfaceRole::LowerScene;
+        }
         match self.passes[draw_pass_id].surface_role {
             DrawPassSurfaceRole::Primary => MacosMetalSurfaceRole::Primary,
             DrawPassSurfaceRole::LowerScene => MacosMetalSurfaceRole::LowerScene,
