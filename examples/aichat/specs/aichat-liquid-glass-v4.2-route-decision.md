@@ -70,6 +70,14 @@ names should distinguish:
 - `AppleNativeInterleave`: reserved for a later renderer split if Makepad gains
   separate lower and upper Metal surfaces.
 
+Guarded backend value:
+
+- `AICHAT_GLASS_BACKEND=apple-native-interleave` is a known but unsupported
+  value. Step 48 keeps the name reserved and falls back to shader with the
+  warning `AppleNativeInterleave requires renderer split; falling back to
+  shader`. This prevents the reserved name from being mistaken for a working
+  full-native backend.
+
 ## Next Implementation Slice
 
 The next aichat implementation slice should start `ShaderBackdropInterior`:
