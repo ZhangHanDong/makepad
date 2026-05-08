@@ -55,8 +55,12 @@ fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
         .as_deref()
         .map(str::trim)
     {
-        Some("macos-native") => Some(MacosNativeGlassStyle::Regular),
-        Some("macos-native-clear") => Some(MacosNativeGlassStyle::Clear),
+        Some("apple-native-underlay") | Some("macos-native") => {
+            Some(MacosNativeGlassStyle::Regular)
+        }
+        Some("apple-native-underlay-clear") | Some("macos-native-clear") => {
+            Some(MacosNativeGlassStyle::Clear)
+        }
         Some("auto") => Some(MacosNativeGlassStyle::Regular),
         _ => None,
     }

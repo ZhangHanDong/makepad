@@ -119,6 +119,8 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-interior-no-chroma", backend: "shader-backdrop-interior-no-chroma"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-interior", backend: "shader-backdrop-interior"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-auto", backend: "auto"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-underlay", backend: "apple-native-underlay"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-underlay-clear", backend: "apple-native-underlay-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-proof-stripes", backend: "macos-native-clear", proof: "stripes", compositing_proof: "transparent-overlay"}

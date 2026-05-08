@@ -1548,11 +1548,11 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
             (GlassBackendRequest::ShaderBackdropInteriorNoChroma, None)
         }
         Some("shader-backdrop-interior") => (GlassBackendRequest::ShaderBackdropInterior, None),
-        Some("macos-native") => (
+        Some("apple-native-underlay") | Some("macos-native") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
             None,
         ),
-        Some("macos-native-clear") => (
+        Some("apple-native-underlay-clear") | Some("macos-native-clear") => (
             GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
             None,
         ),
@@ -1697,7 +1697,21 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
 }
 
 fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolution {
-    resolve_glass_appearance(value, false)
+    let (request, parse_warning) = parse_glass_backend(value);
+    if let Some(warning) = parse_warning {
+        return GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: Some(warning),
+        };
+    }
+
+    match request {
+        GlassBackendRequest::Auto | GlassBackendRequest::MacosNative(_) => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: None,
+        },
+        _ => resolve_glass_appearance(value, false),
+    }
 }
 
 fn initial_glass_opacity() -> f64 {
@@ -5389,7 +5403,7 @@ impl App {
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } => {
                 log!(
-                    "[liquid-glass] app-substrate=macos-native state={:?} reason={}",
+                    "[liquid-glass] app-substrate=apple-native-underlay state={:?} reason={}",
                     event.state,
                     event.reason
                 );
@@ -5883,6 +5897,20 @@ mod tests {
             )
         );
         assert_eq!(
+            parse_glass_backend(Some("apple-native-underlay")),
+            (
+                GlassBackendRequest::MacosNative(MacosGlassStyle::Regular),
+                None
+            )
+        );
+        assert_eq!(
+            parse_glass_backend(Some("apple-native-underlay-clear")),
+            (
+                GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
+                None
+            )
+        );
+        assert_eq!(
             parse_glass_backend(Some("auto")),
             (GlassBackendRequest::Auto, None)
         );
@@ -5966,6 +5994,10 @@ mod tests {
         let pending = resolve_startup_glass_appearance(Some("macos-native"));
         assert_eq!(pending.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert!(pending.warning.is_none());
+
+        let underlay = resolve_startup_glass_appearance(Some("apple-native-underlay-clear"));
+        assert_eq!(underlay.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert!(underlay.warning.is_none());
 
         let auto = resolve_startup_glass_appearance(Some("auto"));
         assert_eq!(auto.appearance.substrate, GlassSubstrate::ShaderOnly);

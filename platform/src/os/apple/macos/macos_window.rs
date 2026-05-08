@@ -700,7 +700,7 @@ impl MacosWindow {
                 (acc.0 + item.installed_panels, acc.1 + item.failed_panels)
             });
         crate::log!(
-            "[liquid-glass] backend=apple-native state={:?} containers={} panels_installed={} panels_failed={}",
+            "[liquid-glass] backend=apple-native-underlay state={:?} containers={} panels_installed={} panels_failed={}",
             result.backend_state,
             result.containers.len(),
             installed,
