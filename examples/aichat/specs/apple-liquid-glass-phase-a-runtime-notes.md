@@ -120,3 +120,48 @@ examples/aichat/prototypes/apple_liquid_glass/ios/UIKitGlassProbe.swift:10:49: e
 ```
 
 Result: the local iPhoneOS 18.5 SDK does not expose `UIGlassEffect` or `UIGlassContainerEffect`. UIKit backend implementation remains blocked until an iOS 26 SDK is available.
+
+## Phase G SDK Header Scan
+
+SDK path commands:
+
+```bash
+xcrun --sdk iphoneos --show-sdk-path
+xcrun --sdk iphonesimulator --show-sdk-path
+xcrun --sdk macosx --show-sdk-path
+```
+
+Output:
+
+```text
+/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.5.sdk
+/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk
+/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
+```
+
+Header scan command:
+
+```bash
+rg -n "UIGlassEffect|UIGlassContainerEffect|GlassEffect|glassEffect|NSGlassEffectView|NSGlassEffectContainerView" \
+  "$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)" \
+  "$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null)" \
+  "$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+```
+
+Output:
+
+```text
+<no matches>
+```
+
+Official Apple Developer Documentation does list these APIs for the newer
+platform SDKs:
+
+- `UIGlassEffect`: <https://developer.apple.com/documentation/UIKit/UIGlassEffect>
+- `UIGlassContainerEffect`: <https://developer.apple.com/documentation/UIKit/UIGlassContainerEffect>
+- `NSGlassEffectView`: <https://developer.apple.com/documentation/appkit/nsglasseffectview>
+
+Result: Phase G has enough public documentation to keep the descriptor mapping
+accurate, but this checkout cannot compile or type-check a UIKit backend until a
+newer local SDK exposes the symbols or we add a runtime Objective-C lookup path
+validated on an iOS 26 runtime.

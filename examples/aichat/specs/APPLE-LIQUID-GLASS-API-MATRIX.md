@@ -4,6 +4,46 @@
 
 Phase A evidence document. Update whenever SDK/runtime validation changes.
 
+## Phase G SDK Evidence Update
+
+Date: 2026-05-08
+
+Official Apple documentation now lists the UIKit/AppKit Liquid Glass APIs that
+the v4 spec targets:
+
+- `UIGlassEffect`: <https://developer.apple.com/documentation/UIKit/UIGlassEffect>
+- `UIGlassContainerEffect`: <https://developer.apple.com/documentation/UIKit/UIGlassContainerEffect>
+- `NSGlassEffectView`: <https://developer.apple.com/documentation/appkit/nsglasseffectview>
+- UIKit updates: <https://developer.apple.com/documentation/Updates/UIKit>
+- AppKit updates: <https://developer.apple.com/documentation/updates/appkit>
+
+Current local implementation gate remains blocked by SDK availability:
+
+- `xcrun --sdk iphoneos --show-sdk-path`:
+  `/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.5.sdk`
+- `xcrun --sdk iphonesimulator --show-sdk-path`:
+  `/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk`
+- `xcrun --sdk macosx --show-sdk-path`:
+  `/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk`
+
+Header scan command:
+
+```bash
+rg -n "UIGlassEffect|UIGlassContainerEffect|GlassEffect|glassEffect|NSGlassEffectView|NSGlassEffectContainerView" \
+  "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+  "$(xcrun --sdk macosx --show-sdk-path)"
+```
+
+Result: the local SDK headers do not expose `UIGlassEffect`,
+`UIGlassContainerEffect`, `NSGlassEffectView`, or
+`NSGlassEffectContainerView`. The macOS runtime still exposes the AppKit
+classes on the validation OS, which is why the current macOS backend uses
+runtime Objective-C lookup instead of typed SDK bindings.
+
+Phase G consequence: keep iOS in explicit unsupported fallback until an iOS 26
+SDK is locally available for compile-time or runtime selector validation.
+
 ## Phase A Result
 
 Status: Partial
@@ -37,9 +77,12 @@ Decision for Phase B:
 | API | Kind | Required for v4.1 | Availability evidence | Notes |
 |---|---|---:|---|---|
 | `UIVisualEffectView` | class | yes | Local iPhoneOS 18.5 SDK typecheck reaches UIKit but glass types are missing | UIKit host for visual effects. |
-| `UIGlassEffect` | type | yes | Local iPhoneOS 18.5 SDK: unavailable, `cannot find 'UIGlassEffect' in scope` | Requires iOS 26 SDK validation. |
-| `UIGlassContainerEffect` | type | yes | Local iPhoneOS 18.5 SDK: unavailable, `cannot find 'UIGlassContainerEffect' in scope` | Requires iOS 26 SDK validation. |
-| `UIGlassEffect(style:)` | initializer | yes | Blocked because `UIGlassEffect` is unavailable in local SDK | Exact spelling must be confirmed against iOS 26 SDK. |
+| `UIGlassEffect` | type | yes | Official Apple docs list `class UIGlassEffect`; local iPhoneOS 18.5 SDK unavailable | Requires iOS 26 SDK validation before implementation. |
+| `UIGlassContainerEffect` | type | yes | Official Apple docs list `class UIGlassContainerEffect`; local iPhoneOS 18.5 SDK unavailable | Requires iOS 26 SDK validation before implementation. |
+| `UIGlassEffect(style:)` | initializer | yes | Official Apple docs list `init(style: UIGlassEffect.Style)`; local SDK unavailable | Use only after SDK validation. |
+| `UIGlassEffect.isInteractive` | property | future | Official Apple docs list `isInteractive` | v4.1 keeps native panels passthrough; interactive remains future work. |
+| `UIGlassEffect.tintColor` | property | yes | Official Apple docs list `tintColor` | v4.1 tint conversion remains sRGB. |
+| `UIGlassContainerEffect.spacing` | property | yes | Official Apple docs list `spacing` | Maps to `GlassContainer.spacing` morph distance. |
 | `UIView.isUserInteractionEnabled = false` | hit-test policy | yes | UIKit skeleton typecheck blocked by missing glass types; property itself is existing UIKit API | v4.1 panels are passthrough. |
 | `CALayer.cornerRadius` | shape | yes | UIKit skeleton typecheck blocked by missing glass types; property itself is existing UIKit API | `Capsule` maps to `min(width, height) / 2`. |
 
