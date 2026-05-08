@@ -88,6 +88,7 @@ fn requested_native_interleave_layer_probe_from_env() -> Option<MacosInterleaveP
         Some("lower-scene-clear") => Some(MacosInterleaveProbeMode::LowerSceneClear),
         Some("lower-scene-mirror") => Some(MacosInterleaveProbeMode::LowerSceneMirror),
         Some("lower-scene-role") => Some(MacosInterleaveProbeMode::LowerSceneRole),
+        Some("lower-scene-pass") => Some(MacosInterleaveProbeMode::LowerScenePass),
         _ => None,
     }
 }
@@ -183,7 +184,8 @@ fn install_native_interleave_layer_probe(
         }
         MacosInterleaveProbeMode::LowerSceneClear
         | MacosInterleaveProbeMode::LowerSceneMirror
-        | MacosInterleaveProbeMode::LowerSceneRole => {
+        | MacosInterleaveProbeMode::LowerSceneRole
+        | MacosInterleaveProbeMode::LowerScenePass => {
             install_lower_scene_probe_host_view(primary_view, probe_layer, inner_size)
         }
     };
@@ -223,6 +225,7 @@ enum MacosInterleaveProbeMode {
     LowerSceneClear,
     LowerSceneMirror,
     LowerSceneRole,
+    LowerScenePass,
 }
 
 #[derive(Clone)]

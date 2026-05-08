@@ -1831,6 +1831,14 @@ fn native_compositing_proof_transparent_overlay_from_value(value: Option<&str>) 
     value == Some("transparent-overlay")
 }
 
+fn native_lower_scene_pass_probe_enabled() -> bool {
+    std::env::var("AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        == Some("lower-scene-pass")
+}
+
 fn metal_probe_pattern_enabled() -> bool {
     metal_probe_pattern_enabled_from_value(
         std::env::var("AICHAT_METAL_PROBE_PATTERN").ok().as_deref(),
@@ -4223,6 +4231,8 @@ pub struct App {
     shader_backdrop_render_size: Vec2f,
     #[rust]
     glass_inactive_multiplier: f64,
+    #[rust]
+    native_lower_scene_pass_probe_logged: bool,
 }
 
 impl App {
@@ -5220,6 +5230,51 @@ impl App {
         cx.end_pass(&self.shader_backdrop_scene_pass);
     }
 
+    fn render_native_lower_scene_pass_probe(&mut self, cx: &mut Cx2d) {
+        let Some(window_id) = self.ui.window(cx, ids!(main_window)).window_id() else {
+            return;
+        };
+        let size = self.shader_backdrop_texture_size_for_window(cx);
+        self.shader_backdrop_scene_pass.clear_color_textures(cx);
+        self.shader_backdrop_scene_pass
+            .set_size(cx, dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64));
+        self.shader_backdrop_scene_pass
+            .set_window_clear_color(cx, vec4(0.0, 0.0, 0.0, 0.0));
+        self.shader_backdrop_scene_pass
+            .set_surface_role(cx, DrawPassSurfaceRole::LowerScene);
+        cx.passes[self.shader_backdrop_scene_pass.draw_pass_id()].parent =
+            CxDrawPassParent::Window(window_id);
+
+        let profile = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        self.draw_shader_backdrop_scene.draw_vars.set_uniform(
+            cx,
+            live_id!(scene_grid_strength),
+            &[profile.scene_grid_strength],
+        );
+
+        cx.begin_pass(&self.shader_backdrop_scene_pass, None);
+        self.shader_backdrop_scene_draw_list.begin_always(cx);
+        cx.begin_root_turtle(
+            dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            Layout::flow_down(),
+        );
+        self.draw_shader_backdrop_scene.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: dvec2(size.x.max(1.0) as f64, size.y.max(1.0) as f64),
+            },
+        );
+        cx.end_pass_sized_turtle();
+        self.shader_backdrop_scene_draw_list.end(cx);
+        cx.end_pass(&self.shader_backdrop_scene_pass);
+
+        if !self.native_lower_scene_pass_probe_logged {
+            self.native_lower_scene_pass_probe_logged = true;
+            log!("[liquid-glass] native-lower-scene-pass=draw");
+        }
+    }
+
     fn render_shader_backdrop_blur_pass(
         cx: &mut Cx2d,
         pass: &DrawPass,
@@ -5733,6 +5788,10 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_draw_2d(&mut self, cx: &mut Cx2d) {
+        if native_lower_scene_pass_probe_enabled() {
+            self.render_native_lower_scene_pass_probe(cx);
+        }
+
         let Some(backdrop) = self.glass_appearance.backdrop else {
             return;
         };
