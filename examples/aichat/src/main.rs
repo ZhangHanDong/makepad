@@ -1625,6 +1625,18 @@ fn native_spacing_probe_should_continue(frame: u32) -> bool {
     frame < 120
 }
 
+fn native_inactive_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true"))
+}
+
+fn native_inactive_probe_enabled() -> bool {
+    native_inactive_probe_enabled_from_value(
+        std::env::var("AICHAT_NATIVE_INACTIVE_PROBE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active: bool) -> f64 {
     if active {
         return 1.0;
@@ -1634,6 +1646,24 @@ fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active:
         GlassSubstrate::MacosNative { .. } => NATIVE_INACTIVE_GLASS_MULTIPLIER,
         GlassSubstrate::ShaderOnly => INACTIVE_GLASS_MULTIPLIER,
     }
+}
+
+fn native_inactive_probe_log_line(
+    appearance: GlassAppearance,
+    active: bool,
+    multiplier: f64,
+) -> Option<String> {
+    let GlassSubstrate::MacosNative { style } = appearance.substrate else {
+        return None;
+    };
+    let style = match style {
+        MacosGlassStyle::Regular => "regular",
+        MacosGlassStyle::Clear => "clear",
+    };
+    Some(format!(
+        "native-inactive-probe active={} style={} multiplier={:.3}",
+        active, style, multiplier
+    ))
 }
 
 const GLASS_SCROLL_EDGE_MAX_ALPHA: f64 = 58.0 / 255.0;
@@ -5499,6 +5529,15 @@ impl App {
 
         self.glass_inactive_multiplier =
             inactive_glass_multiplier_for_appearance(self.glass_appearance, active);
+        if native_inactive_probe_enabled() {
+            if let Some(line) = native_inactive_probe_log_line(
+                self.glass_appearance,
+                active,
+                self.glass_inactive_multiplier,
+            ) {
+                log!("[liquid-glass] {}", line);
+            }
+        }
         let opacity = self
             .ui
             .slider(cx, ids!(opacity_slider))
@@ -5545,6 +5584,16 @@ impl App {
             ),
             std::sync::atomic::Ordering::Relaxed,
         );
+
+        if native_inactive_probe_enabled() {
+            if let Some(line) = native_inactive_probe_log_line(
+                self.glass_appearance,
+                true,
+                self.glass_inactive_multiplier,
+            ) {
+                log!("[liquid-glass] {}", line);
+            }
+        }
 
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } => {
@@ -6004,7 +6053,8 @@ mod tests {
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
-        native_display_backing_scale_changed, native_spacing_probe_enabled_from_value,
+        native_display_backing_scale_changed, native_inactive_probe_enabled_from_value,
+        native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
         native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
         parse_glass_backend, render_state_templates, render_state_templates_for_ui,
         resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
@@ -6339,6 +6389,37 @@ mod tests {
             1.0
         );
         assert_eq!(inactive_glass_multiplier_for_appearance(native, true), 1.0);
+    }
+
+    #[test]
+    fn aichat_native_inactive_probe_env_accepts_truthy_values() {
+        assert!(native_inactive_probe_enabled_from_value(Some("1")));
+        assert!(native_inactive_probe_enabled_from_value(Some("true")));
+        assert!(!native_inactive_probe_enabled_from_value(None));
+        assert!(!native_inactive_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_inactive_probe_logs_only_native_substrate() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        };
+
+        assert_eq!(
+            native_inactive_probe_log_line(native, false, NATIVE_INACTIVE_GLASS_MULTIPLIER),
+            Some("native-inactive-probe active=false style=clear multiplier=0.880".to_string())
+        );
+        assert_eq!(
+            native_inactive_probe_log_line(
+                GlassAppearance::default(),
+                false,
+                INACTIVE_GLASS_MULTIPLIER
+            ),
+            None
+        );
     }
 
     #[test]

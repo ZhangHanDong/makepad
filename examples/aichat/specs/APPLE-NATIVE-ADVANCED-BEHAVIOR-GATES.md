@@ -92,6 +92,9 @@ The current production path remains:
 - The inactive policy is shared by shader and Apple-native modes where possible.
 - The current native inactive policy uses weaker app-side dimming than shader
   mode, but it does not prove complete native inactive-window support.
+- Step 64 adds the `makepad-example-aichat-macos-native-clear-inactive-probe`
+  Studio runnable and `AICHAT_NATIVE_INACTIVE_PROBE=1` logs for native active
+  state, style, and multiplier.
 
 ### Popup/modal
 
