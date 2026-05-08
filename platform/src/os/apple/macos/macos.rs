@@ -150,6 +150,7 @@ pub struct MetalWindow {
     pub is_resizing: bool,
     surface_role: MacosMetalSurfaceRole,
     native_interleave_probe_layer: ObjcId,
+    native_interleave_probe_drawable_checked: bool,
 }
 
 impl MetalWindow {
@@ -188,6 +189,7 @@ impl MetalWindow {
             cocoa_window,
             surface_role: MacosMetalSurfaceRole::Primary,
             native_interleave_probe_layer,
+            native_interleave_probe_drawable_checked: false,
         }
     }
 
@@ -220,6 +222,7 @@ impl MetalWindow {
             cocoa_window,
             surface_role: MacosMetalSurfaceRole::Primary,
             native_interleave_probe_layer,
+            native_interleave_probe_drawable_checked: false,
         }
     }
 
@@ -250,6 +253,21 @@ impl MetalWindow {
                         self.native_interleave_probe_layer,
                         setFrame: macos_surface_frame(self.window_geom.inner_size)
                     ];
+                    if !self.native_interleave_probe_drawable_checked {
+                        self.native_interleave_probe_drawable_checked = true;
+                        let probe_drawable: ObjcId =
+                            msg_send![self.native_interleave_probe_layer, nextDrawable];
+                        if probe_drawable != nil {
+                            let () = msg_send![probe_drawable, present];
+                            crate::log!(
+                                "[liquid-glass] native-interleave-layer-probe drawable=available"
+                            );
+                        } else {
+                            crate::log!(
+                                "[liquid-glass] native-interleave-layer-probe drawable=unavailable"
+                            );
+                        }
+                    }
                 }
             }
             true
