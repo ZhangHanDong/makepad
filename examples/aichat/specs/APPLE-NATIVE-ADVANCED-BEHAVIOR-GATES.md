@@ -30,7 +30,7 @@ The current production path remains:
 | Feature | Current evidence | Current status | Implementation gate |
 |---|---|---|---|
 | Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; Step 56 logs `native-container-spacing` and tests spacing changes invalidate native batches | Static mapping plus probe only; animated morph transitions remain unproven | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
-| Scroll edge glass | `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md` defines the next route as Makepad semantic styling, not additional native panels | Policy only; not implemented | Define whether scroll edge glass is a semantic Makepad style, a native panel region, or a platform-specific control behavior. |
+| Scroll edge glass | `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md` defines the route; `GlassScrollEdge` / `GlassScrollEdgeBottom` provide Makepad-rendered semantic hooks | Widget hook only; not wired to scroll state | Define whether scroll edge glass is a semantic Makepad style, a native panel region, or a platform-specific control behavior. |
 | Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit | Explicit fullscreen fallback, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active | Probe only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | No local runtime evidence beyond the known limitation list | Not implemented | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
@@ -57,6 +57,7 @@ The current production path remains:
 - Studio widget dumps still show Makepad-owned scroll content and edge overlays.
 - The current policy starts with Makepad semantic styling; native scroll edge
   behavior remains future work.
+- `GlassScrollEdge` exists, but aichat scroll-state wiring is not yet complete.
 
 ### Fullscreen
 

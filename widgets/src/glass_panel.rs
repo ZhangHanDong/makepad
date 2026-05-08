@@ -115,6 +115,28 @@ script_mod! {
         }
     }
 
+    mod.widgets.GlassScrollEdge = mod.widgets.View{
+        width: Fill
+        height: 28
+        show_bg: true
+        draw_bg +: {
+            color: instance(#xEAD8B83A)
+            pixel: fn() {
+                let fade = pow(clamp(1.0 - self.pos.y, 0.0, 1.0), 1.7)
+                return Pal.premul(vec4(self.color.rgb, self.color.a * fade))
+            }
+        }
+    }
+
+    mod.widgets.GlassScrollEdgeBottom = mod.widgets.GlassScrollEdge{
+        draw_bg +: {
+            pixel: fn() {
+                let fade = pow(clamp(self.pos.y, 0.0, 1.0), 1.7)
+                return Pal.premul(vec4(self.color.rgb, self.color.a * fade))
+            }
+        }
+    }
+
     mod.widgets.GlassPanel = set_type_default() do mod.widgets.GlassPanelBase{
         show_bg: true
         draw_bg +: {

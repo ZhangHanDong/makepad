@@ -74,3 +74,9 @@ The following are not enough to claim scroll edge glass support:
 4. Validate with aichat long conversation scrolling.
 5. Only after that, decide whether platform-native scroll edge integration is
    needed.
+
+## Current Implementation Step
+
+`GlassScrollEdge` and `GlassScrollEdgeBottom` now exist as Makepad-rendered
+semantic widgets. They are not native panels and are not yet wired to aichat
+scroll-state wiring.
