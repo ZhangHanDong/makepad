@@ -97,6 +97,24 @@ script_mod! {
         spacing: 20.0
     }
 
+    mod.widgets.GlassSeparator = mod.widgets.View{
+        width: Fill
+        height: 1
+        show_bg: true
+        draw_bg +: {
+            color: instance(#xEAD8B838)
+        }
+    }
+
+    mod.widgets.GlassVSeparator = mod.widgets.View{
+        width: 1
+        height: Fill
+        show_bg: true
+        draw_bg +: {
+            color: instance(#xEAD8B838)
+        }
+    }
+
     mod.widgets.GlassPanel = set_type_default() do mod.widgets.GlassPanelBase{
         show_bg: true
         draw_bg +: {

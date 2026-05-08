@@ -946,10 +946,10 @@ script_mod! {
                         }
                     }
 
-                    SolidView {
-                        width: 1
-                        height: Fill
-                        draw_bg.color: #xEAD8B81E
+                    GlassVSeparator {
+                        draw_bg +: {
+                            color: #xEAD8B81E
+                        }
                     }
 
                     main_area := GlassPanel {
