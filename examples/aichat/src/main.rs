@@ -1316,6 +1316,7 @@ enum GlassBackendRequest {
     ShaderBackdropRefractionProof,
     ShaderBackdropInteriorNoChroma,
     ShaderBackdropInterior,
+    AppleNativeInterleave,
     MacosNative(MacosGlassStyle),
     Auto,
 }
@@ -1446,10 +1447,7 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
             GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
             None,
         ),
-        Some("apple-native-interleave") => (
-            GlassBackendRequest::Shader,
-            Some("AppleNativeInterleave requires renderer split; falling back to shader"),
-        ),
+        Some("apple-native-interleave") => (GlassBackendRequest::AppleNativeInterleave, None),
         Some("auto") => (GlassBackendRequest::Auto, None),
         Some(_) => (
             GlassBackendRequest::Shader,
@@ -1562,6 +1560,10 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
                 }),
             },
             warning: None,
+        },
+        GlassBackendRequest::AppleNativeInterleave => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: Some("AppleNativeInterleave requires renderer split; falling back to shader"),
         },
         GlassBackendRequest::Auto if native_available => GlassConfigResolution {
             appearance: GlassAppearance {
@@ -6278,10 +6280,7 @@ mod tests {
         );
         assert_eq!(
             parse_glass_backend(Some("apple-native-interleave")),
-            (
-                GlassBackendRequest::Shader,
-                Some("AppleNativeInterleave requires renderer split; falling back to shader")
-            )
+            (GlassBackendRequest::AppleNativeInterleave, None)
         );
         assert_eq!(
             parse_glass_backend(Some("auto")),
@@ -6425,6 +6424,16 @@ mod tests {
         let resolved = resolve_startup_glass_appearance(Some("apple-native-interleave"));
         assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert_eq!(resolved.appearance.backdrop, None);
+        assert_eq!(
+            resolved.warning,
+            Some("AppleNativeInterleave requires renderer split; falling back to shader")
+        );
+    }
+
+    #[test]
+    fn aichat_apple_native_interleave_resolution_requires_renderer_split() {
+        let resolved = resolve_glass_appearance(Some("apple-native-interleave"), true);
+        assert_eq!(resolved.appearance, GlassAppearance::default());
         assert_eq!(
             resolved.warning,
             Some("AppleNativeInterleave requires renderer split; falling back to shader")
