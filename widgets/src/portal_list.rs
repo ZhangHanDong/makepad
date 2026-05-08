@@ -433,6 +433,8 @@ pub struct PortalList {
     tail_adjustment_needed: f64,
     #[rust(false)]
     at_end: bool,
+    #[rust(0.0)]
+    bottom_scroll_remaining: f64,
     #[rust(true)]
     not_filling_viewport: bool,
     #[live(false)]
@@ -553,6 +555,7 @@ impl PortalList {
         // is empty), we preserve the previous value rather than introducing
         // a spurious `false` that would cause downstream consumers to flicker.
         self.not_filling_viewport = false;
+        self.bottom_scroll_remaining = 0.0;
 
         let vi = self.vec_index;
         let mut visible_items = 0;
@@ -589,6 +592,13 @@ impl PortalList {
                 // this guard, `at_end` could become a false positive whenever
                 // a zero-size item appears in the middle of the visible range.
                 let drew_last_item = last_drawn_index == Some(self.range_end.saturating_sub(1));
+                self.bottom_scroll_remaining = if drew_last_item {
+                    last_item_pos
+                        .map(|pos| (pos - viewport.size.index(vi)).max(0.0))
+                        .unwrap_or(0.0)
+                } else {
+                    f64::INFINITY
+                };
 
                 if list[0].index == self.range_start {
                     let mut total = 0.0;
@@ -1275,6 +1285,15 @@ impl PortalList {
         self.visible_items
     }
 
+    /// Returns the scroll distance remaining below the viewport bottom.
+    ///
+    /// `0.0` means the list bottom is visible or the list does not fill the
+    /// viewport. `f64::INFINITY` means the last item was not drawn in the
+    /// current viewport, so callers can treat the bottom edge as fully active.
+    pub fn bottom_scroll_remaining(&self) -> f64 {
+        self.bottom_scroll_remaining
+    }
+
     /// Computes the top position of `target_id` relative to the viewport top
     /// using `first_id`, `first_scroll`, and the height tree.
     ///
@@ -1818,7 +1837,10 @@ impl Widget for PortalList {
                 // (e.g. a button that has been pressed/hovered) will never see the FingerUp,
                 // meaning it'll get stuck in that old pressed/hovered state.
                 Event::TouchUpdate(e) => {
-                    let has_release = e.touches.iter().any(|t| matches!(t.state, TouchState::Stop));
+                    let has_release = e
+                        .touches
+                        .iter()
+                        .any(|t| matches!(t.state, TouchState::Stop));
                     if !has_release {
                         pass_through_to_children = false;
                     }
@@ -2456,6 +2478,14 @@ impl PortalListRef {
             return 0.0;
         };
         inner.first_scroll
+    }
+
+    /// See [`PortalList::bottom_scroll_remaining()`].
+    pub fn bottom_scroll_remaining(&self) -> f64 {
+        let Some(inner) = self.borrow() else {
+            return 0.0;
+        };
+        inner.bottom_scroll_remaining()
     }
 
     /// Returns a compact debug line with the current animated scroll state.

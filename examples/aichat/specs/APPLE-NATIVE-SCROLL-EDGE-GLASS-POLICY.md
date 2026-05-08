@@ -87,6 +87,9 @@ viewport.
 
 Step 61 makes top edge opacity continuously follow the negative
 `PortalList::scroll_position()` while the first item remains visible, then caps
-opacity once `first_id > 0`. Bottom edge opacity remains binary because
-`PortalList` currently exposes whether further items exist below the viewport,
-but not the bottom distance needed for a continuous ramp.
+opacity once `first_id > 0`.
+
+Step 62 exposes `PortalListRef::bottom_scroll_remaining()` and uses it to ramp
+bottom edge opacity continuously. If the last item is not drawn, the remaining
+distance is treated as `f64::INFINITY`, which keeps the bottom edge at full
+strength without requiring per-row native panels.

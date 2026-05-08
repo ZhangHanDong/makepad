@@ -59,7 +59,7 @@ The current production path remains:
   behavior remains future work.
 - `GlassScrollEdge` exists and is wired into aichat. Visibility follows
   `PortalList` state. Top edge opacity follows scroll offset; bottom edge
-  opacity remains binary until `PortalList` exposes bottom distance.
+  opacity follows `PortalListRef::bottom_scroll_remaining()`.
 
 ### Fullscreen
 

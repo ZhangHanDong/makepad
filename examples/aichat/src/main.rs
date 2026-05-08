@@ -1650,6 +1650,7 @@ fn chat_scroll_edge_alpha(
     visibility: ChatScrollEdgeVisibility,
     first_id: usize,
     first_scroll: f64,
+    bottom_scroll_remaining: f64,
 ) -> ChatScrollEdgeAlpha {
     let top = if !visibility.top {
         0.0
@@ -1659,10 +1660,13 @@ fn chat_scroll_edge_alpha(
         ((-first_scroll) / GLASS_SCROLL_EDGE_FADE_DISTANCE).clamp(0.0, 1.0)
             * GLASS_SCROLL_EDGE_MAX_ALPHA
     };
-    let bottom = if visibility.bottom {
-        GLASS_SCROLL_EDGE_MAX_ALPHA
-    } else {
+    let bottom = if !visibility.bottom {
         0.0
+    } else if bottom_scroll_remaining.is_finite() {
+        (bottom_scroll_remaining / GLASS_SCROLL_EDGE_FADE_DISTANCE).clamp(0.0, 1.0)
+            * GLASS_SCROLL_EDGE_MAX_ALPHA
+    } else {
+        GLASS_SCROLL_EDGE_MAX_ALPHA
     };
 
     ChatScrollEdgeAlpha { top, bottom }
@@ -4381,7 +4385,12 @@ impl App {
             first_scroll,
             list.further_items_bellow_exist(),
         );
-        let edge_alpha = chat_scroll_edge_alpha(edge_visibility, first_id, first_scroll);
+        let edge_alpha = chat_scroll_edge_alpha(
+            edge_visibility,
+            first_id,
+            first_scroll,
+            list.bottom_scroll_remaining(),
+        );
         let top_color = vec4(
             234.0 / 255.0,
             216.0 / 255.0,
@@ -5928,8 +5937,8 @@ mod tests {
         ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
         GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
         ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
-        GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
+        GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
+        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
 
     #[test]
@@ -6283,6 +6292,7 @@ mod tests {
             },
             0,
             0.0,
+            0.0,
         );
 
         assert_eq!(alpha.top, 0.0);
@@ -6298,6 +6308,7 @@ mod tests {
             },
             0,
             -12.0,
+            0.0,
         );
 
         assert!(alpha.top > 0.0);
@@ -6314,10 +6325,28 @@ mod tests {
             },
             1,
             0.0,
+            GLASS_SCROLL_EDGE_FADE_DISTANCE,
         );
 
         assert_eq!(alpha.top, GLASS_SCROLL_EDGE_MAX_ALPHA);
         assert_eq!(alpha.bottom, GLASS_SCROLL_EDGE_MAX_ALPHA);
+    }
+
+    #[test]
+    fn aichat_scroll_edge_alpha_ramps_bottom_from_remaining_distance() {
+        let alpha = chat_scroll_edge_alpha(
+            ChatScrollEdgeVisibility {
+                top: false,
+                bottom: true,
+            },
+            0,
+            0.0,
+            GLASS_SCROLL_EDGE_FADE_DISTANCE / 4.0,
+        );
+
+        assert_eq!(alpha.top, 0.0);
+        assert!(alpha.bottom > 0.0);
+        assert!(alpha.bottom < GLASS_SCROLL_EDGE_MAX_ALPHA);
     }
 
     #[test]
