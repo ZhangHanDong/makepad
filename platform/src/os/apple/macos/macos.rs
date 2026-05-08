@@ -200,6 +200,7 @@ fn install_native_interleave_layer_probe(
         ca_layer: probe_layer,
         drawable_checked: false,
         lower_scene_route_logged: false,
+        lower_scene_role_logged: false,
     }
 }
 
@@ -228,6 +229,7 @@ struct MacosInterleaveProbeLayer {
     ca_layer: ObjcId,
     drawable_checked: bool,
     lower_scene_route_logged: bool,
+    lower_scene_role_logged: bool,
 }
 
 #[derive(Clone)]
@@ -419,6 +421,32 @@ impl MetalWindow {
             Some(lower_scene_drawable)
         }
     }
+
+    fn next_lower_scene_role_drawable(&mut self) -> Option<ObjcId> {
+        let Some(probe) = self.native_interleave_probe_layer.as_mut() else {
+            return None;
+        };
+        if probe.host_view.is_none() {
+            return None;
+        }
+        unsafe {
+            let lower_scene_drawable: ObjcId = msg_send![probe.ca_layer, nextDrawable];
+            if lower_scene_drawable == nil {
+                if !probe.lower_scene_role_logged {
+                    probe.lower_scene_role_logged = true;
+                    crate::log!(
+                        "[liquid-glass] native-interleave-layer-probe lower-scene-role=failed"
+                    );
+                }
+                return None;
+            }
+            if !probe.lower_scene_role_logged {
+                probe.lower_scene_role_logged = true;
+                crate::log!("[liquid-glass] native-interleave-layer-probe lower-scene-role=draw");
+            }
+            Some(lower_scene_drawable)
+        }
+    }
 }
 
 fn defer_platform_op(platform_ops: &mut Vec<CxOsOp>, op: CxOsOp) -> bool {
@@ -602,6 +630,25 @@ impl Cx {
         }
     }
 
+    fn draw_primary_window_pass(
+        &mut self,
+        draw_pass_id: DrawPassId,
+        metal_window: &mut MetalWindow,
+        metal_cx: &mut MetalCx,
+        time_now: f32,
+    ) {
+        let drawable: ObjcId = unsafe { msg_send![metal_window.ca_layer, nextDrawable] };
+        if drawable == nil {
+            return;
+        }
+        self.passes[draw_pass_id].set_time(time_now);
+        if metal_window.is_resizing {
+            self.draw_pass(draw_pass_id, metal_cx, DrawPassMode::Resizing(drawable));
+        } else {
+            self.draw_pass(draw_pass_id, metal_cx, DrawPassMode::Drawable(drawable));
+        }
+    }
+
     pub fn event_loop(cx: Rc<RefCell<Cx>>) {
         cx.borrow_mut().self_ref = Some(cx.clone());
         cx.borrow_mut().os_type = OsType::Macos;
@@ -662,40 +709,43 @@ impl Cx {
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
                         //let dpi_factor = metal_window.window_geom.dpi_factor;
-                        match self.macos_surface_role_for_window_pass(*draw_pass_id, metal_window) {
-                            MacosMetalSurfaceRole::Primary => {}
-                            MacosMetalSurfaceRole::LowerScene | MacosMetalSurfaceRole::UpperUi => {}
-                        }
+                        let surface_role =
+                            self.macos_surface_role_for_window_pass(*draw_pass_id, metal_window);
                         metal_window.resize_core_animation_layer(metal_cx);
-                        if let Some(lower_scene_drawable) =
-                            metal_window.next_lower_scene_mirror_drawable()
-                        {
-                            self.passes[*draw_pass_id].set_time(time_now);
-                            self.draw_pass(
-                                *draw_pass_id,
-                                metal_cx,
-                                DrawPassMode::Drawable(lower_scene_drawable),
-                            );
+                        match surface_role {
+                            MacosMetalSurfaceRole::LowerScene => {
+                                if let Some(lower_scene_drawable) =
+                                    metal_window.next_lower_scene_role_drawable()
+                                {
+                                    self.passes[*draw_pass_id].set_time(time_now);
+                                    self.draw_pass(
+                                        *draw_pass_id,
+                                        metal_cx,
+                                        DrawPassMode::Drawable(lower_scene_drawable),
+                                    );
+                                    continue;
+                                }
+                            }
+                            MacosMetalSurfaceRole::Primary => {
+                                if let Some(lower_scene_drawable) =
+                                    metal_window.next_lower_scene_mirror_drawable()
+                                {
+                                    self.passes[*draw_pass_id].set_time(time_now);
+                                    self.draw_pass(
+                                        *draw_pass_id,
+                                        metal_cx,
+                                        DrawPassMode::Drawable(lower_scene_drawable),
+                                    );
+                                }
+                            }
+                            MacosMetalSurfaceRole::UpperUi => {}
                         }
-                        let drawable: ObjcId =
-                            unsafe { msg_send![metal_window.ca_layer, nextDrawable] };
-                        if drawable == nil {
-                            return;
-                        }
-                        self.passes[*draw_pass_id].set_time(time_now);
-                        if metal_window.is_resizing {
-                            self.draw_pass(
-                                *draw_pass_id,
-                                metal_cx,
-                                DrawPassMode::Resizing(drawable),
-                            );
-                        } else {
-                            self.draw_pass(
-                                *draw_pass_id,
-                                metal_cx,
-                                DrawPassMode::Drawable(drawable),
-                            );
-                        }
+                        self.draw_primary_window_pass(
+                            *draw_pass_id,
+                            metal_window,
+                            metal_cx,
+                            time_now,
+                        );
                     }
                 }
                 CxDrawPassParent::DrawPass(_) => {
