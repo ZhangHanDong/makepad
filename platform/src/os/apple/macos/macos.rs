@@ -2,7 +2,7 @@ use {
     crate::{
         cx::{Cx, OsType},
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
-        draw_pass::CxDrawPassParent,
+        draw_pass::{CxDrawPassParent, DrawPassId},
         event::{
             drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             video_playback::{
@@ -464,6 +464,16 @@ const KEEP_ALIVE_COUNT: usize = 5;
 const TIMER0_DOWNSHIFT_IDLE_SECS: f64 = 0.2;
 
 impl Cx {
+    fn macos_surface_role_for_window_pass(
+        &self,
+        draw_pass_id: DrawPassId,
+        metal_window: &MetalWindow,
+    ) -> MacosMetalSurfaceRole {
+        let _ = draw_pass_id;
+        let _current_role = metal_window.surface_role;
+        MacosMetalSurfaceRole::Primary
+    }
+
     pub fn event_loop(cx: Rc<RefCell<Cx>>) {
         cx.borrow_mut().self_ref = Some(cx.clone());
         cx.borrow_mut().os_type = OsType::Macos;
@@ -524,7 +534,7 @@ impl Cx {
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
                         //let dpi_factor = metal_window.window_geom.dpi_factor;
-                        match metal_window.surface_role {
+                        match self.macos_surface_role_for_window_pass(*draw_pass_id, metal_window) {
                             MacosMetalSurfaceRole::Primary => {}
                             MacosMetalSurfaceRole::LowerScene | MacosMetalSurfaceRole::UpperUi => {}
                         }
