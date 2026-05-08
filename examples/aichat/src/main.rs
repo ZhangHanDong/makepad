@@ -1601,6 +1601,30 @@ fn native_display_backing_scale_changed(old_dpi: f64, new_dpi: f64) -> bool {
     (old_dpi - new_dpi).abs() > 0.001
 }
 
+fn native_spacing_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("animate" | "1" | "true"))
+}
+
+fn native_spacing_probe_enabled() -> bool {
+    native_spacing_probe_enabled_from_value(
+        std::env::var("AICHAT_NATIVE_SPACING_PROBE").ok().as_deref(),
+    )
+}
+
+fn native_spacing_probe_spacing_for_frame(frame: u32) -> f64 {
+    let phase = frame % 120;
+    let t = if phase <= 60 {
+        phase as f64 / 60.0
+    } else {
+        (120 - phase) as f64 / 60.0
+    };
+    12.0 + 24.0 * t
+}
+
+fn native_spacing_probe_should_continue(frame: u32) -> bool {
+    frame < 120
+}
+
 fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active: bool) -> f64 {
     if active {
         return 1.0;
@@ -4049,6 +4073,12 @@ pub struct App {
     #[rust]
     fullscreen_native_restore_appearance: Option<GlassAppearance>,
     #[rust]
+    native_spacing_probe_active: bool,
+    #[rust]
+    native_spacing_probe_frame: u32,
+    #[rust]
+    native_spacing_probe_next_frame: NextFrame,
+    #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
     shader_backdrop_scene_texture: Option<Texture>,
@@ -5224,6 +5254,22 @@ impl App {
         );
     }
 
+    fn apply_native_spacing_probe(&mut self, cx: &mut Cx) {
+        let spacing = native_spacing_probe_spacing_for_frame(self.native_spacing_probe_frame);
+        let mut glass_container = self.ui.widget(cx, ids!(glass_container));
+        script_apply_eval!(cx, glass_container, {
+            spacing: #(spacing)
+        });
+        if self.native_spacing_probe_frame % 15 == 0 {
+            log!(
+                "[liquid-glass] native-spacing-animation-probe frame={} spacing={:.3}",
+                self.native_spacing_probe_frame,
+                spacing
+            );
+        }
+        self.ui.redraw(cx);
+    }
+
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         AICHAT_NATIVE_GLASS_ACTIVE.store(
@@ -5736,6 +5782,34 @@ impl MatchEvent for App {
             Animate::No,
         );
         self.apply_glass_opacity(cx, initial_glass_opacity);
+        self.native_spacing_probe_active = native_spacing_probe_enabled();
+        self.native_spacing_probe_frame = 0;
+        if self.native_spacing_probe_active {
+            log!("[liquid-glass] native-spacing-animation-probe=start");
+            self.apply_native_spacing_probe(cx);
+            self.native_spacing_probe_next_frame = cx.new_next_frame();
+        }
+    }
+
+    fn handle_next_frame(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
+        if !self.native_spacing_probe_active {
+            return;
+        }
+        if !event.set.contains(&self.native_spacing_probe_next_frame) {
+            return;
+        }
+
+        self.native_spacing_probe_frame = self.native_spacing_probe_frame.wrapping_add(1);
+        self.apply_native_spacing_probe(cx);
+        if native_spacing_probe_should_continue(self.native_spacing_probe_frame) {
+            self.native_spacing_probe_next_frame = cx.new_next_frame();
+        } else {
+            self.native_spacing_probe_active = false;
+            log!(
+                "[liquid-glass] native-spacing-animation-probe=stop frame={}",
+                self.native_spacing_probe_frame
+            );
+        }
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
@@ -5930,13 +6004,14 @@ mod tests {
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
-        native_display_backing_scale_changed, parse_glass_backend, render_state_templates,
-        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
-        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
-        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
-        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_display_backing_scale_changed, native_spacing_probe_enabled_from_value,
+        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
+        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
+        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
+        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
+        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
+        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6201,6 +6276,29 @@ mod tests {
     fn aichat_native_display_change_probe_ignores_jitter() {
         assert!(!native_display_backing_scale_changed(2.0, 2.0005));
         assert!(!native_display_backing_scale_changed(1.0004, 1.0));
+    }
+
+    #[test]
+    fn aichat_native_spacing_probe_env_accepts_animate_values() {
+        assert!(native_spacing_probe_enabled_from_value(Some("animate")));
+        assert!(native_spacing_probe_enabled_from_value(Some("1")));
+        assert!(native_spacing_probe_enabled_from_value(Some("true")));
+        assert!(!native_spacing_probe_enabled_from_value(None));
+        assert!(!native_spacing_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_spacing_probe_spacing_ping_pongs() {
+        assert_eq!(native_spacing_probe_spacing_for_frame(0), 12.0);
+        assert_eq!(native_spacing_probe_spacing_for_frame(60), 36.0);
+        assert_eq!(native_spacing_probe_spacing_for_frame(120), 12.0);
+    }
+
+    #[test]
+    fn aichat_native_spacing_probe_has_frame_limit() {
+        assert!(native_spacing_probe_should_continue(0));
+        assert!(native_spacing_probe_should_continue(119));
+        assert!(!native_spacing_probe_should_continue(120));
     }
 
     #[test]

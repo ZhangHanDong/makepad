@@ -45,8 +45,10 @@ The current production path remains:
 - Logs identify the container id and updated spacing.
 - Resize after an animated spacing change does not leave stale panels.
 - The current Step 56 spacing probe verifies batch invalidation and logs
-  `native-container-spacing`, but it does not implement animated morph
-  transitions.
+  `native-container-spacing`.
+- Step 63 adds the `makepad-example-aichat-macos-native-clear-spacing-probe`
+  Studio runnable and `AICHAT_NATIVE_SPACING_PROBE=animate` app-side animation
+  to exercise repeated native spacing updates.
 
 ### Scroll edge glass
 
