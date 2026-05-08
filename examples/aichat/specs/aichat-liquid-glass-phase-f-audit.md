@@ -2,11 +2,11 @@
 
 ## Status
 
-Phase F is partially landed. The current branch now has a reusable semantic
-layer for the main glass controls and aichat surfaces, while native interactive
-AppKit/UIKit controls remain intentionally deferred.
+Phase F is landed for Makepad-rendered semantic controls and structural glass
+surfaces. Native interactive AppKit/UIKit controls remain intentionally
+deferred.
 
-This audit is based on source inspection after commit `25072c86`.
+This audit is based on current branch source inspection.
 
 ## Implemented Semantic Widgets
 
@@ -22,6 +22,8 @@ Source: `widgets/src/glass_panel.rs`.
 | `GlassPrimaryButton` | `GlassButton` | Prominent commit/send button. |
 | `GlassNavButton` | `GlassButton` | Sidebar navigation row button. |
 | `GlassUtilityButton` | `GlassButton` | Low-emphasis copy/delete/cancel button. |
+| `GlassShell` | `GlassPanel` | Outer app shell surface; may opt into native descriptors. |
+| `GlassMainSurface` | `GlassPanel` | Main content surface; may opt into native descriptors. |
 | `GlassComposer` | `GlassPanel` | Input composer surface; may opt into native descriptors. |
 | `GlassSidebar` | `GlassPanel` | Persistent navigation surface; may opt into native descriptors. |
 | `GlassCard` | `RoundedView` | Message/readability surface; no per-message native panels. |
@@ -38,6 +40,8 @@ Source: `examples/aichat/src/main.rs`.
 | `SendButton` | `GlassPrimaryButton` | Keeps the local circular send-button shader. |
 | sidebar nav rows | `GlassNavButton` | Covers sidebar navigation and settings controls. |
 | utility actions | `GlassUtilityButton` | Covers cancel, copy, and delete controls. |
+| `app_shell` | `GlassShell` | Structural outer native panel; one of the four native panels. |
+| `main_area` | `GlassMainSurface` | Structural main native panel; one of the four native panels. |
 | `User` / `Assistant` templates | `GlassCard` | Preserves rounded readability card behavior. |
 | `sidebar` | `GlassSidebar` | Keeps native descriptor settings; one of the four native panels. |
 | `composer` | `GlassComposer` | Keeps native descriptor settings; one of the four native panels. |
@@ -55,19 +59,11 @@ Recommended follow-up:
 - Keep message utility buttons Makepad-rendered; do not make them native
   interactive controls in v4.1/v4.2.
 
-## GlassPanel Exceptions
+## Direct GlassPanel Usage
 
-These remain direct `GlassPanel` users in aichat:
-
-- `app_shell`
-- `main_area`
-
-Current classification:
-
-- Keep both direct for now. They are structural native panels, not controls.
-- They are part of the four-panel AppleNativeUnderlay proof and should not be
-  converted to per-control semantic components until a `GlassShell` /
-  `GlassMainSurface` naming step is explicitly scoped.
+No remaining app-local direct `GlassPanel` usage is known in the hand-authored
+aichat UI surface. Structural panels now use `GlassShell`, `GlassMainSurface`,
+`GlassSidebar`, and `GlassComposer`.
 
 ## Other Local Glass Controls
 
@@ -87,15 +83,6 @@ phase. They must not be inferred from the existence of these semantic aliases.
 
 ## Completion Assessment
 
-Phase F is sufficient to proceed to the next major route work when:
-
-- `GlassNavButton` and `GlassUtilityButton` are either implemented or explicitly
-  deferred.
-- `app_shell` and `main_area` direct `GlassPanel` usage is either renamed into
-  structural semantic surfaces or documented as permanent low-level native
-  panel usage.
-- The v4 spec status table is updated from "Phase F-I future work" to reflect
-  the landed Phase F semantic layer.
-
-Until those are done, Phase F should be considered mostly implemented but not
-fully closed.
+Phase F is closed for the current AppleNativeUnderlay route. Remaining native
+button work belongs to a later explicit native interactive-control phase, not to
+the Makepad-rendered semantic layer.

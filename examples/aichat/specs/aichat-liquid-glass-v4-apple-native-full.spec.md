@@ -823,7 +823,8 @@ Status as of this branch:
 | Phase C | Landed for macOS backend plumbing | `CxOsOp::SetNativeGlassBatch`, macOS installer, non-macOS no-op handlers, Step 03 spec, commit `b09029c7` |
 | Phase D | Landed for widget descriptor export | `GlassContainer`, opt-in `GlassPanel.native`, widget collector tests, Step 04 spec, commit `77781499` |
 | Phase E | Landed for aichat wiring | single `glass_container`, four native panels, substrate-gated native toggle, Step 05 spec, commit `9c776f3e` |
-| Phase F-I | Future work | controls, UIKit backend, advanced behavior, and popup/modal glass remain unimplemented |
+| Phase F | Landed for Makepad-rendered semantic controls | `GlassButton`, variants, separators, toolbar, structural surfaces, native button research, and Phase F audit |
+| Phase G-I | Future work | UIKit backend, advanced native behavior, and popup/modal glass remain unimplemented |
 
 Studio visual validation remains pending. The branch has compile/unit-test
 coverage for the Rust path, but native glass visibility still requires a

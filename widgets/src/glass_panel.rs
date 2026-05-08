@@ -435,6 +435,51 @@ script_mod! {
         }
     }
 
+    mod.widgets.GlassShell = mod.widgets.GlassPanel{
+        width: Fill
+        height: Fill
+        flow: Right
+        padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
+        spacing: 0
+        draw_bg +: {
+            tint_color: #x0D4035
+            tint_alpha: 0.66
+            border_color: #x77DDF2
+            border_alpha: 0.38
+            border_width: 1.0
+            corner_radius: 30.0
+            halo_color: #x77DDF2
+            halo_strength: 0.0
+            halo_radius: 0.0
+            highlight_strength: 0.28
+            highlight_band_height: 58.0
+            chroma_strength: 0.0
+            noise_strength: 0.004
+        }
+    }
+
+    mod.widgets.GlassMainSurface = mod.widgets.GlassPanel{
+        width: Fill
+        height: Fill
+        flow: Down
+        padding: Inset{left: 34 top: 18 right: 34 bottom: 22}
+        spacing: 12
+        draw_bg +: {
+            tint_color: #x0B3B31
+            tint_alpha: 0.70
+            border_color: #xEAD8B8
+            border_alpha: 0.16
+            border_width: 0.0
+            corner_radius: 0.0
+            halo_strength: 0.0
+            halo_radius: 0.0
+            highlight_strength: 0.16
+            highlight_band_height: 56.0
+            chroma_strength: 0.0
+            noise_strength: 0.004
+        }
+    }
+
     mod.widgets.GlassComposer = mod.widgets.GlassPanel{
         flow: Down
         padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
