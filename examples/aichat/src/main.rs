@@ -210,13 +210,9 @@ script_mod! {
         }
     }
 
-    let IconButton = ButtonFlat {
-        width: 36
-        height: 36
-        padding: 0
+    let IconButton = GlassIconButton {
         draw_text +: {
             color: ai_cream
-            text_style +: { font_size: 15 }
         }
         draw_bg +: {
             color: #x08251EB0
@@ -227,19 +223,11 @@ script_mod! {
         }
     }
 
-    let SendButton = ButtonFlat {
-        width: 44
-        height: 44
-        padding: 0
+    let SendButton = GlassPrimaryButton {
         draw_text +: {
             color: ai_ink
-            text_style +: { font_size: 26 }
         }
         draw_bg +: {
-            hover: instance(0.0)
-            down: instance(0.0)
-            focus: instance(0.0)
-            disabled: instance(0.0)
             color: ai_gold
             color_hover: #xFFD98B
             border_color: #xFFF0D277

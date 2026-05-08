@@ -497,6 +497,10 @@ foreground, fill, border, hover, down, and focus colors. Native interactive
 controls are deferred until Makepad has an explicit AppKit/UIKit hit-test and
 event-forwarding policy.
 
+`GlassIconButton` and `GlassPrimaryButton` are Makepad-rendered variants of
+`GlassButton` for compact icon actions and prominent commit/send actions. They
+do not imply AppKit/UIKit button controls in v4.1/v4.2.
+
 ### GlassToolbar
 
 For groups of buttons and small controls.
