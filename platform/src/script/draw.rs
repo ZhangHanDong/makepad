@@ -1,6 +1,7 @@
 use crate::cursor::MouseCursor;
 use crate::draw_list::DrawCallUniforms;
 use crate::draw_list::DrawListUniforms;
+use crate::draw_pass::DrawPassSurfaceRole;
 use crate::draw_pass::DrawPassUniforms;
 use crate::draw_pass::ScriptDrawPass;
 use crate::window::MacosWindowChrome;
@@ -24,6 +25,7 @@ pub fn script_mod(vm: &mut ScriptVm) -> ScriptValue {
     set_script_value_to_api!(vm, draw.MacosWindowChrome);
     set_script_value_to_api!(vm, draw.MacosWindowLevel);
     set_script_value_to_api!(vm, draw.MacosWindowConfig);
+    set_script_value_to_api!(vm, draw.DrawPassSurfaceRole);
 
     let pass_default = ScriptDrawPass::script_api(vm);
     vm.bx

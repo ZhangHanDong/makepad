@@ -111,7 +111,7 @@ pub use {
         draw_matrix::DrawMatrix,
         draw_pass::{
             CxDrawPassParent, CxDrawPassRect, DrawPass, DrawPassClearColor, DrawPassClearDepth,
-            DrawPassId, ScriptDrawPass,
+            DrawPassId, DrawPassSurfaceRole, ScriptDrawPass,
         },
         draw_vars::DrawVars,
         event::{

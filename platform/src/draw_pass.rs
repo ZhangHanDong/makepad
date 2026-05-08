@@ -96,6 +96,8 @@ pub struct ScriptDrawPass {
     pub dont_clear: bool,
     #[live]
     pub keep_camera_matrix: bool,
+    #[live(DrawPassSurfaceRole::Primary)]
+    pub surface_role: DrawPassSurfaceRole,
 }
 
 impl std::ops::Deref for ScriptDrawPass {
@@ -117,6 +119,7 @@ impl ScriptHook for ScriptDrawPass {
         vm.host.cx_mut().passes[self.handle.draw_pass_id()].dont_clear = self.dont_clear;
         vm.host.cx_mut().passes[self.handle.draw_pass_id()].keep_camera_matrix =
             self.keep_camera_matrix;
+        vm.host.cx_mut().passes[self.handle.draw_pass_id()].surface_role = self.surface_role;
     }
 }
 
@@ -202,6 +205,14 @@ impl DrawPass {
     pub fn pass_name<'a>(&self, cx: &'a mut Cx) -> &'a str {
         let cxpass = &mut cx.passes[self.draw_pass_id()];
         &cxpass.debug_name
+    }
+
+    pub fn set_surface_role(&self, cx: &mut Cx, surface_role: DrawPassSurfaceRole) {
+        cx.passes[self.draw_pass_id()].surface_role = surface_role;
+    }
+
+    pub fn surface_role(&self, cx: &Cx) -> DrawPassSurfaceRole {
+        cx.passes[self.draw_pass_id()].surface_role
     }
 
     pub fn set_size(&self, cx: &mut Cx, pass_size: Vec2d) {
@@ -401,6 +412,20 @@ pub enum CxDrawPassRect {
     Size(Vec2d),
 }
 
+#[derive(Script, ScriptHook, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawPassSurfaceRole {
+    #[pick]
+    Primary,
+    LowerScene,
+    UpperUi,
+}
+
+impl Default for DrawPassSurfaceRole {
+    fn default() -> Self {
+        Self::Primary
+    }
+}
+
 #[derive(Clone)]
 pub struct CxDrawPass {
     pub debug: bool,
@@ -415,6 +440,7 @@ pub struct CxDrawPass {
     pub dpi_factor: Option<f64>,
     pub main_draw_list_id: Option<DrawListId>,
     pub parent: CxDrawPassParent,
+    pub surface_role: DrawPassSurfaceRole,
     pub paint_dirty: bool,
     pub pass_rect: Option<CxDrawPassRect>,
     pub view_shift: Vec2d,
@@ -443,6 +469,7 @@ impl Default for CxDrawPass {
             view_shift: dvec2(0.0, 0.0),
             view_scale: dvec2(1.0, 1.0),
             parent: CxDrawPassParent::None,
+            surface_role: DrawPassSurfaceRole::Primary,
             paint_dirty: false,
             pass_rect: None,
             os: CxOsPass::default(),

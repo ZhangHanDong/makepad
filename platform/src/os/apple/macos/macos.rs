@@ -2,7 +2,7 @@ use {
     crate::{
         cx::{Cx, OsType},
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
-        draw_pass::{CxDrawPassParent, DrawPassId},
+        draw_pass::{CxDrawPassParent, DrawPassId, DrawPassSurfaceRole},
         event::{
             drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             video_playback::{
@@ -595,7 +595,11 @@ impl Cx {
     ) -> MacosMetalSurfaceRole {
         let _ = draw_pass_id;
         let _current_role = metal_window.surface_role;
-        MacosMetalSurfaceRole::Primary
+        match self.passes[draw_pass_id].surface_role {
+            DrawPassSurfaceRole::Primary => MacosMetalSurfaceRole::Primary,
+            DrawPassSurfaceRole::LowerScene => MacosMetalSurfaceRole::LowerScene,
+            DrawPassSurfaceRole::UpperUi => MacosMetalSurfaceRole::UpperUi,
+        }
     }
 
     pub fn event_loop(cx: Rc<RefCell<Cx>>) {
