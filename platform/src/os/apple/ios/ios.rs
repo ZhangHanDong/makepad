@@ -4,14 +4,15 @@ use {
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
         draw_pass::CxDrawPassParent,
         event::{
+            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             video_playback::{
                 CameraPreviewMode, VideoBufferedRangesEvent, VideoDecodingErrorEvent,
                 VideoPlaybackPreparedEvent, VideoPlaybackResourcesReleasedEvent,
                 VideoSeekableRangesEvent, VideoSource, VideoTextureUpdatedEvent,
                 VideoYuvTexturesReady,
             },
-            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
+            WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
         },
         makepad_live_id::*,
         makepad_objc_sys::objc_block,
@@ -746,9 +747,11 @@ impl Cx {
 
                 // Synthesize internal drag-and-drop events from touch gestures.
                 if self.os.internal_drag_items.is_some() {
-                    if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Stop
-                    }) {
+                    if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Stop)
+                    {
                         if let Some(items) = self.os.internal_drag_items.take() {
                             self.call_event_handler(&Event::Drop(DropEvent {
                                 modifiers: e.modifiers.clone(),
@@ -760,9 +763,11 @@ impl Cx {
                             self.call_event_handler(&Event::DragEnd);
                             self.drag_drop.cycle_drag();
                         }
-                    } else if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Move
-                    }) {
+                    } else if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Move)
+                    {
                         if let Some(items) = self.os.internal_drag_items.as_ref() {
                             self.call_event_handler(&Event::Drag(DragEvent {
                                 modifiers: e.modifiers.clone(),
@@ -954,6 +959,21 @@ impl Cx {
                     IosApp::hide_selection_handles();
                 }
                 CxOsOp::AccessibilityUpdate(_) => {}
+                CxOsOp::SetNativeGlassBatch(batch) => {
+                    crate::log!(
+                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason=uikit-backend-pending-sdk-validation containers={} panels_requested={}",
+                        batch.containers.len(),
+                        batch.visible_panel_count()
+                    );
+                    self.call_event_handler(&Event::WindowNativeSubstrateResolved(
+                        WindowNativeSubstrateResolvedEvent {
+                            window_id: batch.window_id,
+                            state: WindowNativeSubstrateState::PreflightFailed,
+                            style: None,
+                            reason: "uikit-backend-pending-sdk-validation",
+                        },
+                    ));
+                }
                 CxOsOp::FullscreenWindow(_window_id) => {
                     IosApp::set_fullscreen(true);
                 }
@@ -1008,9 +1028,7 @@ impl Cx {
                     if let Some(mtk_view) = mtk_view {
                         let host_view: ObjcId = unsafe { msg_send![mtk_view, superview] };
                         if host_view != nil {
-                            if let Some(browser) =
-                                self.os.system_browsers.get_mut(&browser_id)
-                            {
+                            if let Some(browser) = self.os.system_browsers.get_mut(&browser_id) {
                                 browser.update(host_view, rect, visible);
                             }
                         }
