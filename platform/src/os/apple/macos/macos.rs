@@ -78,6 +78,13 @@ fn requested_above_metal_glass_probe_style_from_env() -> Option<MacosNativeGlass
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MacosMetalSurfaceRole {
+    // Current single-surface behavior. Future AppleNativeInterleave work can
+    // split this into lower scene and upper UI roles once draw routing exists.
+    Primary,
+}
+
 #[derive(Clone)]
 pub struct MetalWindow {
     pub window_id: WindowId,
@@ -86,6 +93,7 @@ pub struct MetalWindow {
     pub ca_layer: ObjcId,
     pub cocoa_window: Box<MacosWindow>,
     pub is_resizing: bool,
+    surface_role: MacosMetalSurfaceRole,
 }
 
 impl MetalWindow {
@@ -130,6 +138,7 @@ impl MetalWindow {
             ca_layer,
             window_geom: cocoa_window.get_window_geom(),
             cocoa_window,
+            surface_role: MacosMetalSurfaceRole::Primary,
         }
     }
 
@@ -172,6 +181,7 @@ impl MetalWindow {
             ca_layer,
             window_geom: cocoa_window.get_window_geom(),
             cocoa_window,
+            surface_role: MacosMetalSurfaceRole::Primary,
         }
     }
 
@@ -430,6 +440,9 @@ impl Cx {
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
                         //let dpi_factor = metal_window.window_geom.dpi_factor;
+                        match metal_window.surface_role {
+                            MacosMetalSurfaceRole::Primary => {}
+                        }
                         metal_window.resize_core_animation_layer(&metal_cx);
                         let drawable: ObjcId =
                             unsafe { msg_send![metal_window.ca_layer, nextDrawable] };
