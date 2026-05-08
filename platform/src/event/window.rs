@@ -84,6 +84,8 @@ pub struct WindowClosedEvent {
 pub enum WindowNativeSubstrateStyle {
     MacosGlassRegular,
     MacosGlassClear,
+    IosGlassRegular,
+    IosGlassClear,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +159,13 @@ impl NativeGlassStyle {
         match std::env::var(self.ios_style_override_env_var()) {
             Ok(value) => self.ios_raw_value_from_override(Some(&value)),
             Err(_) => self.default_ios_raw_value(),
+        }
+    }
+
+    pub fn ios_event_style(self) -> WindowNativeSubstrateStyle {
+        match self {
+            Self::Regular => WindowNativeSubstrateStyle::IosGlassRegular,
+            Self::Clear => WindowNativeSubstrateStyle::IosGlassClear,
         }
     }
 }
@@ -564,6 +573,18 @@ mod native_glass_tests {
     fn native_glass_style_maps_to_macos_raw_values() {
         assert_eq!(NativeGlassStyle::Regular.macos_raw_value(), 0);
         assert_eq!(NativeGlassStyle::Clear.macos_raw_value(), 1);
+    }
+
+    #[test]
+    fn native_glass_style_maps_to_ios_event_styles() {
+        assert_eq!(
+            NativeGlassStyle::Regular.ios_event_style(),
+            WindowNativeSubstrateStyle::IosGlassRegular
+        );
+        assert_eq!(
+            NativeGlassStyle::Clear.ios_event_style(),
+            WindowNativeSubstrateStyle::IosGlassClear
+        );
     }
 
     #[test]

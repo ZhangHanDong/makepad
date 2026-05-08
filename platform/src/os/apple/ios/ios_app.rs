@@ -895,14 +895,14 @@ impl IosApp {
                     style.ios_raw_value()
                 );
             }
-            let compat_event = first_style.map(|_| WindowNativeSubstrateResolvedEvent {
+            let compat_event = first_style.map(|style| WindowNativeSubstrateResolvedEvent {
                 window_id: batch.window_id,
                 state: if failed_panels == 0 {
                     WindowNativeSubstrateState::Installed
                 } else {
                     WindowNativeSubstrateState::VisibilityUnverified
                 },
-                style: None,
+                style: Some(style.ios_event_style()),
                 reason: if failed_panels == 0 {
                     "installed-native-ios-glass-batch"
                 } else {
