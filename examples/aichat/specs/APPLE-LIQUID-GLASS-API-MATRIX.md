@@ -41,8 +41,9 @@ Result: the local SDK headers do not expose `UIGlassEffect`,
 classes on the validation OS, which is why the current macOS backend uses
 runtime Objective-C lookup instead of typed SDK bindings.
 
-Phase G consequence: keep iOS in explicit unsupported fallback until an iOS 26
-SDK is locally available for compile-time or runtime selector validation.
+Phase G consequence: keep iOS in explicit unsupported fallback until UIKit
+native view creation is implemented. Step 68 adds Objective-C runtime class
+preflight without using typed iOS 26 SDK symbols.
 
 ## Phase A Result
 
@@ -55,10 +56,17 @@ macOS:
 iOS/iPadOS:
 
 - Blocked on the local SDK. `xcrun --sdk iphoneos --show-sdk-version` reports `18.5`, and that SDK does not expose `UIGlassEffect` or `UIGlassContainerEffect`.
+- Step 68 adds runtime class preflight for `UIVisualEffectView`,
+  `UIGlassContainerEffect`, and `UIGlassEffect`; if those classes exist on an
+  iOS 26 runtime, the backend still reports
+  `uikit-backend-implementation-pending` until native UIKit views are created.
 
 Decision for Phase B:
 
-- Proceed only with macOS-backed Phase B/C work unless an iOS 26 SDK is available for UIKit typed API validation. Shared descriptor design can still use the frozen v4 spec, but UIKit backend implementation is blocked on SDK availability.
+- Proceed only with macOS-backed Phase B/C work unless an iOS 26 SDK/runtime is
+  available for UIKit validation. Shared descriptor design can still use the
+  frozen v4 spec, but UIKit backend implementation remains blocked on native
+  view creation.
 
 ## macOS AppKit
 
@@ -76,9 +84,9 @@ Decision for Phase B:
 
 | API | Kind | Required for v4.1 | Availability evidence | Notes |
 |---|---|---:|---|---|
-| `UIVisualEffectView` | class | yes | Local iPhoneOS 18.5 SDK typecheck reaches UIKit but glass types are missing | UIKit host for visual effects. |
-| `UIGlassEffect` | type | yes | Official Apple docs list `class UIGlassEffect`; local iPhoneOS 18.5 SDK unavailable | Requires iOS 26 SDK validation before implementation. |
-| `UIGlassContainerEffect` | type | yes | Official Apple docs list `class UIGlassContainerEffect`; local iPhoneOS 18.5 SDK unavailable | Requires iOS 26 SDK validation before implementation. |
+| `UIVisualEffectView` | class | yes | Local iPhoneOS 18.5 SDK typecheck reaches UIKit; Step 68 runtime preflight checks class presence | UIKit host for visual effects. |
+| `UIGlassEffect` | type | yes | Official Apple docs list `class UIGlassEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Requires iOS 26 runtime validation before implementation. |
+| `UIGlassContainerEffect` | type | yes | Official Apple docs list `class UIGlassContainerEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Requires iOS 26 runtime validation before implementation. |
 | `UIGlassEffect(style:)` | initializer | yes | Official Apple docs list `init(style: UIGlassEffect.Style)`; local SDK unavailable | Use only after SDK validation. |
 | `UIGlassEffect.isInteractive` | property | future | Official Apple docs list `isInteractive` | v4.1 keeps native panels passthrough; interactive remains future work. |
 | `UIGlassEffect.tintColor` | property | yes | Official Apple docs list `tintColor` | v4.1 tint conversion remains sRGB. |

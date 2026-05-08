@@ -15,7 +15,7 @@ use {
             WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
         },
         makepad_live_id::*,
-        makepad_objc_sys::objc_block,
+        makepad_objc_sys::{objc_block, runtime::objc_getClass},
         media_api::CxMediaApi,
         media_plugin::PlaybackPrepared,
         os::{
@@ -47,6 +47,7 @@ use {
     std::{
         cell::RefCell,
         collections::HashMap,
+        os::raw::c_char,
         rc::Rc,
         sync::{
             mpsc::{channel, Receiver, Sender},
@@ -55,6 +56,54 @@ use {
         time::Instant,
     },
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IosNativeGlassPreflight {
+    reason: &'static str,
+    missing_class: Option<&'static str>,
+}
+
+fn ios_native_glass_required_class_names() -> [&'static str; 3] {
+    [
+        "UIVisualEffectView",
+        "UIGlassContainerEffect",
+        "UIGlassEffect",
+    ]
+}
+
+fn ios_native_glass_preflight_result_from_missing_class(
+    missing_class: Option<&'static str>,
+) -> IosNativeGlassPreflight {
+    IosNativeGlassPreflight {
+        reason: if missing_class.is_some() {
+            "uikit-glass-class-missing"
+        } else {
+            "uikit-backend-implementation-pending"
+        },
+        missing_class,
+    }
+}
+
+fn ios_native_glass_class_name_bytes(class_name: &'static str) -> &'static [u8] {
+    match class_name {
+        "UIVisualEffectView" => b"UIVisualEffectView\0",
+        "UIGlassContainerEffect" => b"UIGlassContainerEffect\0",
+        "UIGlassEffect" => b"UIGlassEffect\0",
+        _ => b"\0",
+    }
+}
+
+fn ios_native_glass_runtime_preflight() -> IosNativeGlassPreflight {
+    for class_name in ios_native_glass_required_class_names() {
+        let class = unsafe {
+            objc_getClass(ios_native_glass_class_name_bytes(class_name).as_ptr() as *const c_char)
+        };
+        if class.is_null() {
+            return ios_native_glass_preflight_result_from_missing_class(Some(class_name));
+        }
+    }
+    ios_native_glass_preflight_result_from_missing_class(None)
+}
 
 pub(crate) struct IosCameraPlayer {
     video_id: LiveId,
@@ -960,8 +1009,11 @@ impl Cx {
                 }
                 CxOsOp::AccessibilityUpdate(_) => {}
                 CxOsOp::SetNativeGlassBatch(batch) => {
+                    let preflight = ios_native_glass_runtime_preflight();
                     crate::log!(
-                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason=uikit-backend-pending-sdk-validation containers={} panels_requested={}",
+                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason={} missing_class={} containers={} panels_requested={}",
+                        preflight.reason,
+                        preflight.missing_class.unwrap_or("none"),
                         batch.containers.len(),
                         batch.visible_panel_count()
                     );
@@ -970,7 +1022,7 @@ impl Cx {
                             window_id: batch.window_id,
                             state: WindowNativeSubstrateState::PreflightFailed,
                             style: None,
-                            reason: "uikit-backend-pending-sdk-validation",
+                            reason: preflight.reason,
                         },
                     ));
                 }
@@ -1607,5 +1659,38 @@ impl Default for PermissionResultChannel {
     fn default() -> Self {
         let (sender, receiver) = channel();
         Self { sender, receiver }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ios_native_glass_required_classes_include_visual_effect_and_glass() {
+        assert_eq!(
+            ios_native_glass_required_class_names(),
+            [
+                "UIVisualEffectView",
+                "UIGlassContainerEffect",
+                "UIGlassEffect"
+            ]
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_preflight_reports_missing_class_reason() {
+        let preflight = ios_native_glass_preflight_result_from_missing_class(Some("UIGlassEffect"));
+
+        assert_eq!(preflight.reason, "uikit-glass-class-missing");
+        assert_eq!(preflight.missing_class, Some("UIGlassEffect"));
+    }
+
+    #[test]
+    fn ios_native_glass_preflight_reports_implementation_pending() {
+        let preflight = ios_native_glass_preflight_result_from_missing_class(None);
+
+        assert_eq!(preflight.reason, "uikit-backend-implementation-pending");
+        assert_eq!(preflight.missing_class, None);
     }
 }
