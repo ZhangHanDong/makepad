@@ -41,6 +41,7 @@ Current conclusion: not complete.
 | UIKit SDK gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no `UIGlassEffect` / `UIGlassContainerEffect` | Blocked until iOS 26 SDK/runtime validation. |
 | Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; underlay cannot produce recognizable interior treatment | full native interior Liquid Glass is not implemented. |
 | AppleNativeInterleave backend name | `aichat-liquid-glass-step-48-native-interleave-backend-guard.spec`; `AICHAT_GLASS_BACKEND=apple-native-interleave` falls back to shader with a renderer-split warning | Guarded as reserved, not implemented. |
+| AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md` | Requirements recorded; no prototype implementation yet. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals | Separate route, not full Apple-native support. |
 | Phase H advanced behavior | v4 spec lists animated spacing, scroll edge glass, fullscreen/multi-display, inactive-window behavior | Phase H is not implemented. |
 | Phase I popup/modal glass | v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I is not implemented. |
