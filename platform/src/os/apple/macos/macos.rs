@@ -78,6 +78,16 @@ fn requested_above_metal_glass_probe_style_from_env() -> Option<MacosNativeGlass
     }
 }
 
+fn requested_native_interleave_layer_probe_from_env() -> bool {
+    matches!(
+        std::env::var("AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true") | Some("on")
+    )
+}
+
 fn new_macos_ca_metal_layer(metal_cx: &MetalCx, delegate: ObjcId) -> ObjcId {
     let ca_layer: ObjcId = unsafe { msg_send![class!(CAMetalLayer), new] };
     unsafe {
@@ -97,6 +107,32 @@ fn new_macos_ca_metal_layer(metal_cx: &MetalCx, delegate: ObjcId) -> ObjcId {
     ca_layer
 }
 
+fn macos_surface_frame(inner_size: Vec2d) -> NSRect {
+    NSRect {
+        origin: NSPoint { x: 0.0, y: 0.0 },
+        size: NSSize {
+            width: inner_size.x.max(0.0),
+            height: inner_size.y.max(0.0),
+        },
+    }
+}
+
+fn install_native_interleave_layer_probe(
+    parent_layer: ObjcId,
+    metal_cx: &MetalCx,
+    delegate: ObjcId,
+    inner_size: Vec2d,
+) -> ObjcId {
+    let probe_layer = new_macos_ca_metal_layer(metal_cx, delegate);
+    unsafe {
+        let () = msg_send![probe_layer, setHidden: YES];
+        let () = msg_send![probe_layer, setFrame: macos_surface_frame(inner_size)];
+        let () = msg_send![parent_layer, addSublayer: probe_layer];
+    }
+    crate::log!("[liquid-glass] native-interleave-layer-probe state=installed hidden=1");
+    probe_layer
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MacosMetalSurfaceRole {
     // Current single-surface behavior. Future AppleNativeInterleave work can
@@ -113,6 +149,7 @@ pub struct MetalWindow {
     pub cocoa_window: Box<MacosWindow>,
     pub is_resizing: bool,
     surface_role: MacosMetalSurfaceRole,
+    native_interleave_probe_layer: ObjcId,
 }
 
 impl MetalWindow {
@@ -129,6 +166,11 @@ impl MetalWindow {
 
         cocoa_window.init(title, inner_size, position, is_fullscreen, macos_config);
         let ca_layer = new_macos_ca_metal_layer(metal_cx, cocoa_window.view);
+        let native_interleave_probe_layer = if requested_native_interleave_layer_probe_from_env() {
+            install_native_interleave_layer_probe(ca_layer, metal_cx, cocoa_window.view, inner_size)
+        } else {
+            nil
+        };
         unsafe {
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
@@ -145,6 +187,7 @@ impl MetalWindow {
             window_geom: cocoa_window.get_window_geom(),
             cocoa_window,
             surface_role: MacosMetalSurfaceRole::Primary,
+            native_interleave_probe_layer,
         }
     }
 
@@ -159,6 +202,7 @@ impl MetalWindow {
 
         cocoa_window.init_popup(size, position, parent_window);
         let ca_layer = new_macos_ca_metal_layer(metal_cx, cocoa_window.view);
+        let native_interleave_probe_layer = nil;
         unsafe {
             let view = cocoa_window.view;
             let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
@@ -175,6 +219,7 @@ impl MetalWindow {
             window_geom: cocoa_window.get_window_geom(),
             cocoa_window,
             surface_role: MacosMetalSurfaceRole::Primary,
+            native_interleave_probe_layer,
         }
     }
 
@@ -198,6 +243,14 @@ impl MetalWindow {
             unsafe {
                 let () = msg_send![self.ca_layer, setDrawableSize: CGSize {width: cal_size.x, height: cal_size.y}];
                 let () = msg_send![self.ca_layer, setContentsScale: self.window_geom.dpi_factor];
+                if self.native_interleave_probe_layer != nil {
+                    let () = msg_send![self.native_interleave_probe_layer, setDrawableSize: CGSize {width: cal_size.x, height: cal_size.y}];
+                    let () = msg_send![self.native_interleave_probe_layer, setContentsScale: self.window_geom.dpi_factor];
+                    let () = msg_send![
+                        self.native_interleave_probe_layer,
+                        setFrame: macos_surface_frame(self.window_geom.inner_size)
+                    ];
+                }
             }
             true
         } else {
