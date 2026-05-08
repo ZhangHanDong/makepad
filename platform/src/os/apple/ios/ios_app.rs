@@ -55,6 +55,57 @@ thread_local! {
     pub static IOS_APP: RefCell<Option<IosApp>> = RefCell::new(None);
 }
 
+#[cfg(test)]
+mod native_glass_tests {
+    use super::*;
+
+    #[test]
+    fn ios_native_glass_ui_rect_keeps_makepad_logical_coordinates() {
+        let rect = Rect {
+            pos: dvec2(12.0, 34.0),
+            size: dvec2(320.0, 180.0),
+        };
+
+        let ui_rect = IosApp::native_glass_ui_rect_from_makepad_rect(rect);
+
+        assert_eq!(ui_rect.origin.x, 12.0);
+        assert_eq!(ui_rect.origin.y, 34.0);
+        assert_eq!(ui_rect.size.width, 320.0);
+        assert_eq!(ui_rect.size.height, 180.0);
+    }
+
+    #[test]
+    fn ios_native_glass_panel_ui_rect_is_relative_to_container() {
+        let container = Rect {
+            pos: dvec2(10.0, 20.0),
+            size: dvec2(500.0, 400.0),
+        };
+        let panel = Rect {
+            pos: dvec2(42.0, 77.0),
+            size: dvec2(100.0, 48.0),
+        };
+
+        let ui_rect = IosApp::native_glass_panel_ui_rect(panel, container);
+
+        assert_eq!(ui_rect.origin.x, 32.0);
+        assert_eq!(ui_rect.origin.y, 57.0);
+        assert_eq!(ui_rect.size.width, 100.0);
+        assert_eq!(ui_rect.size.height, 48.0);
+    }
+
+    #[test]
+    fn ios_native_glass_style_raw_values_follow_current_apple_order() {
+        assert_eq!(
+            IosApp::ios_native_glass_style_raw_value(NativeGlassStyle::Regular),
+            0
+        );
+        assert_eq!(
+            IosApp::ios_native_glass_style_raw_value(NativeGlassStyle::Clear),
+            1
+        );
+    }
+}
+
 pub fn with_ios_app<R>(f: impl FnOnce(&mut IosApp) -> R) -> R {
     IOS_APP.with_borrow_mut(|app| f(app.as_mut().unwrap()))
 }
@@ -159,6 +210,12 @@ pub struct IosApp {
     last_keyboard_config: Option<crate::ime::TextInputConfig>,
     /// Root view controller for status bar / home indicator control
     pub view_controller: Option<ObjcId>,
+    /// Root UIKit host view. Native glass underlays are inserted here below MTKView.
+    pub native_glass_host_view: Option<ObjcId>,
+    native_glass_container_view: Option<ObjcId>,
+    native_glass_panel_views: Vec<ObjcId>,
+    last_native_glass_batch: Option<NativeGlassBatch>,
+    last_native_glass_batch_result: Option<NativeGlassBatchResult>,
     /// Native camera preview layers keyed by video_id.
     pub camera_preview_layers: HashMap<u64, ObjcId>,
     /// Selection handles overlayed over the MTK view (iOS 15+ custom implementation).
@@ -201,6 +258,11 @@ impl IosApp {
                 keyboard_observer_delegate: None,
                 last_keyboard_config: None,
                 view_controller: None,
+                native_glass_host_view: None,
+                native_glass_container_view: None,
+                native_glass_panel_views: Vec::new(),
+                last_native_glass_batch: None,
+                last_native_glass_batch_result: None,
                 camera_preview_layers: HashMap::new(),
                 selection_handle_start_view: None,
                 selection_handle_end_view: None,
@@ -415,7 +477,442 @@ impl IosApp {
             }
 
             self.text_input_view = Some(text_input_view);
+            self.native_glass_host_view = Some(native_glass_host_view);
             self.mtk_view = Some(mtk_view_obj);
+        }
+    }
+
+    pub(crate) fn native_glass_ui_rect_from_makepad_rect(rect: Rect) -> NSRect {
+        NSRect {
+            origin: NSPoint {
+                x: rect.pos.x,
+                y: rect.pos.y,
+            },
+            size: NSSize {
+                width: rect.size.x,
+                height: rect.size.y,
+            },
+        }
+    }
+
+    pub(crate) fn native_glass_panel_ui_rect(panel_rect: Rect, container_rect: Rect) -> NSRect {
+        let relative = Rect {
+            pos: panel_rect.pos - container_rect.pos,
+            size: panel_rect.size,
+        };
+        Self::native_glass_ui_rect_from_makepad_rect(relative)
+    }
+
+    pub(crate) fn ios_native_glass_style_raw_value(style: NativeGlassStyle) -> i64 {
+        match style {
+            // Keep this in the same declaration order currently used by the macOS
+            // dynamic path: regular, then clear. If UIKit runtime evidence proves a
+            // different order, this single boundary is the value to update.
+            NativeGlassStyle::Regular => 0,
+            NativeGlassStyle::Clear => 1,
+        }
+    }
+
+    fn ios_native_glass_effect_view_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(b"UIVisualEffectView\0".as_ptr() as *const _)
+                as ObjcId
+        }
+    }
+
+    fn ios_native_glass_effect_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(b"UIGlassEffect\0".as_ptr() as *const _)
+                as ObjcId
+        }
+    }
+
+    fn ios_native_glass_container_effect_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(
+                b"UIGlassContainerEffect\0".as_ptr() as *const _
+            ) as ObjcId
+        }
+    }
+
+    fn default_native_glass_tint(style: NativeGlassStyle) -> Vec4f {
+        match style {
+            NativeGlassStyle::Regular => Vec4f {
+                x: 0.86,
+                y: 0.90,
+                z: 0.98,
+                w: 0.10,
+            },
+            NativeGlassStyle::Clear => Vec4f {
+                x: 0.86,
+                y: 0.92,
+                z: 1.00,
+                w: 0.025,
+            },
+        }
+    }
+
+    fn ui_color_from_vec4f(tint: Vec4f) -> ObjcId {
+        unsafe {
+            msg_send![
+                class!(UIColor),
+                colorWithRed: tint.x as f64
+                green: tint.y as f64
+                blue: tint.z as f64
+                alpha: tint.w as f64
+            ]
+        }
+    }
+
+    fn clear_native_glass_batch_views(&mut self) {
+        unsafe {
+            for panel in self.native_glass_panel_views.drain(..) {
+                let () = msg_send![panel, removeFromSuperview];
+            }
+            if let Some(container) = self.native_glass_container_view.take() {
+                let () = msg_send![container, removeFromSuperview];
+            }
+        }
+    }
+
+    fn native_glass_result_for_failure(
+        batch: &NativeGlassBatch,
+        backend_state: NativeGlassBackendState,
+        container_state: NativeGlassInstallState,
+        reason: &'static str,
+    ) -> NativeGlassBatchResult {
+        NativeGlassBatchResult {
+            window_id: batch.window_id,
+            backend_state,
+            containers: batch
+                .containers
+                .iter()
+                .map(|container| {
+                    NativeGlassContainerResult::from_panel_results(
+                        container.id,
+                        container_state,
+                        reason,
+                        container
+                            .panels
+                            .iter()
+                            .filter(|panel| panel.visible)
+                            .map(|panel| NativeGlassPanelResult {
+                                id: panel.id,
+                                state: container_state,
+                                reason,
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn log_native_glass_batch_result(result: &NativeGlassBatchResult) {
+        let panels_installed: usize = result
+            .containers
+            .iter()
+            .map(|container| container.installed_panels)
+            .sum();
+        let panels_failed: usize = result
+            .containers
+            .iter()
+            .map(|container| container.failed_panels)
+            .sum();
+        crate::log!(
+            "[liquid-glass] backend=apple-native-ios state={:?} containers={} panels_installed={} panels_failed={}",
+            result.backend_state,
+            result.containers.len(),
+            panels_installed,
+            panels_failed
+        );
+        for container in &result.containers {
+            crate::log!(
+                "[liquid-glass] ios-container={:?} state={:?} reason={} panels_installed={} panels_failed={}",
+                container.id,
+                container.state,
+                container.reason,
+                container.installed_panels,
+                container.failed_panels
+            );
+        }
+    }
+
+    fn cache_native_glass_batch_result(
+        &mut self,
+        batch: &NativeGlassBatch,
+        result: &NativeGlassBatchResult,
+    ) {
+        self.last_native_glass_batch = Some(batch.clone());
+        self.last_native_glass_batch_result = Some(result.clone());
+    }
+
+    pub(crate) fn install_native_glass_batch(
+        &mut self,
+        batch: NativeGlassBatch,
+    ) -> (
+        NativeGlassBatchResult,
+        Option<WindowNativeSubstrateResolvedEvent>,
+    ) {
+        if let Err(error) = batch.validate_v4_1() {
+            let reason = match error {
+                NativeGlassBatchValidationError::TooManyContainers { .. } => "too-many-containers",
+                NativeGlassBatchValidationError::TooManyVisiblePanels { .. } => {
+                    "too-many-visible-panels"
+                }
+                NativeGlassBatchValidationError::InteractiveHitTestUnsupported { .. } => {
+                    "interactive-hit-test-unsupported"
+                }
+            };
+            let result = Self::native_glass_result_for_failure(
+                &batch,
+                NativeGlassBackendState::Rejected,
+                NativeGlassInstallState::Rejected,
+                reason,
+            );
+            Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
+            return (result, None);
+        }
+
+        let Some(host_view) = self.native_glass_host_view else {
+            let result = Self::native_glass_result_for_failure(
+                &batch,
+                NativeGlassBackendState::Unsupported,
+                NativeGlassInstallState::Failed,
+                "host-view-missing",
+            );
+            Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
+            return (result, None);
+        };
+        let Some(mtk_view) = self.mtk_view else {
+            let result = Self::native_glass_result_for_failure(
+                &batch,
+                NativeGlassBackendState::Unsupported,
+                NativeGlassInstallState::Failed,
+                "mtk-view-missing",
+            );
+            Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
+            return (result, None);
+        };
+
+        let Some(container) = batch.containers.first() else {
+            self.clear_native_glass_batch_views();
+            let result = NativeGlassBatchResult {
+                window_id: batch.window_id,
+                backend_state: NativeGlassBackendState::Installed,
+                containers: Vec::new(),
+            };
+            Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
+            return (result, None);
+        };
+
+        unsafe {
+            let visual_effect_view_class = Self::ios_native_glass_effect_view_class();
+            let glass_effect_class = Self::ios_native_glass_effect_class();
+            let container_effect_class = Self::ios_native_glass_container_effect_class();
+            if visual_effect_view_class.is_null()
+                || glass_effect_class.is_null()
+                || container_effect_class.is_null()
+            {
+                let result = Self::native_glass_result_for_failure(
+                    &batch,
+                    NativeGlassBackendState::Unsupported,
+                    NativeGlassInstallState::Failed,
+                    "class-missing",
+                );
+                Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
+                return (result, None);
+            }
+
+            self.clear_native_glass_batch_views();
+
+            let container_effect: ObjcId = msg_send![container_effect_class, alloc];
+            let container_effect: ObjcId = msg_send![container_effect, init];
+            if container_effect == nil {
+                let result = Self::native_glass_result_for_failure(
+                    &batch,
+                    NativeGlassBackendState::Unsupported,
+                    NativeGlassInstallState::Failed,
+                    "container-effect-init-failed",
+                );
+                Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
+                return (result, None);
+            }
+            let () = msg_send![container_effect, setSpacing: container.spacing];
+
+            let container_frame = Self::native_glass_ui_rect_from_makepad_rect(container.rect);
+            let native_container: ObjcId = msg_send![visual_effect_view_class, alloc];
+            let native_container: ObjcId =
+                msg_send![native_container, initWithEffect: container_effect];
+            if native_container == nil {
+                let result = Self::native_glass_result_for_failure(
+                    &batch,
+                    NativeGlassBackendState::Unsupported,
+                    NativeGlassInstallState::Failed,
+                    "container-view-init-failed",
+                );
+                Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
+                return (result, None);
+            }
+            let () = msg_send![native_container, setFrame: container_frame];
+            let () = msg_send![native_container, setUserInteractionEnabled: NO];
+            // UIViewAutoresizingFlexibleWidth (2) | UIViewAutoresizingFlexibleHeight (16)
+            let () = msg_send![native_container, setAutoresizingMask: 18u64];
+            let container_content_view: ObjcId = msg_send![native_container, contentView];
+            if container_content_view == nil {
+                let () = msg_send![native_container, removeFromSuperview];
+                let result = Self::native_glass_result_for_failure(
+                    &batch,
+                    NativeGlassBackendState::Unsupported,
+                    NativeGlassInstallState::Failed,
+                    "container-content-view-missing",
+                );
+                Self::log_native_glass_batch_result(&result);
+                self.cache_native_glass_batch_result(&batch, &result);
+                return (result, None);
+            }
+
+            let mut panels: Vec<&NativeGlassPanelDescriptor> = container
+                .panels
+                .iter()
+                .filter(|panel| panel.visible)
+                .collect();
+            panels.sort_by_key(|panel| panel.z_order);
+
+            let mut panel_results = Vec::new();
+            for panel in panels {
+                let effect: ObjcId = msg_send![glass_effect_class, alloc];
+                let effect: ObjcId = msg_send![
+                    effect,
+                    initWithStyle: Self::ios_native_glass_style_raw_value(panel.style)
+                ];
+                if effect == nil {
+                    panel_results.push(NativeGlassPanelResult {
+                        id: panel.id,
+                        state: NativeGlassInstallState::Failed,
+                        reason: "panel-effect-init-failed",
+                    });
+                    continue;
+                }
+
+                let tint = panel
+                    .tint
+                    .unwrap_or_else(|| Self::default_native_glass_tint(panel.style));
+                let ui_tint = Self::ui_color_from_vec4f(tint);
+                let () = msg_send![effect, setTintColor: ui_tint];
+                let () = msg_send![effect, setInteractive: NO];
+
+                let panel_view: ObjcId = msg_send![visual_effect_view_class, alloc];
+                let panel_view: ObjcId = msg_send![panel_view, initWithEffect: effect];
+                if panel_view == nil {
+                    panel_results.push(NativeGlassPanelResult {
+                        id: panel.id,
+                        state: NativeGlassInstallState::Failed,
+                        reason: "panel-view-init-failed",
+                    });
+                    continue;
+                }
+
+                let panel_frame = Self::native_glass_panel_ui_rect(panel.rect, container.rect);
+                let () = msg_send![panel_view, setFrame: panel_frame];
+                let () = msg_send![panel_view, setUserInteractionEnabled: NO];
+                let layer: ObjcId = msg_send![panel_view, layer];
+                if layer != nil {
+                    let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
+                    let () = msg_send![layer, setMasksToBounds: YES];
+                    let () = msg_send![layer, setCornerRadius: corner_radius];
+                }
+                let () = msg_send![container_content_view, addSubview: panel_view];
+                self.native_glass_panel_views.push(panel_view);
+                panel_results.push(NativeGlassPanelResult {
+                    id: panel.id,
+                    state: NativeGlassInstallState::Installed,
+                    reason: "installed",
+                });
+            }
+
+            let () = msg_send![
+                host_view,
+                insertSubview: native_container
+                belowSubview: mtk_view
+            ];
+            self.native_glass_container_view = Some(native_container);
+
+            let installed_panels = panel_results
+                .iter()
+                .filter(|panel| panel.state == NativeGlassInstallState::Installed)
+                .count();
+            let failed_panels = panel_results.len().saturating_sub(installed_panels);
+            let container_state = if failed_panels == 0 {
+                NativeGlassInstallState::Installed
+            } else if installed_panels == 0 {
+                NativeGlassInstallState::Failed
+            } else {
+                NativeGlassInstallState::Partial
+            };
+            let backend_state = if failed_panels == 0 {
+                NativeGlassBackendState::Installed
+            } else if installed_panels == 0 {
+                NativeGlassBackendState::Rejected
+            } else {
+                NativeGlassBackendState::Partial
+            };
+            let result_container = NativeGlassContainerResult::from_panel_results(
+                container.id,
+                container_state,
+                if failed_panels == 0 {
+                    "installed"
+                } else {
+                    "partial"
+                },
+                panel_results,
+            );
+            let result = NativeGlassBatchResult {
+                window_id: batch.window_id,
+                backend_state,
+                containers: vec![result_container],
+            };
+            Self::log_native_glass_batch_result(&result);
+            self.cache_native_glass_batch_result(&batch, &result);
+
+            let first_style = container
+                .panels
+                .iter()
+                .find(|panel| panel.visible && panel.hit_test == NativeGlassHitTest::Passthrough)
+                .map(|panel| panel.style);
+            if let Some(style) = first_style {
+                crate::log!(
+                    "[liquid-glass] state=4 substrate=ios-native style={} style_raw={}",
+                    match style {
+                        NativeGlassStyle::Regular => "regular",
+                        NativeGlassStyle::Clear => "clear",
+                    },
+                    Self::ios_native_glass_style_raw_value(style)
+                );
+            }
+            let compat_event = first_style.map(|_| WindowNativeSubstrateResolvedEvent {
+                window_id: batch.window_id,
+                state: if failed_panels == 0 {
+                    WindowNativeSubstrateState::Installed
+                } else {
+                    WindowNativeSubstrateState::VisibilityUnverified
+                },
+                style: None,
+                reason: if failed_panels == 0 {
+                    "installed-native-ios-glass-batch"
+                } else {
+                    "partial-native-ios-glass-batch"
+                },
+            });
+
+            (result, compat_event)
         }
     }
 

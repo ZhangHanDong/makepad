@@ -64,6 +64,12 @@ struct IosNativeGlassPreflight {
     missing_selector: Option<&'static str>,
 }
 
+impl IosNativeGlassPreflight {
+    fn is_supported(self) -> bool {
+        self.missing_class.is_none() && self.missing_selector.is_none()
+    }
+}
+
 fn ios_native_glass_required_class_names() -> [&'static str; 3] {
     [
         "UIVisualEffectView",
@@ -79,7 +85,7 @@ fn ios_native_glass_preflight_result_from_missing_class(
         reason: if missing_class.is_some() {
             "uikit-glass-class-missing"
         } else {
-            "uikit-backend-implementation-pending"
+            "available"
         },
         missing_class,
         missing_selector: None,
@@ -114,7 +120,7 @@ fn ios_native_glass_selector_preflight_result_from_missing_selector(
         reason: if missing_selector.is_some() {
             "uikit-glass-selector-missing"
         } else {
-            "uikit-backend-implementation-pending"
+            "available"
         },
         missing_class: None,
         missing_selector,
@@ -1092,22 +1098,30 @@ impl Cx {
                 CxOsOp::AccessibilityUpdate(_) => {}
                 CxOsOp::SetNativeGlassBatch(batch) => {
                     let preflight = ios_native_glass_runtime_preflight();
-                    crate::log!(
-                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason={} missing_class={} missing_selector={} containers={} panels_requested={}",
-                        preflight.reason,
-                        preflight.missing_class.unwrap_or("none"),
-                        preflight.missing_selector.unwrap_or("none"),
-                        batch.containers.len(),
-                        batch.visible_panel_count()
-                    );
-                    self.call_event_handler(&Event::WindowNativeSubstrateResolved(
-                        WindowNativeSubstrateResolvedEvent {
-                            window_id: batch.window_id,
-                            state: WindowNativeSubstrateState::PreflightFailed,
-                            style: None,
-                            reason: preflight.reason,
-                        },
-                    ));
+                    if !preflight.is_supported() {
+                        crate::log!(
+                            "[liquid-glass] backend=apple-native-ios state=Unsupported reason={} missing_class={} missing_selector={} containers={} panels_requested={}",
+                            preflight.reason,
+                            preflight.missing_class.unwrap_or("none"),
+                            preflight.missing_selector.unwrap_or("none"),
+                            batch.containers.len(),
+                            batch.visible_panel_count()
+                        );
+                        self.call_event_handler(&Event::WindowNativeSubstrateResolved(
+                            WindowNativeSubstrateResolvedEvent {
+                                window_id: batch.window_id,
+                                state: WindowNativeSubstrateState::PreflightFailed,
+                                style: None,
+                                reason: preflight.reason,
+                            },
+                        ));
+                    } else {
+                        let (_result, compat_event) =
+                            with_ios_app(|app| app.install_native_glass_batch(batch));
+                        if let Some(event) = compat_event {
+                            self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
+                        }
+                    }
                 }
                 CxOsOp::FullscreenWindow(_window_id) => {
                     IosApp::set_fullscreen(true);
@@ -1771,10 +1785,10 @@ mod tests {
     }
 
     #[test]
-    fn ios_native_glass_preflight_reports_implementation_pending() {
+    fn ios_native_glass_preflight_reports_available_when_runtime_entries_exist() {
         let preflight = ios_native_glass_preflight_result_from_missing_class(None);
 
-        assert_eq!(preflight.reason, "uikit-backend-implementation-pending");
+        assert_eq!(preflight.reason, "available");
         assert_eq!(preflight.missing_class, None);
         assert_eq!(preflight.missing_selector, None);
     }

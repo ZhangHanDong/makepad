@@ -41,9 +41,10 @@ Result: the local SDK headers do not expose `UIGlassEffect`,
 classes on the validation OS, which is why the current macOS backend uses
 runtime Objective-C lookup instead of typed SDK bindings.
 
-Phase G consequence: keep iOS in explicit unsupported fallback until UIKit
-native view creation is implemented. Step 68 adds Objective-C runtime class
-preflight without using typed iOS 26 SDK symbols.
+Phase G consequence: keep iOS runtime-gated. Step 68 adds Objective-C runtime
+class preflight without using typed iOS 26 SDK symbols. Step 71 adds a dynamic
+UIKit installer skeleton that only creates native glass views after class and
+selector preflight passes.
 
 ## Phase A Result
 
@@ -57,23 +58,22 @@ iOS/iPadOS:
 
 - Blocked on the local SDK. `xcrun --sdk iphoneos --show-sdk-version` reports `18.5`, and that SDK does not expose `UIGlassEffect` or `UIGlassContainerEffect`.
 - Step 68 adds runtime class preflight for `UIVisualEffectView`,
-  `UIGlassContainerEffect`, and `UIGlassEffect`; if those classes exist on an
-  iOS 26 runtime, the backend still reports
-  `uikit-backend-implementation-pending` until native UIKit views are created.
+  `UIGlassContainerEffect`, and `UIGlassEffect`.
 - Step 69 prepares the UIKit underlay host view by making the root controller
-  view a plain `UIView` containing the existing `MTKView`. Native glass views
-  are still not created.
+  view a plain `UIView` containing the existing `MTKView`.
 - Step 70 adds Objective-C selector preflight for the planned UIKit backend:
   `initWithEffect:`, `contentView`, `initWithStyle:`, `setTintColor:`,
-  `setInteractive:`, and `setSpacing:`. Native glass views are still not
-  created.
+  `setInteractive:`, and `setSpacing:`.
+- Step 71 adds the first UIKit installer skeleton: when preflight passes it
+  creates a `UIGlassContainerEffect`, inserts a `UIVisualEffectView` container
+  below `MTKView`, and adds passthrough panel `UIVisualEffectView`s backed by
+  `UIGlassEffect`.
 
 Decision for Phase B:
 
-- Proceed only with macOS-backed Phase B/C work unless an iOS 26 SDK/runtime is
-  available for UIKit validation. Shared descriptor design can still use the
-  frozen v4 spec, but UIKit backend implementation remains blocked on native
-  view creation.
+- Treat iOS as implemented only to the installer-skeleton level until an iOS 26
+  SDK/runtime validates class availability, selector names, raw style values,
+  visual output, rotation, safe area, keyboard, split view, and Stage Manager.
 
 ## macOS AppKit
 
@@ -92,9 +92,9 @@ Decision for Phase B:
 | API | Kind | Required for v4.1 | Availability evidence | Notes |
 |---|---|---:|---|---|
 | `UIVisualEffectView` | class | yes | Local iPhoneOS 18.5 SDK typecheck reaches UIKit; Step 68 runtime preflight checks class presence | UIKit host for visual effects. |
-| `UIGlassEffect` | type | yes | Official Apple docs list `class UIGlassEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Requires iOS 26 runtime validation before implementation. |
-| `UIGlassContainerEffect` | type | yes | Official Apple docs list `class UIGlassContainerEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Requires iOS 26 runtime validation before implementation. |
-| `UIGlassEffect(style:)` | initializer | yes | Official Apple docs list `init(style: UIGlassEffect.Style)`; local SDK unavailable | Use only after SDK validation. |
+| `UIGlassEffect` | type | yes | Official Apple docs list `class UIGlassEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Step 71 uses dynamic runtime lookup; requires iOS 26 runtime validation. |
+| `UIGlassContainerEffect` | type | yes | Official Apple docs list `class UIGlassContainerEffect`; local iPhoneOS 18.5 SDK typed symbols unavailable; Step 68 runtime preflight checks class presence | Step 71 uses dynamic runtime lookup; requires iOS 26 runtime validation. |
+| `UIGlassEffect(style:)` | initializer | yes | Official Apple docs list `init(style: UIGlassEffect.Style)`; local SDK unavailable | Step 71 calls `initWithStyle:` dynamically after selector preflight. |
 | `UIGlassEffect.isInteractive` | property | future | Official Apple docs list `isInteractive` | v4.1 keeps native panels passthrough; interactive remains future work. |
 | `UIGlassEffect.tintColor` | property | yes | Official Apple docs list `tintColor` | v4.1 tint conversion remains sRGB. |
 | `UIGlassContainerEffect.spacing` | property | yes | Official Apple docs list `spacing` | Maps to `GlassContainer.spacing` morph distance. |
@@ -117,8 +117,8 @@ Decision for Phase B:
 |---|---|---:|---|
 | macOS | regular | `0` | Verified in v3 runtime logs; see `aichat-liquid-glass-v1-release-notes.md`. |
 | macOS | clear | `1` | Verified in v3 runtime logs; see `aichat-liquid-glass-v1-release-notes.md`. |
-| iOS/iPadOS | regular | Unknown | Local iPhoneOS 18.5 SDK does not expose `UIGlassEffect`. |
-| iOS/iPadOS | clear | Unknown | Local iPhoneOS 18.5 SDK does not expose `UIGlassEffect`. |
+| iOS/iPadOS | regular | Assumed `0` | Step 71 skeleton uses the same declaration order as macOS; must be confirmed on iOS 26 runtime. |
+| iOS/iPadOS | clear | Assumed `1` | Step 71 skeleton uses the same declaration order as macOS; must be confirmed on iOS 26 runtime. |
 
 ## Selectors and Properties
 
@@ -131,9 +131,9 @@ Decision for Phase B:
 | macOS | `NSGlassEffectView` | `setContentView:` | preferred | Phase A macOS probe: exists=true |
 | macOS | `NSGlassEffectContainerView` | `initWithFrame:` | yes | Phase A macOS probe: exists=true |
 | macOS | `NSGlassEffectContainerView` | `setSpacing:` | yes if present | Phase A macOS probe: exists=true; send succeeds with `20.0` |
-| iOS/iPadOS | `UIGlassContainerEffect` | initializer | yes | Local iPhoneOS 18.5 SDK: unavailable |
-| iOS/iPadOS | `UIGlassEffect` | `init(style:)` | yes | Local iPhoneOS 18.5 SDK: unavailable |
-| iOS/iPadOS | `UIVisualEffectView` | `init(effect:)` | yes | Existing UIKit API; skeleton cannot typecheck because glass effect types are missing |
+| iOS/iPadOS | `UIGlassContainerEffect` | initializer | yes | Step 71 calls `alloc/init` dynamically after class preflight. |
+| iOS/iPadOS | `UIGlassEffect` | `init(style:)` | yes | Step 71 calls `initWithStyle:` dynamically after selector preflight. |
+| iOS/iPadOS | `UIVisualEffectView` | `init(effect:)` | yes | Step 71 creates container and panel visual effect views dynamically. |
 
 ## Color and Units
 

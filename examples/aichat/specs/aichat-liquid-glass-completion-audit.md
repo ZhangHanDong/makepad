@@ -37,8 +37,8 @@ Current conclusion: not complete.
 | aichat wiring | `examples/aichat/src/main.rs` uses one `GlassContainer` and four native panels | Landed for AppleNativeUnderlay. |
 | Phase F semantic layer | `aichat-liquid-glass-phase-f-audit.md`; `GlassButton`, variants, separators, toolbar, shell/sidebar/main/composer/card surfaces | Landed for Makepad-rendered controls. |
 | Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; `APPLE-NATIVE-INTERACTIVE-CONTROLS-POLICY.md`; spec states native controls remain separate from panel descriptors | Research and policy only; not implemented. |
-| UIKit backend | `aichat-liquid-glass-step-44-ios-native-glass-unsupported.spec`; Step 68 adds Objective-C runtime class preflight for `UIVisualEffectView`, `UIGlassContainerEffect`, and `UIGlassEffect`; Step 69 prepares a UIKit underlay host view with `MTKView` as a child; iOS still emits explicit unsupported fallback | UIKit backend is not implemented. |
-| UIKit SDK/runtime gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no typed `UIGlassEffect` / `UIGlassContainerEffect`; Step 68 can distinguish missing runtime classes from `uikit-backend-implementation-pending`; Step 70 adds selector preflight for the planned UIKit backend selectors | Blocked until iOS 26 runtime validation and native UIKit view creation. |
+| UIKit backend | `aichat-liquid-glass-step-44-ios-native-glass-unsupported.spec`; Step 68 adds Objective-C runtime class preflight for `UIVisualEffectView`, `UIGlassContainerEffect`, and `UIGlassEffect`; Step 69 prepares a UIKit underlay host view with `MTKView` as a child; Step 70 adds selector preflight; Step 71 adds a dynamic installer skeleton that creates a container `UIVisualEffectView` below `MTKView` and passthrough panel `UIVisualEffectView`s when preflight passes | Installer skeleton landed; not runtime-validated on iOS 26. |
+| UIKit SDK/runtime gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no typed `UIGlassEffect` / `UIGlassContainerEffect`; Step 68/70 can distinguish missing runtime classes/selectors; Step 71 assumes UIKit raw style values `regular=0` and `clear=1` until validated | Blocked until iOS 26 runtime validation proves selector names, style values, visual output, rotation, safe area, keyboard, split view, and Stage Manager behavior. |
 | Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; underlay cannot produce recognizable interior treatment | full native interior Liquid Glass is not implemented. |
 | AppleNativeInterleave backend name | `aichat-liquid-glass-step-48-native-interleave-backend-guard.spec`; `AICHAT_GLASS_BACKEND=apple-native-interleave` falls back to shader with a renderer-split warning | Guarded as reserved, not implemented. |
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md` | Requirements recorded; no prototype implementation yet. |
@@ -66,7 +66,7 @@ advanced native behavior, or full native interior Liquid Glass.
 
 ## Incomplete Requirements
 
-- UIKit backend is not implemented.
+- UIKit backend is not runtime-validated beyond the dynamic installer skeleton.
 - Native interactive controls are not implemented.
 - full native interior Liquid Glass is not implemented.
 - Phase H is not implemented.
