@@ -39,8 +39,6 @@ pub(crate) enum MacosNativeGlassStyle {
     Clear,
 }
 
-const NATIVE_GLASS_BATCH_RECT_EPSILON: f64 = 0.5;
-
 impl MacosNativeGlassStyle {
     fn default_ns_style_raw(self) -> i64 {
         match self {
@@ -804,75 +802,6 @@ impl MacosWindow {
         self.last_native_glass_batch_result = Some(result.clone());
     }
 
-    fn native_glass_float_equivalent(a: f64, b: f64) -> bool {
-        (a - b).abs() <= NATIVE_GLASS_BATCH_RECT_EPSILON
-    }
-
-    fn native_glass_rect_equivalent(a: Rect, b: Rect) -> bool {
-        Self::native_glass_float_equivalent(a.pos.x, b.pos.x)
-            && Self::native_glass_float_equivalent(a.pos.y, b.pos.y)
-            && Self::native_glass_float_equivalent(a.size.x, b.size.x)
-            && Self::native_glass_float_equivalent(a.size.y, b.size.y)
-    }
-
-    fn native_glass_shape_equivalent(
-        a: crate::event::NativeGlassShape,
-        b: crate::event::NativeGlassShape,
-    ) -> bool {
-        match (a, b) {
-            (
-                crate::event::NativeGlassShape::RoundedRect { radius: a },
-                crate::event::NativeGlassShape::RoundedRect { radius: b },
-            ) => Self::native_glass_float_equivalent(a, b),
-            (crate::event::NativeGlassShape::Capsule, crate::event::NativeGlassShape::Capsule) => {
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn native_glass_tint_equivalent(a: Option<Vec4f>, b: Option<Vec4f>) -> bool {
-        match (a, b) {
-            (Some(a), Some(b)) => {
-                (a.x - b.x).abs() <= 0.001
-                    && (a.y - b.y).abs() <= 0.001
-                    && (a.z - b.z).abs() <= 0.001
-                    && (a.w - b.w).abs() <= 0.001
-            }
-            (None, None) => true,
-            _ => false,
-        }
-    }
-
-    fn native_glass_panel_equivalent(
-        a: &NativeGlassPanelDescriptor,
-        b: &NativeGlassPanelDescriptor,
-    ) -> bool {
-        a.id == b.id
-            && Self::native_glass_rect_equivalent(a.rect, b.rect)
-            && Self::native_glass_shape_equivalent(a.shape, b.shape)
-            && a.style == b.style
-            && Self::native_glass_tint_equivalent(a.tint, b.tint)
-            && a.hit_test == b.hit_test
-            && a.z_order == b.z_order
-            && a.visible == b.visible
-    }
-
-    fn native_glass_batch_equivalent(a: &NativeGlassBatch, b: &NativeGlassBatch) -> bool {
-        a.window_id == b.window_id
-            && a.containers.len() == b.containers.len()
-            && a.containers.iter().zip(&b.containers).all(|(a, b)| {
-                a.id == b.id
-                    && Self::native_glass_rect_equivalent(a.rect, b.rect)
-                    && Self::native_glass_float_equivalent(a.spacing, b.spacing)
-                    && a.panels.len() == b.panels.len()
-                    && a.panels
-                        .iter()
-                        .zip(&b.panels)
-                        .all(|(a, b)| Self::native_glass_panel_equivalent(a, b))
-            })
-    }
-
     pub(crate) fn install_native_glass_batch(
         &mut self,
         batch: NativeGlassBatch,
@@ -883,7 +812,7 @@ impl MacosWindow {
         if self
             .last_native_glass_batch
             .as_ref()
-            .map(|last| Self::native_glass_batch_equivalent(last, &batch))
+            .map(|last| last.equivalent_for_native_update(&batch))
             .unwrap_or(false)
         {
             if let Some(result) = self.last_native_glass_batch_result.clone() {
@@ -2184,10 +2113,10 @@ mod tests {
         b.containers[0].panels[0].rect.pos.x += 0.25;
         b.containers[0].panels[0].rect.size.y -= 0.25;
 
-        assert!(MacosWindow::native_glass_batch_equivalent(&a, &b));
+        assert!(a.equivalent_for_native_update(&b));
 
         a.containers[0].panels[0].rect.size.x += 2.0;
-        assert!(!MacosWindow::native_glass_batch_equivalent(&a, &b));
+        assert!(!a.equivalent_for_native_update(&b));
     }
 
     #[test]
@@ -2207,7 +2136,7 @@ mod tests {
         let mut b = a.clone();
         b.containers[0].spacing = 28.0;
 
-        assert!(!MacosWindow::native_glass_batch_equivalent(&a, &b));
+        assert!(!a.equivalent_for_native_update(&b));
     }
 
     #[test]

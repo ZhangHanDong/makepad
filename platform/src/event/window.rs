@@ -194,6 +194,7 @@ pub struct NativeGlassBatch {
 }
 
 const NATIVE_GLASS_UPDATE_RECT_EPSILON: f64 = 0.5;
+const NATIVE_GLASS_UPDATE_TINT_EPSILON: f64 = 0.001;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeGlassBatchValidationError {
@@ -275,10 +276,10 @@ impl NativeGlassBatch {
     fn native_tint_equivalent(a: Option<Vec4f>, b: Option<Vec4f>) -> bool {
         match (a, b) {
             (Some(a), Some(b)) => {
-                Self::native_float_equivalent(a.x as f64, b.x as f64)
-                    && Self::native_float_equivalent(a.y as f64, b.y as f64)
-                    && Self::native_float_equivalent(a.z as f64, b.z as f64)
-                    && Self::native_float_equivalent(a.w as f64, b.w as f64)
+                (a.x - b.x).abs() <= NATIVE_GLASS_UPDATE_TINT_EPSILON as f32
+                    && (a.y - b.y).abs() <= NATIVE_GLASS_UPDATE_TINT_EPSILON as f32
+                    && (a.z - b.z).abs() <= NATIVE_GLASS_UPDATE_TINT_EPSILON as f32
+                    && (a.w - b.w).abs() <= NATIVE_GLASS_UPDATE_TINT_EPSILON as f32
             }
             (None, None) => true,
             _ => false,
@@ -641,6 +642,22 @@ mod native_glass_tests {
             w: 0.5,
         });
         assert!(!a.equivalent_for_native_update(&tint));
+
+        let mut tint_delta = a.clone();
+        tint_delta.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.01,
+        });
+        let mut tinted = a.clone();
+        tinted.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.02,
+        });
+        assert!(!tint_delta.equivalent_for_native_update(&tinted));
 
         let mut hit_test = a.clone();
         hit_test.containers[0].panels[0].hit_test = NativeGlassHitTest::Interactive;
