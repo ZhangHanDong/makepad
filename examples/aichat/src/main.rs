@@ -184,12 +184,7 @@ script_mod! {
         draw_text.text_style.font_size: 11
     }
 
-    let ToolbarGlass = GlassPanel {
-        height: 38
-        flow: Right
-        align: Align{y: 0.5}
-        spacing: 8
-        padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+    let ToolbarGlass = GlassToolbar {
         draw_bg +: {
             tint_color: #x06231C
             tint_alpha: 0.88

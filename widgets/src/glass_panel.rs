@@ -309,6 +309,27 @@ script_mod! {
             }
         }
     }
+
+    mod.widgets.GlassToolbar = mod.widgets.GlassPanel{
+        height: 38
+        flow: Right
+        align: Align{y: 0.5}
+        spacing: 8
+        padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+        draw_bg +: {
+            tint_color: #x06231C
+            tint_alpha: 0.88
+            border_color: #x72E4FF
+            border_alpha: 0.24
+            border_width: 1.0
+            corner_radius: 18.0
+            halo_strength: 0.0
+            halo_radius: 0.0
+            highlight_strength: 0.10
+            highlight_band_height: 18.0
+            noise_strength: 0.003
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -498,9 +498,10 @@ For groups of buttons and small controls.
 
 Responsibilities:
 
-- uses `GlassContainer` internally
+- remains Makepad-rendered in v4.1/v4.2
 - exposes grouping spacing
-- supports native panel union/grouping
+- does not create nested native containers in the single-container phase
+- defers native panel union/grouping to the multi-container phase
 - keeps controls readable on bright and dark backgrounds
 
 ### GlassSidebar / GlassCard / GlassComposer
