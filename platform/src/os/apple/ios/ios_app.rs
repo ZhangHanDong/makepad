@@ -220,6 +220,12 @@ impl IosApp {
             let window_obj: ObjcId = msg_send![class!(UIWindow), alloc];
             let window_obj: ObjcId = msg_send![window_obj, initWithFrame: screen_rect];
 
+            let native_glass_host_view: ObjcId = msg_send![class!(UIView), alloc];
+            let native_glass_host_view: ObjcId =
+                msg_send![native_glass_host_view, initWithFrame: screen_rect];
+            // UIViewAutoresizingFlexibleWidth (2) | UIViewAutoresizingFlexibleHeight (16)
+            let () = msg_send![native_glass_host_view, setAutoresizingMask: 18u64];
+
             let mtk_view_obj: ObjcId = msg_send![get_ios_class_global().mtk_view, alloc];
             let mtk_view_obj: ObjcId = msg_send![mtk_view_obj, initWithFrame: screen_rect];
 
@@ -251,7 +257,7 @@ impl IosApp {
             (*view_ctrl_obj).set_ivar::<BOOL>("_prefersStatusBarHidden", NO);
             (*view_ctrl_obj).set_ivar::<BOOL>("_prefersHomeIndicatorAutoHidden", NO);
 
-            let () = msg_send![view_ctrl_obj, setView: mtk_view_obj];
+            let () = msg_send![view_ctrl_obj, setView: native_glass_host_view];
 
             let () = msg_send![mtk_view_obj, setPreferredFramesPerSecond: 120];
             let () = msg_send![mtk_view_obj, setDelegate: mtk_view_dlg_obj];
@@ -263,6 +269,7 @@ impl IosApp {
             // Ensures the view resizes with the window on rotation, which is
             // required for safeAreaInsets to update correctly.
             let () = msg_send![mtk_view_obj, setAutoresizingMask: 18u64];
+            let () = msg_send![native_glass_host_view, addSubview: mtk_view_obj];
 
             let text_input_view: ObjcId = msg_send![get_ios_class_global().text_input_view, alloc];
             let text_input_view: ObjcId = msg_send![text_input_view, initWithFrame: NSRect {
@@ -702,12 +709,11 @@ impl IosApp {
                                     AutoCapitalize::AllCharacters => UI_TEXT_AUTOCAPITALIZATION_ALL,
                                 };
 
-                                let autocorrect_type: i64 =
-                                    match config.soft_keyboard.autocorrect {
-                                        AutoCorrect::Default => -1,
-                                        AutoCorrect::Disabled => UI_TEXT_AUTOCORRECTION_NO,
-                                        AutoCorrect::Enabled => UI_TEXT_AUTOCORRECTION_YES,
-                                    };
+                                let autocorrect_type: i64 = match config.soft_keyboard.autocorrect {
+                                    AutoCorrect::Default => -1,
+                                    AutoCorrect::Disabled => UI_TEXT_AUTOCORRECTION_NO,
+                                    AutoCorrect::Enabled => UI_TEXT_AUTOCORRECTION_YES,
+                                };
 
                                 let return_type: i64 = match config.soft_keyboard.return_key_type {
                                     ReturnKeyType::Default => UI_RETURN_KEY_DEFAULT,
@@ -722,8 +728,7 @@ impl IosApp {
                                     .set_ivar::<i64>("_autocapitalization_type", autocap_type);
                                 (*text_input_view)
                                     .set_ivar::<i64>("_autocorrection_type", autocorrect_type);
-                                (*text_input_view)
-                                    .set_ivar::<i64>("_return_key_type", return_type);
+                                (*text_input_view).set_ivar::<i64>("_return_key_type", return_type);
                                 (*text_input_view)
                                     .set_ivar::<bool>("_secure_text_entry", config.is_secure);
                             }
@@ -1175,10 +1180,8 @@ impl IosApp {
             (*text_input_view).set_ivar::<f64>("selection_handle_start_y", start.y);
             (*text_input_view).set_ivar::<f64>("selection_handle_end_x", end.x);
             (*text_input_view).set_ivar::<f64>("selection_handle_end_y", end.y);
-            (*text_input_view).set_ivar::<BOOL>(
-                "selection_handles_visible",
-                if visible { YES } else { NO },
-            );
+            (*text_input_view)
+                .set_ivar::<BOOL>("selection_handles_visible", if visible { YES } else { NO });
 
             // UITextSelectionDisplayInteraction listens via the input delegate.
             let input_delegate: ObjcId = *(*text_input_view).get_ivar("_inputDelegate");
@@ -1215,12 +1218,13 @@ impl IosApp {
         // bringSubviewToFront can trigger layout callbacks that re-enter IOS_APP.
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1255,12 +1259,13 @@ impl IosApp {
         Self::update_native_selection_display(start, end, true);
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1279,12 +1284,13 @@ impl IosApp {
         Self::update_native_selection_display(dvec2(0.0, 0.0), dvec2(0.0, 0.0), false);
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1393,11 +1399,13 @@ impl IosApp {
         // operations outside — setFrame/setHidden can trigger layout callbacks.
         let layer = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        app_ref.as_ref()?.camera_preview_layers.get(&video_id).copied()
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    app_ref
+                        .as_ref()?
+                        .camera_preview_layers
+                        .get(&video_id)
+                        .copied()
+                })
             })
             .ok()
             .flatten();

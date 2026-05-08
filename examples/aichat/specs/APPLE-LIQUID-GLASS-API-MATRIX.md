@@ -60,6 +60,9 @@ iOS/iPadOS:
   `UIGlassContainerEffect`, and `UIGlassEffect`; if those classes exist on an
   iOS 26 runtime, the backend still reports
   `uikit-backend-implementation-pending` until native UIKit views are created.
+- Step 69 prepares the UIKit underlay host view by making the root controller
+  view a plain `UIView` containing the existing `MTKView`. Native glass views
+  are still not created.
 
 Decision for Phase B:
 
