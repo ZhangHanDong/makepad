@@ -63,6 +63,10 @@ iOS/iPadOS:
 - Step 69 prepares the UIKit underlay host view by making the root controller
   view a plain `UIView` containing the existing `MTKView`. Native glass views
   are still not created.
+- Step 70 adds Objective-C selector preflight for the planned UIKit backend:
+  `initWithEffect:`, `contentView`, `initWithStyle:`, `setTintColor:`,
+  `setInteractive:`, and `setSpacing:`. Native glass views are still not
+  created.
 
 Decision for Phase B:
 

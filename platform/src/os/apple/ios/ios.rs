@@ -61,6 +61,7 @@ use {
 struct IosNativeGlassPreflight {
     reason: &'static str,
     missing_class: Option<&'static str>,
+    missing_selector: Option<&'static str>,
 }
 
 fn ios_native_glass_required_class_names() -> [&'static str; 3] {
@@ -81,6 +82,7 @@ fn ios_native_glass_preflight_result_from_missing_class(
             "uikit-backend-implementation-pending"
         },
         missing_class,
+        missing_selector: None,
     }
 }
 
@@ -102,7 +104,87 @@ fn ios_native_glass_runtime_preflight() -> IosNativeGlassPreflight {
             return ios_native_glass_preflight_result_from_missing_class(Some(class_name));
         }
     }
-    ios_native_glass_preflight_result_from_missing_class(None)
+    ios_native_glass_runtime_selector_preflight()
+}
+
+fn ios_native_glass_selector_preflight_result_from_missing_selector(
+    missing_selector: Option<&'static str>,
+) -> IosNativeGlassPreflight {
+    IosNativeGlassPreflight {
+        reason: if missing_selector.is_some() {
+            "uikit-glass-selector-missing"
+        } else {
+            "uikit-backend-implementation-pending"
+        },
+        missing_class: None,
+        missing_selector,
+    }
+}
+
+fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 6] {
+    [
+        ("UIVisualEffectView", "initWithEffect:"),
+        ("UIVisualEffectView", "contentView"),
+        ("UIGlassEffect", "initWithStyle:"),
+        ("UIGlassEffect", "setTintColor:"),
+        ("UIGlassEffect", "setInteractive:"),
+        ("UIGlassContainerEffect", "setSpacing:"),
+    ]
+}
+
+fn ios_native_glass_selector_exists(class_name: &'static str, selector_name: &'static str) -> bool {
+    let class = unsafe {
+        objc_getClass(ios_native_glass_class_name_bytes(class_name).as_ptr() as *const c_char)
+    };
+    if class.is_null() {
+        return false;
+    }
+    unsafe {
+        match selector_name {
+            "initWithEffect:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(initWithEffect:)];
+                responds == YES
+            }
+            "contentView" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(contentView)];
+                responds == YES
+            }
+            "initWithStyle:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(initWithStyle:)];
+                responds == YES
+            }
+            "setTintColor:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setTintColor:)];
+                responds == YES
+            }
+            "setInteractive:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setInteractive:)];
+                responds == YES
+            }
+            "setSpacing:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setSpacing:)];
+                responds == YES
+            }
+            _ => false,
+        }
+    }
+}
+
+fn ios_native_glass_runtime_selector_preflight() -> IosNativeGlassPreflight {
+    for (class_name, selector_name) in ios_native_glass_required_selector_checks() {
+        if !ios_native_glass_selector_exists(class_name, selector_name) {
+            return ios_native_glass_selector_preflight_result_from_missing_selector(Some(
+                selector_name,
+            ));
+        }
+    }
+    ios_native_glass_selector_preflight_result_from_missing_selector(None)
 }
 
 pub(crate) struct IosCameraPlayer {
@@ -1011,9 +1093,10 @@ impl Cx {
                 CxOsOp::SetNativeGlassBatch(batch) => {
                     let preflight = ios_native_glass_runtime_preflight();
                     crate::log!(
-                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason={} missing_class={} containers={} panels_requested={}",
+                        "[liquid-glass] backend=apple-native-ios state=Unsupported reason={} missing_class={} missing_selector={} containers={} panels_requested={}",
                         preflight.reason,
                         preflight.missing_class.unwrap_or("none"),
+                        preflight.missing_selector.unwrap_or("none"),
                         batch.containers.len(),
                         batch.visible_panel_count()
                     );
@@ -1684,6 +1767,7 @@ mod tests {
 
         assert_eq!(preflight.reason, "uikit-glass-class-missing");
         assert_eq!(preflight.missing_class, Some("UIGlassEffect"));
+        assert_eq!(preflight.missing_selector, None);
     }
 
     #[test]
@@ -1692,5 +1776,31 @@ mod tests {
 
         assert_eq!(preflight.reason, "uikit-backend-implementation-pending");
         assert_eq!(preflight.missing_class, None);
+        assert_eq!(preflight.missing_selector, None);
+    }
+
+    #[test]
+    fn ios_native_glass_selector_preflight_reports_missing_selector_reason() {
+        let preflight =
+            ios_native_glass_selector_preflight_result_from_missing_selector(Some("setSpacing:"));
+
+        assert_eq!(preflight.reason, "uikit-glass-selector-missing");
+        assert_eq!(preflight.missing_class, None);
+        assert_eq!(preflight.missing_selector, Some("setSpacing:"));
+    }
+
+    #[test]
+    fn ios_native_glass_required_selector_checks_include_backend_selectors() {
+        assert_eq!(
+            ios_native_glass_required_selector_checks(),
+            [
+                ("UIVisualEffectView", "initWithEffect:"),
+                ("UIVisualEffectView", "contentView"),
+                ("UIGlassEffect", "initWithStyle:"),
+                ("UIGlassEffect", "setTintColor:"),
+                ("UIGlassEffect", "setInteractive:"),
+                ("UIGlassContainerEffect", "setSpacing:"),
+            ]
+        );
     }
 }
