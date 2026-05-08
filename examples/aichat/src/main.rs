@@ -200,13 +200,7 @@ script_mod! {
         }
     }
 
-    let PillButton = ButtonFlat {
-        height: 34
-        padding: Inset{left: 14 right: 14 top: 0 bottom: 0}
-        draw_text +: {
-            color: ai_cream
-            text_style +: { font_size: 11 }
-        }
+    let PillButton = GlassButton {
         draw_bg +: {
             color: #x08251EB8
             color_hover: #x123B31DD

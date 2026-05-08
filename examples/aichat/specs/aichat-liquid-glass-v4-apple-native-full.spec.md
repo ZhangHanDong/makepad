@@ -492,6 +492,11 @@ Maps conceptually to SwiftUI `GlassButtonStyle` / `GlassProminentButtonStyle`.
 
 Important distinction: native `GlassButton` is not the same mechanism as `UIGlassEffect` or `NSGlassEffectView` panels. On Apple platforms it should eventually use the platform's native button glass appearance/configuration where available. In v4.1 and v4.2, `GlassButton` remains Makepad-rendered on top of native glass panels.
 
+The first implementation is a semantic ButtonFlat variant with glass-aware
+foreground, fill, border, hover, down, and focus colors. Native interactive
+controls are deferred until Makepad has an explicit AppKit/UIKit hit-test and
+event-forwarding policy.
+
 ### GlassToolbar
 
 For groups of buttons and small controls.

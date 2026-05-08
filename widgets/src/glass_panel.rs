@@ -330,6 +330,30 @@ script_mod! {
             noise_strength: 0.003
         }
     }
+
+    mod.widgets.GlassButton = mod.widgets.ButtonFlat{
+        height: 34
+        padding: Inset{left: 14 right: 14 top: 0 bottom: 0}
+        draw_text +: {
+            color: #xF3E3C7
+            color_hover: #xFFF0D2
+            color_down: #xEAD8B8
+            color_focus: #xFFF0D2
+            text_style +: { font_size: 11 }
+        }
+        draw_bg +: {
+            color: #x08251EB8
+            color_hover: #x123B31DD
+            color_down: #x061D18E8
+            color_focus: #x123B31DD
+            border_color: #xEAD8B82D
+            border_color_hover: #x72E4FF44
+            border_color_down: #xEAD8B850
+            border_color_focus: #x72E4FF66
+            border_size: 1.0
+            border_radius: 10.0
+        }
+    }
 }
 
 #[derive(Clone)]
