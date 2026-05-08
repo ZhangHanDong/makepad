@@ -43,8 +43,8 @@ Current conclusion: not complete.
 | AppleNativeInterleave backend name | `aichat-liquid-glass-step-48-native-interleave-backend-guard.spec`; `AICHAT_GLASS_BACKEND=apple-native-interleave` falls back to shader with a renderer-split warning | Guarded as reserved, not implemented. |
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md` | Requirements recorded; no prototype implementation yet. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals | Separate route, not full Apple-native support. |
-| Phase H advanced behavior | v4 spec lists animated spacing, scroll edge glass, fullscreen/multi-display, inactive-window behavior | Phase H is not implemented. |
-| Phase I popup/modal glass | v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I is not implemented. |
+| Phase H advanced behavior | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; v4 spec lists animated spacing, scroll edge glass, fullscreen/multi-display, inactive-window behavior | Phase H is gate-defined only; not implemented. |
+| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I is gate-defined only; not implemented. |
 | Release limitations | `aichat-liquid-glass-v4.1-release-notes.md` lists runtime switching, fullscreen, Stage Manager, multiple displays, rounded-corner sync, popup/modal, iOS backend | Documented limitations, not solved. |
 
 ## Validation Evidence
@@ -88,4 +88,5 @@ advanced native behavior, or full native interior Liquid Glass.
 3. Before enabling native interactive controls, define event ownership and
    hit-test forwarding for AppKit/UIKit controls.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
-   behavior does not destabilize the landed macOS underlay backend.
+   behavior does not destabilize the landed macOS underlay backend. The
+   concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.
