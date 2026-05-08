@@ -119,31 +119,83 @@ fn macos_surface_frame(inner_size: Vec2d) -> NSRect {
     }
 }
 
+fn install_lifecycle_probe_layer(
+    parent_layer: ObjcId,
+    probe_layer: ObjcId,
+) -> (Option<ObjcId>, &'static str, BOOL) {
+    unsafe {
+        let () = msg_send![probe_layer, setHidden: YES];
+        let () = msg_send![parent_layer, addSublayer: probe_layer];
+    }
+    (None, "primary-sublayer", YES)
+}
+
+fn install_lower_scene_probe_host_view(
+    primary_view: ObjcId,
+    probe_layer: ObjcId,
+    inner_size: Vec2d,
+) -> (Option<ObjcId>, &'static str, BOOL) {
+    unsafe {
+        let probe_host_view: ObjcId = msg_send![class!(NSView), alloc];
+        let probe_host_view: ObjcId =
+            msg_send![probe_host_view, initWithFrame: macos_surface_frame(inner_size)];
+        if probe_host_view == nil {
+            return (None, "sibling-below-primary-host-failed", YES);
+        }
+        let () = msg_send![probe_host_view, setWantsLayer: YES];
+        let () = msg_send![probe_host_view, setLayerContentsPlacement: 11];
+        let () = msg_send![probe_host_view, setLayer: probe_layer];
+        let () = msg_send![probe_host_view, setHidden: NO];
+        let superview: ObjcId = msg_send![primary_view, superview];
+        if superview == nil {
+            return (
+                Some(probe_host_view),
+                "sibling-below-primary-no-superview",
+                YES,
+            );
+        }
+        let () = msg_send![
+            superview,
+            addSubview: probe_host_view
+            positioned: -1i64
+            relativeTo: primary_view
+        ];
+        (Some(probe_host_view), "sibling-below-primary", NO)
+    }
+}
+
 fn install_native_interleave_layer_probe(
     parent_layer: ObjcId,
     metal_cx: &MetalCx,
-    delegate: ObjcId,
+    primary_view: ObjcId,
     inner_size: Vec2d,
     mode: MacosInterleaveProbeMode,
 ) -> MacosInterleaveProbeLayer {
-    let probe_layer = new_macos_ca_metal_layer(metal_cx, delegate);
-    let hidden = match mode {
-        MacosInterleaveProbeMode::LifecycleDrawable => YES,
-        MacosInterleaveProbeMode::LowerSceneClear => NO,
+    let probe_layer = new_macos_ca_metal_layer(metal_cx, primary_view);
+    unsafe {
+        let () = msg_send![probe_layer, setFrame: macos_surface_frame(inner_size)];
+    }
+    let (host_view, placement, hidden) = match mode {
+        MacosInterleaveProbeMode::LifecycleDrawable => {
+            install_lifecycle_probe_layer(parent_layer, probe_layer)
+        }
+        MacosInterleaveProbeMode::LowerSceneClear => {
+            install_lower_scene_probe_host_view(primary_view, probe_layer, inner_size)
+        }
     };
     unsafe {
         let () = msg_send![probe_layer, setHidden: hidden];
-        let () = msg_send![probe_layer, setFrame: macos_surface_frame(inner_size)];
-        let () = msg_send![parent_layer, addSublayer: probe_layer];
     }
     crate::log!(
-        "[liquid-glass] native-interleave-layer-probe state=installed hidden={} mode={:?}",
+        "[liquid-glass] native-interleave-layer-probe state=installed hidden={} mode={:?} placement={}",
         if hidden == YES { 1 } else { 0 },
-        mode
+        mode,
+        placement
     );
     MacosInterleaveProbeLayer {
         mode,
         role: MacosMetalSurfaceRole::LowerScene,
+        host_view,
         ca_layer: probe_layer,
         drawable_checked: false,
     }
@@ -169,6 +221,7 @@ enum MacosInterleaveProbeMode {
 struct MacosInterleaveProbeLayer {
     mode: MacosInterleaveProbeMode,
     role: MacosMetalSurfaceRole,
+    host_view: Option<ObjcId>,
     ca_layer: ObjcId,
     drawable_checked: bool,
 }
@@ -295,6 +348,12 @@ impl MetalWindow {
                         probe.ca_layer,
                         setFrame: macos_surface_frame(self.window_geom.inner_size)
                     ];
+                    if let Some(host_view) = probe.host_view {
+                        let () = msg_send![
+                            host_view,
+                            setFrame: macos_surface_frame(self.window_geom.inner_size)
+                        ];
+                    }
                     if !probe.drawable_checked {
                         probe.drawable_checked = true;
                         let probe_drawable: ObjcId = msg_send![probe.ca_layer, nextDrawable];
