@@ -1401,6 +1401,10 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
             GlassBackendRequest::MacosNative(MacosGlassStyle::Clear),
             None,
         ),
+        Some("apple-native-interleave") => (
+            GlassBackendRequest::Shader,
+            Some("AppleNativeInterleave requires renderer split; falling back to shader"),
+        ),
         Some("auto") => (GlassBackendRequest::Auto, None),
         Some(_) => (
             GlassBackendRequest::Shader,
@@ -5756,6 +5760,13 @@ mod tests {
             )
         );
         assert_eq!(
+            parse_glass_backend(Some("apple-native-interleave")),
+            (
+                GlassBackendRequest::Shader,
+                Some("AppleNativeInterleave requires renderer split; falling back to shader")
+            )
+        );
+        assert_eq!(
             parse_glass_backend(Some("auto")),
             (GlassBackendRequest::Auto, None)
         );
@@ -5851,6 +5862,17 @@ mod tests {
         let invalid = resolve_startup_glass_appearance(Some("native"));
         assert_eq!(invalid.appearance.substrate, GlassSubstrate::ShaderOnly);
         assert!(invalid.warning.is_some());
+    }
+
+    #[test]
+    fn aichat_apple_native_interleave_backend_is_reserved() {
+        let resolved = resolve_startup_glass_appearance(Some("apple-native-interleave"));
+        assert_eq!(resolved.appearance.substrate, GlassSubstrate::ShaderOnly);
+        assert_eq!(resolved.appearance.backdrop, None);
+        assert_eq!(
+            resolved.warning,
+            Some("AppleNativeInterleave requires renderer split; falling back to shader")
+        );
     }
 
     #[test]
