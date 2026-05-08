@@ -138,6 +138,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-fullscreen-probe", backend: "macos-native-clear", fullscreen_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-geometry-probe", backend: "macos-native-clear", geometry_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-layer-probe", backend: "macos-native-clear", interleave_layer_probe: "1"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-lower-scene-clear", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-proof-stripes", backend: "macos-native-clear", proof: "stripes", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-above-metal-probe", backend: "shader", above_metal_probe: "clear", metal_probe_pattern: "moving-pattern"}
     RunStudio{name: "makepad-studio"} 

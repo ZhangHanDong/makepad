@@ -127,12 +127,20 @@ fn install_native_interleave_layer_probe(
     mode: MacosInterleaveProbeMode,
 ) -> MacosInterleaveProbeLayer {
     let probe_layer = new_macos_ca_metal_layer(metal_cx, delegate);
+    let hidden = match mode {
+        MacosInterleaveProbeMode::LifecycleDrawable => YES,
+        MacosInterleaveProbeMode::LowerSceneClear => NO,
+    };
     unsafe {
-        let () = msg_send![probe_layer, setHidden: YES];
+        let () = msg_send![probe_layer, setHidden: hidden];
         let () = msg_send![probe_layer, setFrame: macos_surface_frame(inner_size)];
         let () = msg_send![parent_layer, addSublayer: probe_layer];
     }
-    crate::log!("[liquid-glass] native-interleave-layer-probe state=installed hidden=1");
+    crate::log!(
+        "[liquid-glass] native-interleave-layer-probe state=installed hidden={} mode={:?}",
+        if hidden == YES { 1 } else { 0 },
+        mode
+    );
     MacosInterleaveProbeLayer {
         mode,
         role: MacosMetalSurfaceRole::LowerScene,
@@ -265,7 +273,7 @@ impl MetalWindow {
         let () = unsafe { msg_send![self.ca_layer, setPresentsWithTransaction: NO] };
     }
 
-    pub(crate) fn resize_core_animation_layer(&mut self, _metal_cx: &MetalCx) -> bool {
+    pub(crate) fn resize_core_animation_layer(&mut self, metal_cx: &mut MetalCx) -> bool {
         let cal_size = Vec2d {
             x: self.window_geom.inner_size.x * self.window_geom.dpi_factor,
             y: self.window_geom.inner_size.y * self.window_geom.dpi_factor,
@@ -279,10 +287,6 @@ impl MetalWindow {
                     match probe.role {
                         MacosMetalSurfaceRole::LowerScene => {}
                         MacosMetalSurfaceRole::Primary | MacosMetalSurfaceRole::UpperUi => {}
-                    }
-                    match probe.mode {
-                        MacosInterleaveProbeMode::LifecycleDrawable => {}
-                        MacosInterleaveProbeMode::LowerSceneClear => {}
                     }
                     let () = msg_send![probe.ca_layer, setDrawableSize: CGSize {width: cal_size.x, height: cal_size.y}];
                     let () =
@@ -302,6 +306,20 @@ impl MetalWindow {
                         } else {
                             crate::log!(
                                 "[liquid-glass] native-interleave-layer-probe drawable=unavailable"
+                            );
+                        }
+                    }
+                    if let MacosInterleaveProbeMode::LowerSceneClear = probe.mode {
+                        let probe_drawable: ObjcId = msg_send![probe.ca_layer, nextDrawable];
+                        let presented =
+                            metal_cx.clear_drawable(probe_drawable, [0.08, 0.42, 0.96, 0.55]);
+                        if presented {
+                            crate::log!(
+                                "[liquid-glass] native-interleave-layer-probe lower-scene-clear=presented"
+                            );
+                        } else {
+                            crate::log!(
+                                "[liquid-glass] native-interleave-layer-probe lower-scene-clear=failed"
                             );
                         }
                     }
@@ -555,7 +573,7 @@ impl Cx {
                             MacosMetalSurfaceRole::Primary => {}
                             MacosMetalSurfaceRole::LowerScene | MacosMetalSurfaceRole::UpperUi => {}
                         }
-                        metal_window.resize_core_animation_layer(&metal_cx);
+                        metal_window.resize_core_animation_layer(metal_cx);
                         let drawable: ObjcId =
                             unsafe { msg_send![metal_window.ca_layer, nextDrawable] };
                         if drawable == nil {

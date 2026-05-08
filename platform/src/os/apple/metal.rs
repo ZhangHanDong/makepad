@@ -1387,6 +1387,55 @@ impl MetalCx {
             fallback_texture,
         }
     }
+
+    pub(crate) fn clear_drawable(&mut self, drawable: ObjcId, color: [f64; 4]) -> bool {
+        if drawable == nil {
+            return false;
+        }
+
+        let pool: ObjcId = unsafe { msg_send![class!(NSAutoreleasePool), new] };
+        let render_pass_descriptor: ObjcId = unsafe {
+            msg_send![
+                class!(MTLRenderPassDescriptorInternal),
+                renderPassDescriptor
+            ]
+        };
+        let texture: ObjcId = unsafe { msg_send![drawable, texture] };
+        if texture == nil {
+            unsafe {
+                let () = msg_send![pool, release];
+            }
+            return false;
+        }
+
+        let color_attachments: ObjcId =
+            unsafe { msg_send![render_pass_descriptor, colorAttachments] };
+        let color_attachment: ObjcId =
+            unsafe { msg_send![color_attachments, objectAtIndexedSubscript: 0] };
+        unsafe {
+            let () = msg_send![color_attachment, setTexture: texture];
+            let () = msg_send![color_attachment, setLoadAction: MTLLoadAction::Clear];
+            let () = msg_send![color_attachment, setStoreAction: MTLStoreAction::Store];
+            let () = msg_send![color_attachment, setClearColor: MTLClearColor {
+                red: color[0],
+                green: color[1],
+                blue: color[2],
+                alpha: color[3],
+            }];
+        }
+
+        let command_buffer: ObjcId = unsafe { msg_send![self.command_queue, commandBuffer] };
+        let encoder: ObjcId = unsafe {
+            msg_send![command_buffer, renderCommandEncoderWithDescriptor: render_pass_descriptor]
+        };
+        unsafe {
+            let () = msg_send![encoder, endEncoding];
+            let () = msg_send![command_buffer, presentDrawable: drawable];
+            let () = msg_send![command_buffer, commit];
+            let () = msg_send![pool, release];
+        }
+        true
+    }
 }
 
 /**************************************************************************************************/
