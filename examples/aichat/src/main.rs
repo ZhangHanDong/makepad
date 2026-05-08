@@ -1174,6 +1174,7 @@ const MIN_GLASS_OPACITY: f64 = 0.10;
 const MAX_GLASS_OPACITY: f64 = 1.00;
 const SHADER_BACKDROP_TEXTURE_SIZE: usize = 256;
 const INACTIVE_GLASS_MULTIPLIER: f64 = 0.70;
+const NATIVE_INACTIVE_GLASS_MULTIPLIER: f64 = 0.88;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GlassOpacity {
@@ -1584,6 +1585,17 @@ fn initial_glass_opacity() -> f64 {
 
 fn native_display_backing_scale_changed(old_dpi: f64, new_dpi: f64) -> bool {
     (old_dpi - new_dpi).abs() > 0.001
+}
+
+fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active: bool) -> f64 {
+    if active {
+        return 1.0;
+    }
+
+    match appearance.substrate {
+        GlassSubstrate::MacosNative { .. } => NATIVE_INACTIVE_GLASS_MULTIPLIER,
+        GlassSubstrate::ShaderOnly => INACTIVE_GLASS_MULTIPLIER,
+    }
 }
 
 fn native_compositing_proof_transparent_overlay() -> bool {
@@ -5313,11 +5325,8 @@ impl App {
             return;
         }
 
-        self.glass_inactive_multiplier = if active {
-            1.0
-        } else {
-            INACTIVE_GLASS_MULTIPLIER
-        };
+        self.glass_inactive_multiplier =
+            inactive_glass_multiplier_for_appearance(self.glass_appearance, active);
         let opacity = self
             .ui
             .slider(cx, ids!(opacity_slider))
@@ -5785,7 +5794,8 @@ mod tests {
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, glass_opacity_with_native_compositing_proof,
-        guard_native_splash_opaque_roots, metal_probe_pattern_enabled_from_value,
+        guard_native_splash_opaque_roots, inactive_glass_multiplier_for_appearance,
+        metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
         native_display_backing_scale_changed, parse_glass_backend, render_state_templates,
         render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
@@ -5794,7 +5804,7 @@ mod tests {
         GenericCollectionsState, GenericInputsState, GlassAppearance, GlassBackendRequest,
         GlassPanelPreset, GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig,
         ShaderBackdropProof, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY,
+        MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
 
     #[test]
@@ -6057,6 +6067,46 @@ mod tests {
     fn aichat_native_display_change_probe_ignores_jitter() {
         assert!(!native_display_backing_scale_changed(2.0, 2.0005));
         assert!(!native_display_backing_scale_changed(1.0004, 1.0));
+    }
+
+    #[test]
+    fn aichat_shader_inactive_multiplier_remains_legacy() {
+        assert_eq!(
+            inactive_glass_multiplier_for_appearance(GlassAppearance::default(), false),
+            INACTIVE_GLASS_MULTIPLIER
+        );
+    }
+
+    #[test]
+    fn aichat_native_inactive_multiplier_is_less_aggressive() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        };
+
+        let multiplier = inactive_glass_multiplier_for_appearance(native, false);
+
+        assert!(multiplier > INACTIVE_GLASS_MULTIPLIER);
+        assert!(multiplier < 1.0);
+        assert_eq!(multiplier, NATIVE_INACTIVE_GLASS_MULTIPLIER);
+    }
+
+    #[test]
+    fn aichat_active_inactive_multiplier_is_one() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Regular,
+            },
+            backdrop: None,
+        };
+
+        assert_eq!(
+            inactive_glass_multiplier_for_appearance(GlassAppearance::default(), true),
+            1.0
+        );
+        assert_eq!(inactive_glass_multiplier_for_appearance(native, true), 1.0);
     }
 
     #[test]

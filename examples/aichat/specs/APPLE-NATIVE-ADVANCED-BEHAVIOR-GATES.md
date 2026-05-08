@@ -34,7 +34,7 @@ The current production path remains:
 | Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit | Explicit fullscreen fallback, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active | Probe only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | No local runtime evidence beyond the known limitation list | Not implemented | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
-| Inactive window behavior | aichat applies a Makepad-only inactive multiplier on focus changes | Partial Makepad styling only | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
+| Inactive window behavior | Step 55 keeps shader inactive dimming at `0.70` and uses `NATIVE_INACTIVE_GLASS_MULTIPLIER` for a weaker native inactive app-side dim | Readability policy only; native inactive-window support remains unproven | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
 | Popup/modal native glass | Makepad has popup/modal widgets and popup windows; no native glass transient-window policy exists | Not implemented | Define separate-window z-order, focus, dismissal, hit-test, and native surface ownership before creating AppKit `NSPanel` or UIKit `UIWindow` glass. |
 
 ## Required Evidence Before Marking Complete
@@ -72,6 +72,8 @@ The current production path remains:
   wallpapers.
 - Makepad foreground tokens and native system behavior do not double-dim text.
 - The inactive policy is shared by shader and Apple-native modes where possible.
+- The current native inactive policy uses weaker app-side dimming than shader
+  mode, but it does not prove complete native inactive-window support.
 
 ### Popup/modal
 
