@@ -58,8 +58,8 @@ The current production path remains:
 - The current policy starts with Makepad semantic styling; native scroll edge
   behavior remains future work.
 - `GlassScrollEdge` exists and is wired into aichat. Visibility follows
-  `PortalList` state, but continuous scroll-offset-driven edge strength is not
-  yet complete.
+  `PortalList` state. Top edge opacity follows scroll offset; bottom edge
+  opacity remains binary until `PortalList` exposes bottom distance.
 
 ### Fullscreen
 

@@ -83,5 +83,10 @@ semantic widgets. They are not native panels.
 Step 59 adds aichat wiring in the chat list overlay. Step 60 drives edge
 visibility from `PortalList` state: the top edge appears after scrolling away
 from the top, and the bottom edge appears while further items exist below the
-viewport. Edge opacity/strength is still binary rather than continuously
-scroll-offset-driven.
+viewport.
+
+Step 61 makes top edge opacity continuously follow the negative
+`PortalList::scroll_position()` while the first item remains visible, then caps
+opacity once `first_id > 0`. Bottom edge opacity remains binary because
+`PortalList` currently exposes whether further items exist below the viewport,
+but not the bottom distance needed for a continuous ramp.

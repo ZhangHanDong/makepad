@@ -954,7 +954,7 @@ script_mod! {
                                 flow: Down
                                 align: Align{y: 1.0}
 
-                                GlassScrollEdgeBottom {}
+                                scroll_bottom_edge := GlassScrollEdgeBottom {}
                             }
                         }
 
@@ -1612,10 +1612,19 @@ fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active:
     }
 }
 
+const GLASS_SCROLL_EDGE_MAX_ALPHA: f64 = 58.0 / 255.0;
+const GLASS_SCROLL_EDGE_FADE_DISTANCE: f64 = 48.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChatScrollEdgeVisibility {
     top: bool,
     bottom: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ChatScrollEdgeAlpha {
+    top: f64,
+    bottom: f64,
 }
 
 fn chat_scroll_edge_visibility(
@@ -1635,6 +1644,28 @@ fn chat_scroll_edge_visibility(
         top: first_id > 0 || first_scroll < -1.0,
         bottom: further_items_below,
     }
+}
+
+fn chat_scroll_edge_alpha(
+    visibility: ChatScrollEdgeVisibility,
+    first_id: usize,
+    first_scroll: f64,
+) -> ChatScrollEdgeAlpha {
+    let top = if !visibility.top {
+        0.0
+    } else if first_id > 0 {
+        GLASS_SCROLL_EDGE_MAX_ALPHA
+    } else {
+        ((-first_scroll) / GLASS_SCROLL_EDGE_FADE_DISTANCE).clamp(0.0, 1.0)
+            * GLASS_SCROLL_EDGE_MAX_ALPHA
+    };
+    let bottom = if visibility.bottom {
+        GLASS_SCROLL_EDGE_MAX_ALPHA
+    } else {
+        0.0
+    };
+
+    ChatScrollEdgeAlpha { top, bottom }
 }
 
 fn native_compositing_proof_transparent_overlay() -> bool {
@@ -4342,18 +4373,45 @@ impl App {
             .ui
             .widget(cx, ids!(chat_list))
             .portal_list(cx, ids!(list));
+        let first_id = list.first_id();
+        let first_scroll = list.scroll_position();
         let edge_visibility = chat_scroll_edge_visibility(
             show_empty_state,
-            list.first_id(),
-            list.scroll_position(),
+            first_id,
+            first_scroll,
             list.further_items_bellow_exist(),
         );
-        self.ui
-            .view(cx, ids!(scroll_top_edge))
-            .set_visible(cx, edge_visibility.top);
+        let edge_alpha = chat_scroll_edge_alpha(edge_visibility, first_id, first_scroll);
+        let top_color = vec4(
+            234.0 / 255.0,
+            216.0 / 255.0,
+            184.0 / 255.0,
+            edge_alpha.top as f32,
+        );
+        let bottom_color = vec4(
+            234.0 / 255.0,
+            216.0 / 255.0,
+            184.0 / 255.0,
+            edge_alpha.bottom as f32,
+        );
+        let mut top_edge = self.ui.view(cx, ids!(scroll_top_edge));
+        top_edge.set_visible(cx, edge_visibility.top);
+        script_apply_eval!(cx, top_edge, {
+            draw_bg +: {
+                color: #(top_color)
+            }
+        });
         self.ui
             .view(cx, ids!(scroll_bottom_edge_host))
             .set_visible(cx, edge_visibility.bottom);
+        let mut bottom_edge = self
+            .ui
+            .view(cx, ids!(scroll_bottom_edge_host.scroll_bottom_edge));
+        script_apply_eval!(cx, bottom_edge, {
+            draw_bg +: {
+                color: #(bottom_color)
+            }
+        });
     }
 
     fn send_prompt_to_agent(
@@ -5859,7 +5917,7 @@ mod tests {
     use super::{
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        chat_scroll_edge_visibility, glass_opacity_values,
+        chat_scroll_edge_alpha, chat_scroll_edge_visibility, glass_opacity_values,
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
@@ -5870,8 +5928,8 @@ mod tests {
         ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
         GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
         ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
-        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
-        NATIVE_INACTIVE_GLASS_MULTIPLIER,
+        GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
 
     #[test]
@@ -6214,6 +6272,52 @@ mod tests {
                 bottom: true,
             }
         );
+    }
+
+    #[test]
+    fn aichat_scroll_edge_alpha_is_zero_when_hidden() {
+        let alpha = chat_scroll_edge_alpha(
+            ChatScrollEdgeVisibility {
+                top: false,
+                bottom: false,
+            },
+            0,
+            0.0,
+        );
+
+        assert_eq!(alpha.top, 0.0);
+        assert_eq!(alpha.bottom, 0.0);
+    }
+
+    #[test]
+    fn aichat_scroll_edge_alpha_ramps_top_from_scroll_offset() {
+        let alpha = chat_scroll_edge_alpha(
+            ChatScrollEdgeVisibility {
+                top: true,
+                bottom: false,
+            },
+            0,
+            -12.0,
+        );
+
+        assert!(alpha.top > 0.0);
+        assert!(alpha.top < GLASS_SCROLL_EDGE_MAX_ALPHA);
+        assert_eq!(alpha.bottom, 0.0);
+    }
+
+    #[test]
+    fn aichat_scroll_edge_alpha_caps_when_content_is_above_or_below() {
+        let alpha = chat_scroll_edge_alpha(
+            ChatScrollEdgeVisibility {
+                top: true,
+                bottom: true,
+            },
+            1,
+            0.0,
+        );
+
+        assert_eq!(alpha.top, GLASS_SCROLL_EDGE_MAX_ALPHA);
+        assert_eq!(alpha.bottom, GLASS_SCROLL_EDGE_MAX_ALPHA);
     }
 
     #[test]
