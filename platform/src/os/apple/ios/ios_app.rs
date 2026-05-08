@@ -641,6 +641,17 @@ impl IosApp {
         NativeGlassBatchResult,
         Option<WindowNativeSubstrateResolvedEvent>,
     ) {
+        if self
+            .last_native_glass_batch
+            .as_ref()
+            .map(|last| last.equivalent_for_native_update(&batch))
+            .unwrap_or(false)
+        {
+            if let Some(result) = self.last_native_glass_batch_result.clone() {
+                return (result, None);
+            }
+        }
+
         if let Err(error) = batch.validate_v4_1() {
             let reason = match error {
                 NativeGlassBatchValidationError::TooManyContainers { .. } => "too-many-containers",

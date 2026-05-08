@@ -193,6 +193,8 @@ pub struct NativeGlassBatch {
     pub containers: Vec<NativeGlassContainerDescriptor>,
 }
 
+const NATIVE_GLASS_UPDATE_RECT_EPSILON: f64 = 0.5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NativeGlassBatchValidationError {
     TooManyContainers {
@@ -246,6 +248,70 @@ impl NativeGlassBatch {
         }
 
         Ok(())
+    }
+
+    fn native_float_equivalent(a: f64, b: f64) -> bool {
+        (a - b).abs() <= NATIVE_GLASS_UPDATE_RECT_EPSILON
+    }
+
+    fn native_rect_equivalent(a: Rect, b: Rect) -> bool {
+        Self::native_float_equivalent(a.pos.x, b.pos.x)
+            && Self::native_float_equivalent(a.pos.y, b.pos.y)
+            && Self::native_float_equivalent(a.size.x, b.size.x)
+            && Self::native_float_equivalent(a.size.y, b.size.y)
+    }
+
+    fn native_shape_equivalent(a: NativeGlassShape, b: NativeGlassShape) -> bool {
+        match (a, b) {
+            (
+                NativeGlassShape::RoundedRect { radius: a },
+                NativeGlassShape::RoundedRect { radius: b },
+            ) => Self::native_float_equivalent(a, b),
+            (NativeGlassShape::Capsule, NativeGlassShape::Capsule) => true,
+            _ => false,
+        }
+    }
+
+    fn native_tint_equivalent(a: Option<Vec4f>, b: Option<Vec4f>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => {
+                Self::native_float_equivalent(a.x as f64, b.x as f64)
+                    && Self::native_float_equivalent(a.y as f64, b.y as f64)
+                    && Self::native_float_equivalent(a.z as f64, b.z as f64)
+                    && Self::native_float_equivalent(a.w as f64, b.w as f64)
+            }
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn native_panel_equivalent(
+        a: &NativeGlassPanelDescriptor,
+        b: &NativeGlassPanelDescriptor,
+    ) -> bool {
+        a.id == b.id
+            && Self::native_rect_equivalent(a.rect, b.rect)
+            && Self::native_shape_equivalent(a.shape, b.shape)
+            && a.style == b.style
+            && Self::native_tint_equivalent(a.tint, b.tint)
+            && a.hit_test == b.hit_test
+            && a.z_order == b.z_order
+            && a.visible == b.visible
+    }
+
+    pub fn equivalent_for_native_update(&self, other: &Self) -> bool {
+        self.window_id == other.window_id
+            && self.containers.len() == other.containers.len()
+            && self.containers.iter().zip(&other.containers).all(|(a, b)| {
+                a.id == b.id
+                    && Self::native_rect_equivalent(a.rect, b.rect)
+                    && Self::native_float_equivalent(a.spacing, b.spacing)
+                    && a.panels.len() == b.panels.len()
+                    && a.panels
+                        .iter()
+                        .zip(&b.panels)
+                        .all(|(a, b)| Self::native_panel_equivalent(a, b))
+            })
     }
 }
 
@@ -540,5 +606,52 @@ mod native_glass_tests {
         };
 
         assert_eq!(NativeGlassShape::Capsule.corner_radius_for_rect(rect), 24.0);
+    }
+
+    #[test]
+    fn native_glass_batch_equivalent_for_native_update_tolerates_subpixel_jitter() {
+        let mut a = batch_with_panels(vec![panel(1)]);
+        let mut b = a.clone();
+        b.containers[0].rect.pos.x += 0.25;
+        b.containers[0].panels[0].rect.size.y += 0.25;
+
+        assert!(a.equivalent_for_native_update(&b));
+
+        a.containers[0].panels[0].rect.size.y += 1.0;
+        assert!(!a.equivalent_for_native_update(&b));
+    }
+
+    #[test]
+    fn native_glass_batch_equivalent_for_native_update_detects_semantic_changes() {
+        let a = batch_with_panels(vec![panel(1)]);
+
+        let mut spacing = a.clone();
+        spacing.containers[0].spacing += 1.0;
+        assert!(!a.equivalent_for_native_update(&spacing));
+
+        let mut style = a.clone();
+        style.containers[0].panels[0].style = NativeGlassStyle::Clear;
+        assert!(!a.equivalent_for_native_update(&style));
+
+        let mut tint = a.clone();
+        tint.containers[0].panels[0].tint = Some(Vec4f {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.5,
+        });
+        assert!(!a.equivalent_for_native_update(&tint));
+
+        let mut hit_test = a.clone();
+        hit_test.containers[0].panels[0].hit_test = NativeGlassHitTest::Interactive;
+        assert!(!a.equivalent_for_native_update(&hit_test));
+
+        let mut z_order = a.clone();
+        z_order.containers[0].panels[0].z_order += 1;
+        assert!(!a.equivalent_for_native_update(&z_order));
+
+        let mut visible = a.clone();
+        visible.containers[0].panels[0].visible = false;
+        assert!(!a.equivalent_for_native_update(&visible));
     }
 }
