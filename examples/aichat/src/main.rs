@@ -1612,6 +1612,31 @@ fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active:
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChatScrollEdgeVisibility {
+    top: bool,
+    bottom: bool,
+}
+
+fn chat_scroll_edge_visibility(
+    show_empty_state: bool,
+    first_id: usize,
+    first_scroll: f64,
+    further_items_below: bool,
+) -> ChatScrollEdgeVisibility {
+    if show_empty_state {
+        return ChatScrollEdgeVisibility {
+            top: false,
+            bottom: false,
+        };
+    }
+
+    ChatScrollEdgeVisibility {
+        top: first_id > 0 || first_scroll < -1.0,
+        bottom: further_items_below,
+    }
+}
+
 fn native_compositing_proof_transparent_overlay() -> bool {
     native_compositing_proof_transparent_overlay_from_value(
         std::env::var("AICHAT_NATIVE_COMPOSITING_PROOF")
@@ -4309,13 +4334,26 @@ impl App {
         self.ui
             .view(cx, ids!(empty_state))
             .set_visible(cx, show_empty_state);
-        let show_scroll_edges = !show_empty_state;
+        self.update_scroll_edge_visibility(cx, show_empty_state);
+    }
+
+    fn update_scroll_edge_visibility(&self, cx: &mut Cx, show_empty_state: bool) {
+        let list = self
+            .ui
+            .widget(cx, ids!(chat_list))
+            .portal_list(cx, ids!(list));
+        let edge_visibility = chat_scroll_edge_visibility(
+            show_empty_state,
+            list.first_id(),
+            list.scroll_position(),
+            list.further_items_bellow_exist(),
+        );
         self.ui
             .view(cx, ids!(scroll_top_edge))
-            .set_visible(cx, show_scroll_edges);
+            .set_visible(cx, edge_visibility.top);
         self.ui
             .view(cx, ids!(scroll_bottom_edge_host))
-            .set_visible(cx, show_scroll_edges);
+            .set_visible(cx, edge_visibility.bottom);
     }
 
     fn send_prompt_to_agent(
@@ -5486,6 +5524,13 @@ impl MatchEvent for App {
         {
             self.apply_glass_opacity(cx, opacity);
         }
+        let list = self
+            .ui
+            .widget(cx, ids!(chat_list))
+            .portal_list(cx, ids!(list));
+        if list.scrolled(actions) {
+            self.update_empty_state_visibility(cx);
+        }
         if let Some(enabled) = self
             .ui
             .check_box(cx, ids!(thinking_toggle))
@@ -5814,18 +5859,19 @@ mod tests {
     use super::{
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        glass_opacity_values, glass_opacity_with_native_compositing_proof,
-        guard_native_splash_opaque_roots, inactive_glass_multiplier_for_appearance,
-        metal_probe_pattern_enabled_from_value,
+        chat_scroll_edge_visibility, glass_opacity_values,
+        glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
+        inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
         native_display_backing_scale_changed, parse_glass_backend, render_state_templates,
         render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
         shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
-        AppDemoState, BackendType, CalculatorDemoState, ClaudeCodeCliAgent,
-        GenericCollectionsState, GenericInputsState, GlassAppearance, GlassBackendRequest,
-        GlassPanelPreset, GlassSubstrate, MacosGlassStyle, ShaderBackdropConfig,
-        ShaderBackdropProof, DEFAULT_GLASS_OPACITY, INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY,
-        MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
+        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        INACTIVE_GLASS_MULTIPLIER, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
 
     #[test]
@@ -6128,6 +6174,46 @@ mod tests {
             1.0
         );
         assert_eq!(inactive_glass_multiplier_for_appearance(native, true), 1.0);
+    }
+
+    #[test]
+    fn aichat_scroll_edge_state_hides_edges_for_empty_state() {
+        assert_eq!(
+            chat_scroll_edge_visibility(true, 4, -12.0, true),
+            ChatScrollEdgeVisibility {
+                top: false,
+                bottom: false,
+            }
+        );
+    }
+
+    #[test]
+    fn aichat_scroll_edge_state_shows_top_after_scroll() {
+        assert_eq!(
+            chat_scroll_edge_visibility(false, 1, 0.0, false),
+            ChatScrollEdgeVisibility {
+                top: true,
+                bottom: false,
+            }
+        );
+        assert_eq!(
+            chat_scroll_edge_visibility(false, 0, -8.0, false),
+            ChatScrollEdgeVisibility {
+                top: true,
+                bottom: false,
+            }
+        );
+    }
+
+    #[test]
+    fn aichat_scroll_edge_state_shows_bottom_for_further_items() {
+        assert_eq!(
+            chat_scroll_edge_visibility(false, 0, 0.0, true),
+            ChatScrollEdgeVisibility {
+                top: false,
+                bottom: true,
+            }
+        );
     }
 
     #[test]

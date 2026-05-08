@@ -57,8 +57,9 @@ The current production path remains:
 - Studio widget dumps still show Makepad-owned scroll content and edge overlays.
 - The current policy starts with Makepad semantic styling; native scroll edge
   behavior remains future work.
-- `GlassScrollEdge` exists and is wired into aichat as a staged overlay, but
-  scroll-state-driven edge strength is not yet complete.
+- `GlassScrollEdge` exists and is wired into aichat. Visibility follows
+  `PortalList` state, but continuous scroll-offset-driven edge strength is not
+  yet complete.
 
 ### Fullscreen
 
