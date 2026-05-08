@@ -132,6 +132,33 @@ impl NativeGlassStyle {
             Self::Clear => 1,
         }
     }
+
+    fn default_ios_raw_value(self) -> i64 {
+        match self {
+            Self::Regular => 0,
+            Self::Clear => 1,
+        }
+    }
+
+    fn ios_style_override_env_var(self) -> &'static str {
+        match self {
+            Self::Regular => "AICHAT_IOS_GLASS_STYLE_REGULAR_RAW",
+            Self::Clear => "AICHAT_IOS_GLASS_STYLE_CLEAR_RAW",
+        }
+    }
+
+    pub fn ios_raw_value_from_override(self, override_value: Option<&str>) -> i64 {
+        override_value
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or_else(|| self.default_ios_raw_value())
+    }
+
+    pub fn ios_raw_value(self) -> i64 {
+        match std::env::var(self.ios_style_override_env_var()) {
+            Ok(value) => self.ios_raw_value_from_override(Some(&value)),
+            Err(_) => self.default_ios_raw_value(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,6 +497,39 @@ mod native_glass_tests {
     fn native_glass_style_maps_to_macos_raw_values() {
         assert_eq!(NativeGlassStyle::Regular.macos_raw_value(), 0);
         assert_eq!(NativeGlassStyle::Clear.macos_raw_value(), 1);
+    }
+
+    #[test]
+    fn native_glass_style_maps_to_ios_default_raw_values() {
+        assert_eq!(
+            NativeGlassStyle::Regular.ios_raw_value_from_override(None),
+            0
+        );
+        assert_eq!(NativeGlassStyle::Clear.ios_raw_value_from_override(None), 1);
+    }
+
+    #[test]
+    fn native_glass_style_ios_raw_value_accepts_override() {
+        assert_eq!(
+            NativeGlassStyle::Regular.ios_raw_value_from_override(Some("7")),
+            7
+        );
+        assert_eq!(
+            NativeGlassStyle::Clear.ios_raw_value_from_override(Some("8")),
+            8
+        );
+    }
+
+    #[test]
+    fn native_glass_style_ios_raw_value_rejects_invalid_override() {
+        assert_eq!(
+            NativeGlassStyle::Regular.ios_raw_value_from_override(Some("nope")),
+            0
+        );
+        assert_eq!(
+            NativeGlassStyle::Clear.ios_raw_value_from_override(Some("")),
+            1
+        );
     }
 
     #[test]

@@ -96,13 +96,10 @@ mod native_glass_tests {
     #[test]
     fn ios_native_glass_style_raw_values_follow_current_apple_order() {
         assert_eq!(
-            IosApp::ios_native_glass_style_raw_value(NativeGlassStyle::Regular),
+            NativeGlassStyle::Regular.ios_raw_value_from_override(None),
             0
         );
-        assert_eq!(
-            IosApp::ios_native_glass_style_raw_value(NativeGlassStyle::Clear),
-            1
-        );
+        assert_eq!(NativeGlassStyle::Clear.ios_raw_value_from_override(None), 1);
     }
 }
 
@@ -503,16 +500,6 @@ impl IosApp {
         Self::native_glass_ui_rect_from_makepad_rect(relative)
     }
 
-    pub(crate) fn ios_native_glass_style_raw_value(style: NativeGlassStyle) -> i64 {
-        match style {
-            // Keep this in the same declaration order currently used by the macOS
-            // dynamic path: regular, then clear. If UIKit runtime evidence proves a
-            // different order, this single boundary is the value to update.
-            NativeGlassStyle::Regular => 0,
-            NativeGlassStyle::Clear => 1,
-        }
-    }
-
     fn ios_native_glass_effect_view_class() -> ObjcId {
         unsafe {
             makepad_objc_sys::runtime::objc_getClass(b"UIVisualEffectView\0".as_ptr() as *const _)
@@ -791,7 +778,7 @@ impl IosApp {
                 let effect: ObjcId = msg_send![glass_effect_class, alloc];
                 let effect: ObjcId = msg_send![
                     effect,
-                    initWithStyle: Self::ios_native_glass_style_raw_value(panel.style)
+                    initWithStyle: panel.style.ios_raw_value()
                 ];
                 if effect == nil {
                     panel_results.push(NativeGlassPanelResult {
@@ -894,7 +881,7 @@ impl IosApp {
                         NativeGlassStyle::Regular => "regular",
                         NativeGlassStyle::Clear => "clear",
                     },
-                    Self::ios_native_glass_style_raw_value(style)
+                    style.ios_raw_value()
                 );
             }
             let compat_event = first_style.map(|_| WindowNativeSubstrateResolvedEvent {

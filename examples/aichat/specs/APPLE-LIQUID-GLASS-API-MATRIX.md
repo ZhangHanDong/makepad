@@ -117,8 +117,8 @@ Decision for Phase B:
 |---|---|---:|---|
 | macOS | regular | `0` | Verified in v3 runtime logs; see `aichat-liquid-glass-v1-release-notes.md`. |
 | macOS | clear | `1` | Verified in v3 runtime logs; see `aichat-liquid-glass-v1-release-notes.md`. |
-| iOS/iPadOS | regular | Assumed `0` | Step 71 skeleton uses the same declaration order as macOS; must be confirmed on iOS 26 runtime. |
-| iOS/iPadOS | clear | Assumed `1` | Step 71 skeleton uses the same declaration order as macOS; must be confirmed on iOS 26 runtime. |
+| iOS/iPadOS | regular | Assumed `0` | Step 71 skeleton uses the same declaration order as macOS; Step 72 adds `AICHAT_IOS_GLASS_STYLE_REGULAR_RAW` for runtime override; must be confirmed on iOS 26 runtime. |
+| iOS/iPadOS | clear | Assumed `1` | Step 71 skeleton uses the same declaration order as macOS; Step 72 adds `AICHAT_IOS_GLASS_STYLE_CLEAR_RAW` for runtime override; must be confirmed on iOS 26 runtime. |
 
 ## Selectors and Properties
 
