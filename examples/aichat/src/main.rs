@@ -1081,7 +1081,7 @@ script_mod! {
                             height: Fit
                             align: Align{x: 0.5 y: 0.0}
 
-                            composer := GlassPanel {
+                            composer := GlassComposer {
                                 width: Fill{min: 620 max: 1040}
                                 height: Fit
                                 native: true

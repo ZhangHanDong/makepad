@@ -391,6 +391,27 @@ script_mod! {
             border_color_focus: #xFFF0D2CC
         }
     }
+
+    mod.widgets.GlassComposer = mod.widgets.GlassPanel{
+        flow: Down
+        padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
+        spacing: 10
+        draw_bg +: {
+            tint_color: #x082E27
+            tint_alpha: 0.82
+            border_color: #xEAD8B8
+            border_alpha: 0.24
+            border_width: 0.8
+            corner_radius: 24.0
+            halo_color: #xA8F0FF
+            halo_strength: 0.045
+            halo_radius: 5.0
+            highlight_strength: 0.24
+            highlight_band_height: 34.0
+            chroma_strength: 0.0
+            noise_strength: 0.003
+        }
+    }
 }
 
 #[derive(Clone)]

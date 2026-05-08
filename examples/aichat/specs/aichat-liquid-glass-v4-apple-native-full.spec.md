@@ -521,6 +521,11 @@ aichat needs these first:
 - `GlassCard`: message card/readability surface, native glass optional
 - `GlassComposer`: input surface with stronger readability and controls
 
+`GlassComposer` is a semantic Makepad surface for text input and composer
+actions. It may opt into native descriptors through normal `GlassPanel`
+properties, but it does not replace Makepad text input with a native AppKit or
+UIKit text control in v4.1/v4.2.
+
 ### GlassSeparator
 
 Separators must be material-aware. In native mode, separators should be subtle and high-contrast aware.
