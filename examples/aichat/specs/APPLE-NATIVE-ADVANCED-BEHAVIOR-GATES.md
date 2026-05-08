@@ -32,7 +32,7 @@ The current production path remains:
 | Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; Step 56 logs `native-container-spacing` and tests spacing changes invalidate native batches | Static mapping plus probe only; animated morph transitions remain unproven | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
 | Scroll edge glass | `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md` defines the route; `GlassScrollEdge` / `GlassScrollEdgeBottom` provide Makepad-rendered semantic hooks; Steps 60-62 wire edge visibility and strength to `PortalList` state | Makepad semantic scroll edges are wired; native scroll edge behavior remains future work | Define whether future native scroll edge glass is a native panel region or platform-specific control behavior. |
 | Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit; Step 65 adds `makepad-example-aichat-macos-native-clear-fullscreen-probe` and macOS handling for `CxOsOp::FullscreenWindow` / `NormalizeWindow` | Explicit fullscreen fallback with probe, not full native fullscreen support | Studio/manual run must enter and exit fullscreen with native panels aligned, no stale AppKit views, no crash, and explicit fallback logs if disabled. |
-| Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active | Probe only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
+| Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active; Step 66 logs `native-display-frame-snapshot` / `native-panel-frame` from the cached native batch | Probe plus frame snapshot only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | No local runtime evidence beyond the known limitation list | Not implemented | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | Step 55 keeps shader inactive dimming at `0.70` and uses `NATIVE_INACTIVE_GLASS_MULTIPLIER` for a weaker native inactive app-side dim | Readability policy only; native inactive-window support remains unproven | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
 | Popup/modal native glass | Makepad has popup/modal widgets and popup windows; no native glass transient-window policy exists | Not implemented | Define separate-window z-order, focus, dismissal, hit-test, and native surface ownership before creating AppKit `NSPanel` or UIKit `UIWindow` glass. |
@@ -88,6 +88,10 @@ The current production path remains:
 - The current Step 54 probe records `native-display-change` for backing-scale
   changes, but it does not by itself prove panel alignment or complete
   multi-display support.
+- Step 66 adds macOS backend frame snapshots on backing-scale changes:
+  `native-display-frame-snapshot` summarizes dpi/position, and
+  `native-panel-frame` logs each panel's Makepad logical rect plus the AppKit
+  frame produced from it.
 
 ### Inactive window
 

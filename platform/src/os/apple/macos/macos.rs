@@ -637,6 +637,15 @@ impl Cx {
                         re.new_geom.inner_size *= re.new_geom.dpi_factor / dpi_override;
                         re.new_geom.dpi_factor = dpi_override;
                     }
+                    let backing_scale_changed =
+                        (re.old_geom.dpi_factor - re.new_geom.dpi_factor).abs() > 0.001;
+                    if backing_scale_changed {
+                        window.cocoa_window.log_native_glass_frame_snapshot(
+                            "backing-scale-change",
+                            &re.old_geom,
+                            &re.new_geom,
+                        );
+                    }
                     window.window_geom = re.new_geom.clone();
                     self.windows[re.window_id].window_geom = re.new_geom.clone();
 

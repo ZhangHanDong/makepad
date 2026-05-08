@@ -24,6 +24,7 @@ use {
             MacosWindowChrome, MacosWindowConfig, MacosWindowKind, MacosWindowLevel,
             WindowBackdrop, WindowId, WindowVisuals,
         },
+        LiveId,
     },
     std::{
         cell::Cell,
@@ -285,6 +286,28 @@ impl MacosWindow {
             size: panel_rect.size,
         };
         Self::native_glass_ns_rect_from_makepad_rect(relative, container_rect.size.y)
+    }
+
+    fn native_glass_panel_frame_snapshot_line(
+        container_id: LiveId,
+        panel: &NativeGlassPanelDescriptor,
+        panel_frame: NSRect,
+    ) -> String {
+        format!(
+            "[liquid-glass] native-panel-frame container={:?} panel={:?} makepad=({:.1},{:.1},{:.1},{:.1}) appkit=({:.1},{:.1},{:.1},{:.1}) z_order={} visible={}",
+            container_id,
+            panel.id,
+            panel.rect.pos.x,
+            panel.rect.pos.y,
+            panel.rect.size.x,
+            panel.rect.size.y,
+            panel_frame.origin.x,
+            panel_frame.origin.y,
+            panel_frame.size.width,
+            panel_frame.size.height,
+            panel.z_order,
+            panel.visible
+        )
     }
 
     fn above_metal_probe_frame(bounds: NSRect) -> NSRect {
@@ -715,6 +738,39 @@ impl MacosWindow {
                 container.installed_panels,
                 container.failed_panels
             );
+        }
+    }
+
+    pub(crate) fn log_native_glass_frame_snapshot(
+        &self,
+        reason: &'static str,
+        old_geom: &WindowGeom,
+        new_geom: &WindowGeom,
+    ) {
+        let Some(batch) = &self.last_native_glass_batch else {
+            return;
+        };
+        crate::log!(
+            "[liquid-glass] native-display-frame-snapshot reason={} old_dpi={:.3} new_dpi={:.3} old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) containers={}",
+            reason,
+            old_geom.dpi_factor,
+            new_geom.dpi_factor,
+            old_geom.position.x,
+            old_geom.position.y,
+            new_geom.position.x,
+            new_geom.position.y,
+            batch.containers.len()
+        );
+        for container in &batch.containers {
+            let mut panels: Vec<&NativeGlassPanelDescriptor> = container.panels.iter().collect();
+            panels.sort_by_key(|panel| panel.z_order);
+            for panel in panels {
+                let panel_frame = Self::native_glass_panel_ns_rect(panel.rect, container.rect);
+                crate::log!(
+                    "{}",
+                    Self::native_glass_panel_frame_snapshot_line(container.id, panel, panel_frame)
+                );
+            }
         }
     }
 
@@ -1940,7 +1996,7 @@ pub fn get_cocoa_window(this: &Object) -> &mut MacosWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LiveId, NativeGlassContainerDescriptor};
+    use crate::{LiveId, NativeGlassContainerDescriptor, NativeGlassShape};
 
     #[test]
     fn borderless_standard_windows_can_still_resize() {
@@ -1990,6 +2046,41 @@ mod tests {
         assert_eq!(ns_rect.origin.y, 240.0);
         assert_eq!(ns_rect.size.width, 100.0);
         assert_eq!(ns_rect.size.height, 40.0);
+    }
+
+    #[test]
+    fn native_glass_panel_frame_snapshot_line_contains_logical_and_appkit_frames() {
+        let panel = NativeGlassPanelDescriptor {
+            id: LiveId(2),
+            rect: Rect {
+                pos: Vec2d { x: 120.0, y: 70.0 },
+                size: Vec2d { x: 100.0, y: 40.0 },
+            },
+            shape: NativeGlassShape::RoundedRect { radius: 12.0 },
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            hit_test: NativeGlassHitTest::Passthrough,
+            z_order: 7,
+            visible: true,
+        };
+        let panel_frame = NSRect {
+            origin: NSPoint { x: 20.0, y: 240.0 },
+            size: NSSize {
+                width: 100.0,
+                height: 40.0,
+            },
+        };
+
+        let line =
+            MacosWindow::native_glass_panel_frame_snapshot_line(LiveId(1), &panel, panel_frame);
+
+        assert!(line.contains("native-panel-frame"));
+        assert!(line.contains("container=0000000000000001"));
+        assert!(line.contains("panel=0000000000000002"));
+        assert!(line.contains("makepad=(120.0,70.0,100.0,40.0)"));
+        assert!(line.contains("appkit=(20.0,240.0,100.0,40.0)"));
+        assert!(line.contains("z_order=7"));
+        assert!(line.contains("visible=true"));
     }
 
     #[test]
