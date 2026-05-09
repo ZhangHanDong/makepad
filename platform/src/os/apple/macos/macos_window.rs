@@ -16,7 +16,7 @@ use {
         makepad_math::{Rect, Vec2d, Vec4f},
         os::{
             apple::apple_sys::*,
-            apple::apple_util::str_to_nsstring,
+            apple::apple_util::{nsstring_to_string, str_to_nsstring},
             macos::{
                 macos_app::{get_macos_class_global, with_macos_app, MacosApp},
                 macos_event::MacosEvent,
@@ -801,6 +801,50 @@ impl MacosWindow {
         );
     }
 
+    unsafe fn native_glass_objc_class_name(object: ObjcId) -> String {
+        if object == nil {
+            return "nil".to_string();
+        }
+        let class: ObjcId = msg_send![object, class];
+        nsstring_to_string(NSStringFromClass(class as _))
+    }
+
+    unsafe fn log_native_glass_control_hierarchy(&self) {
+        let subviews: ObjcId = msg_send![self.container_view, subviews];
+        let count: usize = msg_send![subviews, count];
+        crate::log!(
+            "[liquid-glass] backend=apple-native-controls hierarchy subviews={}",
+            count
+        );
+        for index in 0..count {
+            let view: ObjcId = msg_send![subviews, objectAtIndex: index];
+            let frame: NSRect = msg_send![view, frame];
+            let hidden: BOOL = msg_send![view, isHidden];
+            let role = if view == self.view {
+                "metal-view"
+            } else if self
+                .native_glass_control_views
+                .iter()
+                .any(|control| *control == view)
+            {
+                "native-control"
+            } else {
+                "other"
+            };
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls hierarchy index={} role={} class={} frame=({:.1},{:.1},{:.1},{:.1}) hidden={}",
+                index,
+                role,
+                Self::native_glass_objc_class_name(view),
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+                hidden
+            );
+        }
+    }
+
     fn native_glass_button_class() -> ObjcId {
         get_macos_class_global().native_glass_button as ObjcId
     }
@@ -913,6 +957,7 @@ impl MacosWindow {
                 (NativeGlassBackendState::Partial, "partial-button-install")
             };
             Self::log_native_glass_control_batch(&batch, state, reason);
+            self.log_native_glass_control_hierarchy();
             self.last_native_glass_control_batch = Some(batch);
         }
     }

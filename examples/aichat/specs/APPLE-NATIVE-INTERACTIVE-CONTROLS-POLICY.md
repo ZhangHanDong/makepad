@@ -163,6 +163,19 @@ Step 118 records that build `[116]` produced no post-click diagnostics after
 system-level and Studio click attempts, confirmed with `QueryLogs` since index
 `8154`. This keeps native-control validation open.
 
+Step 119 adds AppKit container hierarchy logs after native control installation:
+
+- `hierarchy subviews=N`
+- `hierarchy index=... role=... class=... frame=(...) hidden=...`
+
+This verifies native button placement and sibling order, but it is not a
+substitute for real AppKit target/action delivery.
+
+Step 119 found the native frame for `clear_button` did not match the Studio
+`WidgetQuery` rect. A `clipped_rect` attempt rejected the control batch as
+`empty-visible-control-rect`; a view-origin transform attempt produced invalid
+offscreen frames. Neither geometry fix is retained.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
