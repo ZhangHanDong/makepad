@@ -111,6 +111,10 @@ The current production path remains:
   AppKit frames that match the current container.
 - The current Step 67 probe records evidence only; Stage Manager and split-view
   support remain unproven until a real runtime smoke run is reviewed.
+- Step 131 records Studio release build `[142]` for the geometry probe. The app
+  reached State 4, but System Events reported no scriptable
+  `makepad-example-aichat` window, so no resize/reposition happened and no
+  `native-display-frame-snapshot reason=geometry-change` evidence was produced.
 
 ### Inactive window
 

@@ -148,6 +148,12 @@ Recent verified gates:
   build `[141]`. It logged `native-inactive-probe active=true style=clear
   multiplier=1.000`, but activating Finder did not produce `active=false`
   evidence. Inactive-window behavior remains unproven.
+- Step 131 runs
+  `makepad-example-aichat-macos-native-clear-geometry-probe` in Studio release
+  build `[142]`. The app reached State 4, but System Events reported no
+  scriptable `makepad-example-aichat` window, so no geometry-change frame
+  snapshot evidence was produced. Stage Manager/split-view and resize/reposition
+  behavior remain unproven.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -196,6 +202,8 @@ behavior, or full native interior Liquid Glass.
   installed, but it does not prove final morphing visual quality.
 - Step 130 confirms native inactive logging for the active state only; inactive
   transition behavior is still unproven.
+- Step 131 confirms the geometry probe runnable reaches State 4, but current
+  automation cannot drive a borderless Makepad window geometry change.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
 - Fullscreen-specific native glass behavior remains a known limitation.
