@@ -69,13 +69,19 @@ No local `MacOSX15.5.sdk` header evidence was found for a dedicated public
 model. If a macOS 26 SDK adds a glass-specific button style or configuration,
 it needs a new SDK probe before implementation.
 
+Follow-up evidence after the initial research found AppKit's macOS 26
+`NSButton.BezelStyle.glass` surface. Step 144 uses the dynamic
+`setBezelStyle:` path with raw value `16` because the local SDK still lacks the
+typed enum case. `MAKEPAD_NATIVE_GLASS_BUTTON_BEZEL_RAW` is available for
+runtime validation if the raw value changes.
+
 Implication for Makepad:
 
 - Do not infer button glass from `NSGlassEffectView`.
 - Do not create an `NSGlassEffectView` panel per button.
 - Keep Makepad-rendered button visuals for v4.1/v4.2.
-- Later native-button work should probe AppKit for a button-specific glass API,
-  not panel APIs.
+- Native-button work uses the button-specific `NSButton.BezelStyle.glass`
+  surface, not panel APIs.
 
 ## UIKit Findings
 

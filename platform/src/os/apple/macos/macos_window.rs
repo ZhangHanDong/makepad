@@ -926,6 +926,39 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_button_bezel_style_raw_from_value(value: Option<&str>) -> i64 {
+        value
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(16)
+    }
+
+    fn native_glass_button_bezel_style_raw() -> i64 {
+        let raw = Self::native_glass_button_bezel_style_raw_from_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_BUTTON_BEZEL_RAW")
+                .ok()
+                .as_deref(),
+        );
+        if std::env::var("MAKEPAD_NATIVE_GLASS_BUTTON_BEZEL_RAW").is_ok() {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls bezel-override raw={}",
+                raw
+            );
+        }
+        raw
+    }
+
+    fn native_glass_button_style_line(
+        control: &NativeGlassControlDescriptor,
+        bezel_raw: i64,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-controls button-style control={:?} label={:?} bezel=glass raw={}",
+            control.id,
+            control.label,
+            bezel_raw
+        )
+    }
+
     fn native_glass_control_mouse_event_probe_matches(
         control: &NativeGlassControlDescriptor,
     ) -> bool {
@@ -1121,6 +1154,22 @@ impl MacosWindow {
         let () = msg_send![button, setEnabled: if control.enabled { YES } else { NO }];
         let () = msg_send![button, setHidden: if control.visible { NO } else { YES }];
         let () = msg_send![button, setWantsLayer: YES];
+        let set_bezel_style_sel = sel!(setBezelStyle:);
+        let can_set_bezel_style: BOOL = msg_send![button, respondsToSelector: set_bezel_style_sel];
+        if can_set_bezel_style == YES {
+            let bezel_raw = Self::native_glass_button_bezel_style_raw();
+            let () = msg_send![button, setBezelStyle: bezel_raw];
+            crate::log!(
+                "{}",
+                Self::native_glass_button_style_line(control, bezel_raw)
+            );
+        } else {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls button-style control={:?} label={:?} state=Unsupported reason=setBezelStyle-missing",
+                control.id,
+                control.label
+            );
+        }
 
         let target: ObjcId = msg_send![get_macos_class_global().native_glass_control_target, new];
         if target == nil {
@@ -2670,6 +2719,50 @@ mod tests {
             None,
             &control
         ));
+    }
+
+    #[test]
+    fn native_glass_button_bezel_style_defaults_to_macos26_glass_raw_value() {
+        assert_eq!(
+            MacosWindow::native_glass_button_bezel_style_raw_from_value(None),
+            16
+        );
+        assert_eq!(
+            MacosWindow::native_glass_button_bezel_style_raw_from_value(Some("18")),
+            18
+        );
+        assert_eq!(
+            MacosWindow::native_glass_button_bezel_style_raw_from_value(Some("not-a-number")),
+            16
+        );
+    }
+
+    #[test]
+    fn native_glass_button_style_line_records_glass_bezel_raw_value() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(12),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        let line = MacosWindow::native_glass_button_style_line(&control, 16);
+
+        assert!(line.contains("button-style"));
+        assert!(line.contains("control=000000000000000c"));
+        assert!(line.contains("label=\"Clear\""));
+        assert!(line.contains("bezel=glass"));
+        assert!(line.contains("raw=16"));
     }
 
     #[test]

@@ -239,6 +239,14 @@ Build `[138]` logged `cg-event-probe mode=Process`, but no subsequent
 gate focused on physical/system event delivery rather than AppKit button
 geometry or the target/action bridge.
 
+Step 144 configures installed macOS `NativeGlassButton` mirrors with
+`NSButton.BezelStyle.glass` through the dynamic `setBezelStyle:` path. The
+local SDK lacks the typed enum case, so the installer uses the macOS 26 raw
+value `16` and exposes `MAKEPAD_NATIVE_GLASS_BUTTON_BEZEL_RAW` for runtime
+validation. This closes the first macOS native-button styling gap, but still
+does not prove physical/system click delivery, UIKit controls, or
+accessibility.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -268,9 +276,9 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   the first native button installer; icon transport is not part of this slice.
 - macOS validates and logs native control batches but does not create AppKit
   controls unless explicit `Button.native_control` descriptors are present.
-- macOS AppKit control installation currently mirrors only `NSButton` title,
-  enabled/hidden state, rect, and target/action; glass-specific button styling
-  remains unproven.
+- macOS AppKit control installation mirrors `NSButton` title, enabled/hidden
+  state, rect, target/action, and the macOS 26 glass bezel raw value. Physical
+  click delivery and accessibility remain unproven.
 - aichat native controls are opt-in behind `AICHAT_NATIVE_CONTROL_PROBE`.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
