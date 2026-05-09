@@ -71,6 +71,19 @@ impl IosNativeGlassPreflight {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IosNativeGlassControlPreflight {
+    reason: &'static str,
+    missing_class: Option<&'static str>,
+    missing_selector: Option<&'static str>,
+}
+
+impl IosNativeGlassControlPreflight {
+    fn is_supported(self) -> bool {
+        self.missing_class.is_none() && self.missing_selector.is_none()
+    }
+}
+
 fn ios_native_glass_required_class_names() -> [&'static str; 3] {
     [
         "UIVisualEffectView",
@@ -100,6 +113,8 @@ fn ios_native_glass_class_name_bytes(class_name: &'static str) -> &'static [u8] 
         "UIGlassEffect" => b"UIGlassEffect\0",
         "UIView" => b"UIView\0",
         "CALayer" => b"CALayer\0",
+        "UIButton" => b"UIButton\0",
+        "UIButtonConfiguration" => b"UIButtonConfiguration\0",
         _ => b"\0",
     }
 }
@@ -129,11 +144,150 @@ fn ios_native_glass_control_validation_reason(
     }
 }
 
+fn ios_native_glass_control_preflight_result_from_missing_class(
+    missing_class: Option<&'static str>,
+) -> IosNativeGlassControlPreflight {
+    IosNativeGlassControlPreflight {
+        reason: if missing_class.is_some() {
+            "uikit-control-class-missing"
+        } else {
+            "available"
+        },
+        missing_class,
+        missing_selector: None,
+    }
+}
+
+fn ios_native_glass_control_preflight_result_from_missing_selector(
+    missing_selector: Option<&'static str>,
+) -> IosNativeGlassControlPreflight {
+    IosNativeGlassControlPreflight {
+        reason: if missing_selector.is_some() {
+            "uikit-control-selector-missing"
+        } else {
+            "available"
+        },
+        missing_class: None,
+        missing_selector,
+    }
+}
+
+fn ios_native_glass_control_required_class_names() -> [&'static str; 2] {
+    ["UIButton", "UIButtonConfiguration"]
+}
+
+fn ios_native_glass_control_required_selector_checks() -> [(&'static str, &'static str); 9] {
+    [
+        ("UIButton", "buttonWithType:"),
+        ("UIButton", "setFrame:"),
+        ("UIButton", "setUserInteractionEnabled:"),
+        ("UIButton", "setAccessibilityLabel:"),
+        ("UIButton", "setConfiguration:"),
+        ("UIButton", "addTarget:action:forControlEvents:"),
+        ("UIButtonConfiguration", "glassButtonConfiguration"),
+        ("UIButtonConfiguration", "clearGlassButtonConfiguration"),
+        ("UIView", "insertSubview:aboveSubview:"),
+    ]
+}
+
+fn ios_native_glass_control_selector_exists(
+    class_name: &'static str,
+    selector_name: &'static str,
+) -> bool {
+    let class = unsafe {
+        objc_getClass(ios_native_glass_class_name_bytes(class_name).as_ptr() as *const c_char)
+    };
+    if class.is_null() {
+        return false;
+    }
+    unsafe {
+        match selector_name {
+            "buttonWithType:" => {
+                let responds: BOOL = msg_send![class, respondsToSelector: sel!(buttonWithType:)];
+                responds == YES
+            }
+            "setFrame:" => {
+                let responds: BOOL = msg_send![class, instancesRespondToSelector: sel!(setFrame:)];
+                responds == YES
+            }
+            "setUserInteractionEnabled:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setUserInteractionEnabled:)];
+                responds == YES
+            }
+            "setAccessibilityLabel:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setAccessibilityLabel:)];
+                responds == YES
+            }
+            "setConfiguration:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setConfiguration:)];
+                responds == YES
+            }
+            "addTarget:action:forControlEvents:" => {
+                let responds: BOOL = msg_send![
+                    class,
+                    instancesRespondToSelector: sel!(addTarget:action:forControlEvents:)
+                ];
+                responds == YES
+            }
+            "glassButtonConfiguration" => {
+                let responds: BOOL =
+                    msg_send![class, respondsToSelector: sel!(glassButtonConfiguration)];
+                responds == YES
+            }
+            "clearGlassButtonConfiguration" => {
+                let responds: BOOL =
+                    msg_send![class, respondsToSelector: sel!(clearGlassButtonConfiguration)];
+                responds == YES
+            }
+            "insertSubview:aboveSubview:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(insertSubview:aboveSubview:)];
+                responds == YES
+            }
+            _ => false,
+        }
+    }
+}
+
+fn ios_native_glass_control_runtime_preflight() -> IosNativeGlassControlPreflight {
+    for class_name in ios_native_glass_control_required_class_names() {
+        let class = unsafe {
+            objc_getClass(ios_native_glass_class_name_bytes(class_name).as_ptr() as *const c_char)
+        };
+        if class.is_null() {
+            return ios_native_glass_control_preflight_result_from_missing_class(Some(class_name));
+        }
+    }
+    for (class_name, selector_name) in ios_native_glass_control_required_selector_checks() {
+        if !ios_native_glass_control_selector_exists(class_name, selector_name) {
+            return ios_native_glass_control_preflight_result_from_missing_selector(Some(
+                selector_name,
+            ));
+        }
+    }
+    ios_native_glass_control_preflight_result_from_missing_selector(None)
+}
+
 fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch) {
     match batch.validate_v4_10() {
         Ok(()) => {
+            let preflight = ios_native_glass_control_runtime_preflight();
+            if !preflight.is_supported() {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-ios-controls state=Unsupported reason={} missing_class={} missing_selector={} controls_total={} controls_visible={}",
+                    preflight.reason,
+                    preflight.missing_class.unwrap_or("none"),
+                    preflight.missing_selector.unwrap_or("none"),
+                    batch.controls.len(),
+                    batch.visible_control_count()
+                );
+                return;
+            }
             crate::log!(
-                "[liquid-glass] backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented controls_total={} controls_visible={}",
+                "[liquid-glass] backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented missing_class=none missing_selector=none controls_total={} controls_visible={}",
                 batch.controls.len(),
                 batch.visible_control_count()
             );
@@ -1969,6 +2123,56 @@ mod tests {
                 }
             ),
             "empty-visible-control-rect"
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_control_required_classes_include_button_configuration() {
+        assert_eq!(
+            ios_native_glass_control_required_class_names(),
+            ["UIButton", "UIButtonConfiguration"]
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_control_preflight_reports_missing_class_reason() {
+        let preflight =
+            ios_native_glass_control_preflight_result_from_missing_class(Some(
+                "UIButtonConfiguration",
+            ));
+
+        assert_eq!(preflight.reason, "uikit-control-class-missing");
+        assert_eq!(preflight.missing_class, Some("UIButtonConfiguration"));
+        assert_eq!(preflight.missing_selector, None);
+    }
+
+    #[test]
+    fn ios_native_glass_control_preflight_reports_missing_selector_reason() {
+        let preflight =
+            ios_native_glass_control_preflight_result_from_missing_selector(Some(
+                "glassButtonConfiguration",
+            ));
+
+        assert_eq!(preflight.reason, "uikit-control-selector-missing");
+        assert_eq!(preflight.missing_class, None);
+        assert_eq!(preflight.missing_selector, Some("glassButtonConfiguration"));
+    }
+
+    #[test]
+    fn ios_native_glass_control_required_selector_checks_include_glass_buttons() {
+        assert_eq!(
+            ios_native_glass_control_required_selector_checks(),
+            [
+                ("UIButton", "buttonWithType:"),
+                ("UIButton", "setFrame:"),
+                ("UIButton", "setUserInteractionEnabled:"),
+                ("UIButton", "setAccessibilityLabel:"),
+                ("UIButton", "setConfiguration:"),
+                ("UIButton", "addTarget:action:forControlEvents:"),
+                ("UIButtonConfiguration", "glassButtonConfiguration"),
+                ("UIButtonConfiguration", "clearGlassButtonConfiguration"),
+                ("UIView", "insertSubview:aboveSubview:"),
+            ]
         );
     }
 

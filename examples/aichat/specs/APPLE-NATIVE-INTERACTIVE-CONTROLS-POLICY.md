@@ -88,6 +88,14 @@ This is intentionally not UIKit control installation yet; it proves the op
 reaches the iOS backend and keeps descriptor validation observable until the
 iOS 26 native-control installer phase.
 
+Step 147 adds the first iOS native-control UIKit preflight. Valid batches now
+check `UIButton`, `UIButtonConfiguration`, ordinary button selectors, and the
+iOS 26 glass configuration selectors `glassButtonConfiguration` and
+`clearGlassButtonConfiguration` before falling back to
+`installer-not-implemented`. This does not install `UIButton` mirrors yet; it
+turns the iOS control gate from a generic unsupported reason into concrete
+class/selector evidence.
+
 Step 108 adds the first macOS AppKit installer skeleton:
 
 - visible native button descriptors create `NSButton` mirrors above the Metal
