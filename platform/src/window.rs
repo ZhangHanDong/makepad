@@ -1003,4 +1003,26 @@ mod tests {
 
         assert!(cx.platform_ops.is_empty());
     }
+
+    #[test]
+    fn popup_outside_click_helper_ignores_clicks_inside_popup_window() {
+        let mut cx = test_cx();
+        let main = WindowHandle::new(&mut cx);
+        let main_id = main.window_id();
+        cx.windows[main_id].is_created = true;
+
+        let popup =
+            WindowHandle::new_popup(&mut cx, main_id, dvec2(20.0, 20.0), dvec2(80.0, 40.0));
+        let popup_id = popup.window_id();
+        cx.windows[popup_id].is_created = true;
+
+        assert_eq!(
+            cx.popup_to_dismiss_for_non_popup_mouse_down(popup_id),
+            None
+        );
+        assert_eq!(
+            cx.popup_to_dismiss_for_non_popup_mouse_down(main_id),
+            Some(popup_id)
+        );
+    }
 }

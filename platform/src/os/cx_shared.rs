@@ -5,8 +5,8 @@ use {
         cx_api::CxOsApi,
         draw_pass::{CxDrawPassParent, DrawPassId},
         event::{
-            DrawEvent, Event, KeyFocusEvent, NextFrameEvent, TextClipboardEvent, TimerEvent,
-            TriggerEvent,
+            DrawEvent, Event, KeyFocusEvent, NextFrameEvent, PopupDismissReason,
+            PopupDismissedEvent, TextClipboardEvent, TimerEvent, TriggerEvent,
         },
         makepad_live_id::{live_id, LiveId},
         makepad_network::NetworkResponse,
@@ -22,6 +22,40 @@ use {
 };
 
 impl Cx {
+    pub(crate) fn popup_to_dismiss_for_non_popup_mouse_down(
+        &self,
+        window_id: crate::window::WindowId,
+    ) -> Option<crate::window::WindowId> {
+        if self.windows[window_id].is_popup {
+            return None;
+        }
+        for i in (0..self.windows.len()).rev() {
+            let popup_id = crate::window::CxWindowPool::from_usize(i);
+            let window = &self.windows[popup_id];
+            if window.is_created && window.is_popup {
+                return Some(popup_id);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn dispatch_popup_outside_click_if_needed(
+        &mut self,
+        window_id: crate::window::WindowId,
+    ) {
+        if let Some(popup_id) = self.popup_to_dismiss_for_non_popup_mouse_down(window_id) {
+            crate::log!(
+                "[liquid-glass] transient-window=popup-dismiss event=outside-click popup={:?} source_window={:?}",
+                popup_id,
+                window_id
+            );
+            self.call_event_handler(&Event::PopupDismissed(PopupDismissedEvent {
+                window_id: popup_id,
+                reason: PopupDismissReason::OutsideClick,
+            }));
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn repaint_windows(&mut self) {
         for draw_pass_id in self.passes.id_iter() {
@@ -446,6 +480,7 @@ impl Cx {
                     time: e.time,
                     handled: Cell::new(Area::Empty),
                 };
+                self.dispatch_popup_outside_click_if_needed(window_id);
                 self.fingers.process_tap_count(event.abs, event.time);
                 self.fingers.mouse_down(event.button, window_id);
                 self.call_event_handler(&Event::MouseDown(event));

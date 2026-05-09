@@ -1116,6 +1116,7 @@ impl Cx {
                 self.handle_repaint(metal_windows, metal_cx);
             }
             MacosEvent::MouseDown(mut e) => {
+                self.dispatch_popup_outside_click_if_needed(e.window_id);
                 self.dpi_override_scale(&mut e.abs, e.window_id);
                 self.fingers.process_tap_count(e.abs, e.time);
                 self.fingers.mouse_down(e.button, e.window_id);

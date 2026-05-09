@@ -156,6 +156,18 @@ popup native glass setup still works after the change, but automated
 `osascript` / `cliclick` Escape injection produced no post-input logs. Physical
 Escape validation therefore remains open.
 
+Step 140 adds outside-click dismissal routing for the macOS event path and the
+shared Studio input path. Studio release build `[171]` produced:
+
+```text
+[liquid-glass] transient-window=popup-dismiss event=outside-click popup=WindowId(1, 0) source_window=WindowId(0, 0)
+[liquid-glass] transient-window-probe=dismissed popup=WindowId(1, 0) reason=OutsideClick
+```
+
+This closes the Studio/Makepad shared input outside-click gate. Physical AppKit
+outside-click validation remains open until a trusted system input run produces
+the same logs.
+
 ## Acceptance
 
 Phase I is not complete until all of the following are true:
