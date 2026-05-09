@@ -11,9 +11,9 @@ use {
                 VideoSeekableRangesEvent, VideoSource, VideoTextureUpdatedEvent,
                 VideoYuvTexturesReady,
             },
-            Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
-            NativeGlassControlBatch, NativeGlassControlBatchValidationError,
-            WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
+            Event, KeyEvent, NativeGlassControlBatch, NativeGlassControlBatchValidationError,
+            TextInputEvent, TextRangeReplaceEvent, WindowNativeSubstrateResolvedEvent,
+            WindowNativeSubstrateState,
         },
         makepad_live_id::*,
         makepad_objc_sys::{objc_block, runtime::objc_getClass},
@@ -176,11 +176,12 @@ fn ios_native_glass_control_required_class_names() -> [&'static str; 2] {
     ["UIButton", "UIButtonConfiguration"]
 }
 
-fn ios_native_glass_control_required_selector_checks() -> [(&'static str, &'static str); 10] {
+fn ios_native_glass_control_required_selector_checks() -> [(&'static str, &'static str); 11] {
     [
         ("UIButton", "buttonWithType:"),
         ("UIButton", "setFrame:"),
         ("UIButton", "setUserInteractionEnabled:"),
+        ("UIButton", "setEnabled:"),
         ("UIButton", "setAccessibilityLabel:"),
         ("UIButton", "setTitle:forState:"),
         ("UIButton", "setConfiguration:"),
@@ -2141,10 +2142,9 @@ mod tests {
 
     #[test]
     fn ios_native_glass_control_preflight_reports_missing_class_reason() {
-        let preflight =
-            ios_native_glass_control_preflight_result_from_missing_class(Some(
-                "UIButtonConfiguration",
-            ));
+        let preflight = ios_native_glass_control_preflight_result_from_missing_class(Some(
+            "UIButtonConfiguration",
+        ));
 
         assert_eq!(preflight.reason, "uikit-control-class-missing");
         assert_eq!(preflight.missing_class, Some("UIButtonConfiguration"));
@@ -2153,10 +2153,9 @@ mod tests {
 
     #[test]
     fn ios_native_glass_control_preflight_reports_missing_selector_reason() {
-        let preflight =
-            ios_native_glass_control_preflight_result_from_missing_selector(Some(
-                "glassButtonConfiguration",
-            ));
+        let preflight = ios_native_glass_control_preflight_result_from_missing_selector(Some(
+            "glassButtonConfiguration",
+        ));
 
         assert_eq!(preflight.reason, "uikit-control-selector-missing");
         assert_eq!(preflight.missing_class, None);
@@ -2171,6 +2170,7 @@ mod tests {
                 ("UIButton", "buttonWithType:"),
                 ("UIButton", "setFrame:"),
                 ("UIButton", "setUserInteractionEnabled:"),
+                ("UIButton", "setEnabled:"),
                 ("UIButton", "setAccessibilityLabel:"),
                 ("UIButton", "setTitle:forState:"),
                 ("UIButton", "setConfiguration:"),
@@ -2184,16 +2184,22 @@ mod tests {
 
     #[test]
     fn ios_native_glass_transient_probe_env_contract() {
-        assert!(ios_native_glass_transient_probe_enabled_from_value(Some("1")));
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
+            "1"
+        )));
         assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
             "true"
         )));
-        assert!(ios_native_glass_transient_probe_enabled_from_value(Some("on")));
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
+            "on"
+        )));
         assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
             "dismiss"
         )));
         assert!(!ios_native_glass_transient_probe_enabled_from_value(None));
-        assert!(!ios_native_glass_transient_probe_enabled_from_value(Some("0")));
+        assert!(!ios_native_glass_transient_probe_enabled_from_value(Some(
+            "0"
+        )));
         assert!(!ios_native_glass_transient_probe_enabled_from_value(Some(
             "false"
         )));

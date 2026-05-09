@@ -1125,6 +1125,7 @@ impl IosApp {
                     button,
                     setUserInteractionEnabled: if control.enabled { YES } else { NO }
                 ];
+                let () = msg_send![button, setEnabled: if control.enabled { YES } else { NO }];
 
                 let target: ObjcId =
                     msg_send![get_ios_class_global().native_glass_control_target, new];
