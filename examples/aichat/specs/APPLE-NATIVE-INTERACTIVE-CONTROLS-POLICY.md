@@ -209,6 +209,15 @@ id=clear_button`. This proves in-process AppKit mouse events reach the native
 button and re-enter Makepad, while leaving physical/system click validation as
 the remaining gate.
 
+Step 125 adds the explicit CGEvent system-click probe runnable
+`makepad-example-aichat-macos-native-clear-control-cgevent-probe`. It sets
+`MAKEPAD_NATIVE_GLASS_CONTROL_CGEVENT_PROBE=Clear` and posts a
+`kCGEventLeftMouseDown` / `kCGEventLeftMouseUp` pair for the matching native
+control. Builds `[135]` and `[136]` logged `cg-event-probe`, but neither run
+produced `button-mouse-down`, `target-action`, `button-action`, or
+`native-control-probe=makepad-click`. The CGEvent probe is retained as a
+diagnostic entry point; the physical/system click gate remains open.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
