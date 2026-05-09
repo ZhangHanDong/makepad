@@ -30,7 +30,7 @@ Current conclusion: not complete.
 | Requirement | Current evidence | Status |
 |---|---|---|
 | Apple API inventory | `APPLE-LIQUID-GLASS-API-MATRIX.md`; `apple-liquid-glass-phase-a-runtime-notes.md` | Partial: official docs recorded, local SDK still lacks typed 26 symbols. |
-| macOS AppKit backend | `platform/src/os/apple/macos/macos_window.rs`; Studio logs `state=4 substrate=macos-native style=clear style_raw=1`; `containers=1 panels_installed=4 panels_failed=0` | Landed for AppleNativeUnderlay. |
+| macOS AppKit backend | `platform/src/os/apple/macos/macos_window.rs`; Studio logs `state=4 substrate=macos-native style=clear style_raw=1`; `containers=1 panels_installed=4 panels_failed=0`; macOS system screenshot `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` shows broad user-visible transparency/blur/refraction over desktop wallpaper for `macos-native-clear` | Landed for AppleNativeUnderlay. |
 | Shared descriptors | `NativeGlassBatch`, `NativeGlassContainerDescriptor`, `NativeGlassPanelDescriptor` in `platform/src/event/window.rs` | Landed. |
 | Descriptor validation | `validate_v4_1`, max 12 panels, single container, reject `NativeGlassHitTest::Interactive` | Landed for v4.1 constraints. |
 | Makepad widget export | `GlassContainer`, `GlassPanel.native`, native collector tests in `widgets/src/glass_panel.rs` | Landed. |
@@ -63,6 +63,11 @@ Recent verified gates:
 - Studio release run `makepad-example-aichat-apple-native-underlay-clear`
   produced `state=4`, `style=clear`, `containers=1`,
   `panels_installed=4`, `panels_failed=0`.
+- macOS system screenshot
+  `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
+  AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
+  it shows desktop wallpaper and icons visible through the window with broad
+  blur/refraction, which Studio framebuffer screenshots do not fully capture.
 
 These gates prove the current macOS AppleNativeUnderlay path, semantic widget
 layer, and the Step 96 lower scene pass routing prototype. The Step 98 manual

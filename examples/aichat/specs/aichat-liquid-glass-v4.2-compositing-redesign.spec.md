@@ -267,6 +267,15 @@ Therefore the next complete interior Liquid Glass implementation should be a
 Makepad-rendered `ShaderBackdropInterior`, while the current native targets are
 described as `AppleNativeUnderlay` diagnostics/proofs.
 
+A later macOS system screenshot
+(`/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png`) showed the real
+window-server composition for `macos-native-clear`: broad transparency, blur,
+and refraction across the window over desktop wallpaper and icons. This
+confirms `AppleNativeUnderlay` is visually meaningful in final system
+composition even when Studio framebuffer screenshots under-represent native
+AppKit layers. It does not change the route decision because the native
+material remains below the Makepad Metal content.
+
 Step 96 reopened the native interleave route as a prototype candidate by
 proving a Makepad-owned lower scene pass can be rendered and routed to the
 lower scene surface. Step 98 then rejected that prototype for production full

@@ -77,6 +77,16 @@ as an Apple-native underlay/substrate proof, not complete Liquid Glass. Complete
 Liquid Glass requires a later compositing design that is not limited to native
 panels below the Makepad Metal layer.
 
+A later macOS system screenshot
+(`/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png`) captured the real
+AppKit composition for `makepad-example-aichat-macos-native-clear`. Unlike
+Studio framebuffer screenshots, the system screenshot includes native/AppKit
+and desktop wallpaper composition. It shows broad window-level transparency,
+blur, and refraction over the wallpaper and desktop icons. This upgrades the
+macOS native clear underlay visual evidence: `AppleNativeUnderlay` is
+user-visible and useful as a native substrate, while still not proving
+`AppleNativeInterleave` or full Makepad-content interior refraction.
+
 Next phase:
 
 - [aichat-liquid-glass-v4.2-compositing-redesign.spec.md](aichat-liquid-glass-v4.2-compositing-redesign.spec.md)
