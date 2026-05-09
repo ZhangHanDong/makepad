@@ -802,10 +802,7 @@ impl MacosWindow {
     }
 
     fn native_glass_button_class() -> ObjcId {
-        unsafe {
-            makepad_objc_sys::runtime::objc_getClass(b"NSButton\0".as_ptr() as *const c_char)
-                as ObjcId
-        }
+        get_macos_class_global().native_glass_button as ObjcId
     }
 
     fn native_glass_control_frame(

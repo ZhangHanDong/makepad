@@ -140,6 +140,29 @@ still installed two AppKit controls, but the click attempts produced no
 `target-action`, `button-action`, or `makepad-click` logs. Treat that result as
 failed/inconclusive validation, not as completion.
 
+Step 116 replaces raw `NSButton` allocation with a `NativeGlassButton` subclass
+for diagnostics:
+
+- `acceptsFirstMouse:` returns `YES` and logs `event=accepts-first-mouse`
+- `hitTest:` logs `event=button-hit-test`
+- `mouseDown:` logs `event=button-mouse-down`
+
+The next click attempt should reveal whether AppKit hit testing reaches the
+native button at all.
+
+Step 117 adds probe-gated Metal view diagnostics:
+
+- `event=metal-view-hit-test`
+- `event=metal-view-mouse-down`
+
+If these lines appear without native button logs, the click is reaching the
+Makepad view instead of the AppKit button. If neither class of log appears, the
+local system-click automation is not reaching the Studio-launched app window.
+
+Step 118 records that build `[116]` produced no post-click diagnostics after
+system-level and Studio click attempts, confirmed with `QueryLogs` since index
+`8154`. This keeps native-control validation open.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

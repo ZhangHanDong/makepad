@@ -70,6 +70,7 @@ pub struct MacosClasses {
     pub app_delegate: *const Class,
     pub menu_target: *const Class,
     pub native_glass_control_target: *const Class,
+    pub native_glass_button: *const Class,
     pub view: *const Class,
     pub timer_delegate: *const Class,
 }
@@ -90,6 +91,7 @@ impl MacosClasses {
             app_delegate: define_app_delegate(),
             menu_target: define_menu_target_class(),
             native_glass_control_target: define_native_glass_control_target_class(),
+            native_glass_button: define_native_glass_button_class(),
             view: define_cocoa_view_class(),
         }
     }

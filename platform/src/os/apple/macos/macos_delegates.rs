@@ -87,6 +87,21 @@ pub fn define_menu_target_class() -> *const Class {
     return decl.register();
 }
 
+fn native_glass_control_probe_enabled() -> bool {
+    matches!(
+        std::env::var("AICHAT_NATIVE_CONTROL_PROBE").ok().as_deref(),
+        Some("1" | "true" | "on" | "buttons")
+    )
+}
+
+unsafe fn objc_class_name(object: ObjcId) -> String {
+    if object == nil {
+        return "nil".to_string();
+    }
+    let class: ObjcId = msg_send![object, class];
+    nsstring_to_string(NSStringFromClass(class as _))
+}
+
 pub fn define_native_glass_control_target_class() -> *const Class {
     extern "C" fn native_glass_control_action(this: &Object, _sel: Sel, _item: ObjcId) {
         unsafe {
@@ -117,6 +132,58 @@ pub fn define_native_glass_control_target_class() -> *const Class {
     decl.add_ivar::<usize>("window_index");
     decl.add_ivar::<u64>("window_generation");
     decl.add_ivar::<u64>("control_id_u64");
+    return decl.register();
+}
+
+pub fn define_native_glass_button_class() -> *const Class {
+    extern "C" fn accepts_first_mouse(_this: &Object, _sel: Sel, _event: ObjcId) -> BOOL {
+        crate::log!("[liquid-glass] backend=apple-native-controls event=accepts-first-mouse");
+        YES
+    }
+
+    extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> ObjcId {
+        unsafe {
+            let superclass = superclass(this);
+            let hit: ObjcId = msg_send![super (this, superclass), hitTest: point];
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls event=button-hit-test point=({:.1},{:.1}) result={}",
+                point.x,
+                point.y,
+                objc_class_name(hit)
+            );
+            hit
+        }
+    }
+
+    extern "C" fn mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
+        unsafe {
+            let window_point: NSPoint = msg_send![event, locationInWindow];
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls event=button-mouse-down window_point=({:.1},{:.1})",
+                window_point.x,
+                window_point.y
+            );
+            let superclass = superclass(this);
+            let () = msg_send![super (this, superclass), mouseDown: event];
+        }
+    }
+
+    let superclass = class!(NSButton);
+    let mut decl = ClassDecl::new("NativeGlassButton", superclass).unwrap();
+    unsafe {
+        decl.add_method(
+            sel!(acceptsFirstMouse:),
+            accepts_first_mouse as extern "C" fn(&Object, Sel, ObjcId) -> BOOL,
+        );
+        decl.add_method(
+            sel!(hitTest:),
+            hit_test as extern "C" fn(&Object, Sel, NSPoint) -> ObjcId,
+        );
+        decl.add_method(
+            sel!(mouseDown:),
+            mouse_down as extern "C" fn(&Object, Sel, ObjcId),
+        );
+    }
     return decl.register();
 }
 
@@ -475,8 +542,34 @@ pub fn define_cocoa_view_class() -> *const Class {
         }
     }
 
+    extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> ObjcId {
+        unsafe {
+            let superclass = superclass(this);
+            let hit: ObjcId = msg_send![super (this, superclass), hitTest: point];
+            if native_glass_control_probe_enabled() {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=metal-view-hit-test point=({:.1},{:.1}) result={}",
+                    point.x,
+                    point.y,
+                    objc_class_name(hit)
+                );
+            }
+            hit
+        }
+    }
+
     extern "C" fn mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
         let cw = get_cocoa_window(this);
+        if native_glass_control_probe_enabled() {
+            unsafe {
+                let window_point: NSPoint = msg_send![event, locationInWindow];
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=metal-view-mouse-down window_point=({:.1},{:.1})",
+                    window_point.x,
+                    window_point.y
+                );
+            }
+        }
         unsafe {
             if cw.mouse_down_can_drag_window() {
                 let () = msg_send![cw.window, performWindowDragWithEvent: event];
@@ -1014,6 +1107,10 @@ pub fn define_cocoa_view_class() -> *const Class {
         decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, ObjcId));
         //decl.add_method(sel!(insertTab:), insert_tab as extern fn(&Object, Sel, id));
         //decl.add_method(sel!(insertBackTab:), insert_back_tab as extern fn(&Object, Sel, id));
+        decl.add_method(
+            sel!(hitTest:),
+            hit_test as extern "C" fn(&Object, Sel, NSPoint) -> ObjcId,
+        );
         decl.add_method(
             sel!(mouseDown:),
             mouse_down as extern "C" fn(&Object, Sel, ObjcId),
