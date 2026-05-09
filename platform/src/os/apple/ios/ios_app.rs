@@ -101,6 +101,45 @@ mod native_glass_tests {
         );
         assert_eq!(NativeGlassStyle::Clear.ios_raw_value_from_override(None), 1);
     }
+
+    #[test]
+    fn ios_native_glass_control_configuration_selectors_follow_style() {
+        assert_eq!(
+            IosApp::native_glass_control_configuration_selector(NativeGlassStyle::Regular),
+            "glassButtonConfiguration"
+        );
+        assert_eq!(
+            IosApp::native_glass_control_configuration_selector(NativeGlassStyle::Clear),
+            "clearGlassButtonConfiguration"
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_control_frame_uses_makepad_logical_rect() {
+        let control = NativeGlassControlDescriptor {
+            id: crate::LiveId(7),
+            rect: Rect {
+                pos: dvec2(24.0, 48.0),
+                size: dvec2(120.0, 44.0),
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        let frame = IosApp::native_glass_control_frame(&control);
+
+        assert_eq!(frame.origin.x, 24.0);
+        assert_eq!(frame.origin.y, 48.0);
+        assert_eq!(frame.size.width, 120.0);
+        assert_eq!(frame.size.height, 44.0);
+    }
 }
 
 pub fn with_ios_app<R>(f: impl FnOnce(&mut IosApp) -> R) -> R {
