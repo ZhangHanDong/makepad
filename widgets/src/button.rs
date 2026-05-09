@@ -535,6 +535,10 @@ impl Widget for Button {
                         .is_some_and(|event| event.control_id == control_id)
                 });
                 if activated {
+                    log!(
+                        "[liquid-glass] backend=apple-native-controls event=button-action control_id={}",
+                        control_id.0
+                    );
                     cx.widget_action_with_data(
                         &self.action_data,
                         uid,

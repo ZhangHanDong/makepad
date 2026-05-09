@@ -5948,12 +5948,18 @@ impl MatchEvent for App {
             }
         }
         if self.ui.button(cx, ids!(send_button)).clicked(actions) {
+            if native_control_probe_enabled() {
+                log!("[liquid-glass] native-control-probe=makepad-click id=send_button");
+            }
             self.send_message(cx);
         }
         if self.ui.button(cx, ids!(cancel_button)).clicked(actions) {
             self.cancel_request(cx);
         }
         if self.ui.button(cx, ids!(clear_button)).clicked(actions) {
+            if native_control_probe_enabled() {
+                log!("[liquid-glass] native-control-probe=makepad-click id=clear_button");
+            }
             self.clear_chat(cx);
         }
         if self.ui.button(cx, ids!(nav_chat)).clicked(actions) {

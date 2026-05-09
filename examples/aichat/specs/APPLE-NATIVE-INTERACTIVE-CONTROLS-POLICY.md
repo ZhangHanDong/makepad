@@ -114,6 +114,32 @@ This proves descriptor delivery and AppKit button installation, but it does not
 yet prove real mouse-driven target/action delivery because Studio click
 injection bypasses AppKit overlay hit testing.
 
+Step 112 adds diagnostics for that missing verdict:
+
+- `event=target-action` when AppKit calls `nativeGlassControlAction:`
+- `event=button-action` when Makepad `Button` converts the native activation
+  into `ButtonAction::Clicked`
+
+The real-click validation must produce both lines for the clicked control.
+
+Step 113 moves macOS native controls to the top of the AppKit container view
+with `relativeTo:nil`. Visual glass panels stay below Metal; only explicit
+native controls get this topmost insertion path.
+
+Step 114 adds aichat-side probe click diagnostics:
+
+- `native-control-probe=makepad-click id=clear_button`
+- `native-control-probe=makepad-click id=send_button`
+
+These lines prove that a system click reached the Makepad button path. They do
+not prove AppKit native control delivery unless paired with `event=target-action`
+and `event=button-action`.
+
+Step 115 tried system-level `cliclick` validation against build `[114]`. Startup
+still installed two AppKit controls, but the click attempts produced no
+`target-action`, `button-action`, or `makepad-click` logs. Treat that result as
+failed/inconclusive validation, not as completion.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -125,15 +151,16 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - Native glass panels are visual surfaces only.
 - `NativeGlassHitTest::Interactive` must stay rejected until the gates below are
   implemented and validated.
-- `NativeGlassControlBatch` is the future native-control input model; it is
-  separate from `NativeGlassBatch` and has no installer in production yet.
+- `NativeGlassControlBatch` is the native-control input model; it is separate
+  from `NativeGlassBatch`.
 - `SetNativeGlassControlBatch` may be queued by future collectors, but current
-  OS backends treat it as a no-op.
-- `GlassContainer` can carry native-control descriptors once a future
-  `GlassButton` implementation pushes them, but current `GlassButton` variants
-  remain Makepad-rendered only.
-- `Button.native_control` can export descriptors for future native button
-  mirrors, but it is disabled by default and has no installer yet.
+  non-macOS backends treat it as a no-op.
+- `GlassContainer` can carry native-control descriptors from explicit
+  `Button.native_control` opt-ins, but current `GlassButton` variants remain
+  Makepad-rendered only.
+- `Button.native_control` can export descriptors for native button mirrors, but
+  it is disabled by default and only the macOS `NSButton` installer slice
+  exists.
 - `NativeGlassControlActivatedEvent` is the only app-facing native control
   activation bridge for the first button slice; widgets translate it back into
   their existing action APIs.

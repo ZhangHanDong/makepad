@@ -37,7 +37,7 @@ Current conclusion: not complete.
 | aichat wiring | `examples/aichat/src/main.rs` uses one `GlassContainer` and four native panels | Landed for AppleNativeUnderlay. |
 | aichat iOS native event handling | Step 76 adds iOS substrate style variants; Step 77 maps installed `IosGlassRegular` / `IosGlassClear` events to `GlassSubstrate::IosNative` so aichat uses native overlay tuning after UIKit backend success | Event handling landed; iOS runtime validation still missing. |
 | Phase F semantic layer | `aichat-liquid-glass-phase-f-audit.md`; `GlassButton`, variants, separators, toolbar, shell/sidebar/main/composer/card surfaces | Landed for Makepad-rendered controls. |
-| Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; `APPLE-NATIVE-INTERACTIVE-CONTROLS-POLICY.md`; Step 100 closes the first hit-test ownership decision: explicit native controls use direct AppKit/UIKit hit testing, actions bridge back into Makepad, and ordinary glass panels stay passthrough; Step 101 adds shared native control descriptors and v4.10 validation; Step 102 adds the platform op transport; Step 103 extends GlassContainer collector plumbing for future control descriptors; Step 104 adds opt-in Button descriptor export while keeping native installation absent; Step 105 adds `NativeGlassControlActivatedEvent` and maps matching native button activations back to `ButtonAction::Clicked`; Step 106 adds `NativeGlassControlDescriptor.label` and exports `Button.text`; Step 107 adds macOS validation/logging for control batches; Step 108 adds a macOS `NSButton` installer skeleton and `NativeGlassControlTarget` action bridge; Step 109 adds an opt-in aichat probe for `clear_button` and `send_button`; Step 110 adds Studio runnable `makepad-example-aichat-macos-native-clear-control-probe`; Step 111 records Studio build `[111]` runtime logs showing `controls_total=2 controls_visible=2` and `installed-appkit-buttons` | Research, hit-test ownership decision, shared descriptor model, platform transport, widget collector plumbing, opt-in Button export, shared activation bridge, label payload, macOS control diagnostics, macOS `NSButton` installer skeleton, aichat probe gate, Studio control-probe runnable, and first macOS installer runtime log landed; native interactive controls are not complete because real AppKit click delivery, glass-specific button styling, UIKit controls, and accessibility remain unproven. |
+| Native interactive controls | `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; `APPLE-NATIVE-INTERACTIVE-CONTROLS-POLICY.md`; Step 100 closes the first hit-test ownership decision: explicit native controls use direct AppKit/UIKit hit testing, actions bridge back into Makepad, and ordinary glass panels stay passthrough; Step 101 adds shared native control descriptors and v4.10 validation; Step 102 adds the platform op transport; Step 103 extends GlassContainer collector plumbing for future control descriptors; Step 104 adds opt-in Button descriptor export while keeping native installation absent; Step 105 adds `NativeGlassControlActivatedEvent` and maps matching native button activations back to `ButtonAction::Clicked`; Step 106 adds `NativeGlassControlDescriptor.label` and exports `Button.text`; Step 107 adds macOS validation/logging for control batches; Step 108 adds a macOS `NSButton` installer skeleton and `NativeGlassControlTarget` action bridge; Step 109 adds an opt-in aichat probe for `clear_button` and `send_button`; Step 110 adds Studio runnable `makepad-example-aichat-macos-native-clear-control-probe`; Step 111 records Studio build `[111]` runtime logs showing `controls_total=2 controls_visible=2` and `installed-appkit-buttons`; Step 112 adds `target-action` and `button-action` diagnostics for real click validation; Step 113 inserts macOS native controls at the top of the AppKit container; Step 114 adds probe-only `makepad-click` diagnostics for aichat buttons; Step 115 records a system-click attempt against build `[114]` with no activation logs | Research, hit-test ownership decision, shared descriptor model, platform transport, widget collector plumbing, opt-in Button export, shared activation bridge, label payload, macOS control diagnostics, macOS `NSButton` installer skeleton, aichat probe gate, Studio control-probe runnable, first macOS installer runtime log, activation diagnostics, topmost AppKit insertion, Makepad click diagnostics, and a failed/inconclusive system-click attempt landed; native interactive controls are not complete because real AppKit click delivery, glass-specific button styling, UIKit controls, and accessibility remain unproven. |
 | UIKit backend | `aichat-liquid-glass-step-44-ios-native-glass-unsupported.spec`; Step 68 adds Objective-C runtime class preflight for `UIVisualEffectView`, `UIGlassContainerEffect`, and `UIGlassEffect`; Step 69 prepares a UIKit underlay host view with `MTKView` as a child; Step 70 adds selector preflight; Step 71 adds a dynamic installer skeleton that creates a container `UIVisualEffectView` below `MTKView` and passthrough panel `UIVisualEffectView`s when preflight passes; Step 72 adds iOS raw style overrides; Step 73 expands selector preflight to installer UIView/CALayer selectors; Step 74 adds shared batch equivalence reused by iOS; Step 76 reports iOS regular/clear through `WindowNativeSubstrateResolvedEvent` style variants; Step 77 maps those events in aichat | Installer skeleton landed; not runtime-validated on iOS 26. |
 | UIKit SDK/runtime gate | `aichat-liquid-glass-step-45-phase-g-sdk-evidence.spec`; local `iPhoneOS18.5` headers have no typed `UIGlassEffect` / `UIGlassContainerEffect`; Step 68/70/73 can distinguish missing runtime classes/selectors; Step 72 allows raw style override if `regular=0` / `clear=1` is wrong | Blocked until iOS 26 runtime validation proves class availability, selector names, style raw values, visual output, rotation, safe area, keyboard, split view, and Stage Manager behavior. |
 | Full native interior glass | `aichat-liquid-glass-v4.2-route-decision.md`; `aichat-liquid-glass-step-96-aichat-lower-scene-pass-probe.spec`; `aichat-liquid-glass-step-98-native-interleave-fail-verdict.spec`; Step 96 proves a dedicated aichat `DrawPassSurfaceRole::LowerScene` pass is rendered and routed to the lower scene surface, but Step 98 records the user-visible result as gray/grid only, with no transparency or recognizable blur/refraction/liquid distortion | Not complete: AppleNativeInterleave is rejected as the current production route and remains a prototype; full native interior Liquid Glass is not implemented. |
@@ -69,6 +69,15 @@ Recent verified gates:
   `backend=apple-native-controls state=Installed
   reason=installed-appkit-buttons controls_total=2 controls_visible=2`, and
   native underlay `panels_installed=4 panels_failed=0`.
+- Step 112 adds `event=target-action` and `event=button-action` diagnostics so
+  the next real AppKit click validation has direct log evidence.
+- Step 113 inserts native macOS control views at the top of the AppKit
+  container; it still needs a real click run to prove hit testing.
+- Step 114 adds `native-control-probe=makepad-click` logs to distinguish
+  Makepad-delivered clicks from AppKit `target-action` delivery.
+- Step 115 records a build `[114]` system-click attempt at the mapped
+  clear-button coordinate. It produced no `target-action`, `button-action`, or
+  `makepad-click` logs, so it is not a passing native-control validation.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -85,19 +94,18 @@ behavior, or full native interior Liquid Glass.
 ## Incomplete Requirements
 
 - UIKit backend is not runtime-validated beyond the dynamic installer skeleton.
-- Native interactive controls are not implemented; Step 100 closes the first
-  hit-test ownership decision and Step 101 adds shared native control
-  descriptors. Step 102 adds platform op transport, but no AppKit/UIKit
-  controls are created. Step 103 extends `GlassContainer` collector plumbing,
-  and Step 104 adds opt-in Button descriptor export. Step 105 adds the shared
-  activation event path, but no backend posts it yet. Step 106 adds button
-  labels to descriptors. Step 107 adds macOS validation/logging for control
-  batches. Step 108 adds a macOS `NSButton` installer skeleton, but native
-  interactive controls are still incomplete: macOS 26 glass-specific button
-  styling is unproven, Step 111 only proves installer logs and still needs a
-  real AppKit click/target-action manual verdict, UIKit controls are not
-  installed, accessibility ownership is unresolved, and non-macOS backends
-  remain no-op.
+- Native interactive controls are only partially implemented. Steps 100-112
+  cover the first hit-test ownership decision, shared descriptors, platform op
+  transport, collector plumbing, opt-in Button export, shared activation event
+  mapping, labels, macOS validation, an AppKit `NSButton` installer skeleton,
+  the aichat control probe, the Studio runnable, installer runtime logs, and
+  target/action diagnostics, topmost AppKit insertion, and Makepad click
+  diagnostics. They are still incomplete because macOS 26 glass-specific button
+  styling is unproven, `makepad-click` logs alone do not prove native delivery,
+  a real AppKit click still needs to produce `target-action` and
+  `button-action` logs, the Step 115 system-click attempt produced no activation
+  logs, UIKit controls are not installed, accessibility ownership is unresolved,
+  and non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.

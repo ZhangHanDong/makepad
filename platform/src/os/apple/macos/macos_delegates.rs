@@ -93,6 +93,12 @@ pub fn define_native_glass_control_target_class() -> *const Class {
             let window_index: usize = *this.get_ivar("window_index");
             let window_generation: u64 = *this.get_ivar("window_generation");
             let control_id_u64: u64 = *this.get_ivar("control_id_u64");
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls event=target-action window_index={} window_generation={} control_id={}",
+                window_index,
+                window_generation,
+                control_id_u64
+            );
             Cx::post_action(NativeGlassControlActivatedEvent {
                 window_id: WindowId(window_index, window_generation),
                 control_id: LiveId(control_id_u64),

@@ -849,7 +849,7 @@ impl MacosWindow {
             self.container_view,
             addSubview: button
             positioned: 1i64
-            relativeTo: self.view
+            relativeTo: nil
         ];
         self.native_glass_control_views.push(button);
         self.native_glass_control_targets.push(target);
