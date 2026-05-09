@@ -323,7 +323,7 @@ impl MacosWindow {
     }
 
     pub(crate) fn native_glass_geometry_snapshot_enabled_from_value(value: Option<&str>) -> bool {
-        matches!(value, Some("1" | "true"))
+        matches!(value, Some("1" | "true" | "self-resize"))
     }
 
     pub(crate) fn native_glass_geometry_snapshot_enabled() -> bool {
@@ -2686,6 +2686,7 @@ mod tests {
     fn native_glass_geometry_snapshot_env_accepts_truthy_values() {
         assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("1")));
         assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("true")));
+        assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("self-resize")));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
     }
