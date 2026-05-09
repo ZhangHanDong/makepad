@@ -45,7 +45,7 @@ Current conclusion: not complete.
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md`; Step 96 lower scene pass probe; Step 98 fail verdict | Requirements and a prototype probe exist; current visual verdict rejects this as production full native glass. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals; Step 98 keeps complete interior work on ShaderBackdrop/hybrid; Step 99 makes guarded `apple-native-interleave` requests resolve to `ShaderBackdropInterior` | Separate route, not full Apple-native support. |
 | Phase H advanced behavior | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md`; Step 53 adds explicit fullscreen native fallback/suppression; Step 54 adds `native-display-change` backing-scale probe; Step 55 adds weaker native inactive-window app-side dimming; Step 56 adds `native-container-spacing` probe; Step 58 adds `GlassScrollEdge` widgets; Step 59 adds staged aichat wiring; Step 60 drives edge visibility from `PortalList` state; Step 61 ramps top edge opacity from scroll offset; Step 62 exposes bottom scroll distance and ramps bottom edge opacity; Step 63 adds a native spacing animation probe runnable; Step 64 adds a native inactive-window probe runnable; Step 65 adds a native fullscreen fallback probe runnable; Step 66 adds native display frame snapshot logs; Step 67 adds a Stage Manager/split-view geometry snapshot runnable | Phase H is gate-defined/probed only; fullscreen has explicit fallback and a Studio probe but is not full native fullscreen support; scroll edge visibility and strength are state-driven; animated spacing has a Studio probe but still needs visual drift validation; native inactive has a log probe but still needs visual focus-transition validation; multi-display has frame snapshot logs but remains unproven until real display-move validation; Stage Manager/split-view has a geometry snapshot probe but remains unproven until real runtime smoke validation. |
-| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I is gate-defined only; not implemented. |
+| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I policy is defined; implementation and runtime evidence are still missing. |
 | Release limitations | `aichat-liquid-glass-v4.1-release-notes.md` lists runtime switching, fullscreen, Stage Manager, multiple displays, rounded-corner sync, popup/modal, iOS backend | Documented limitations, not solved. |
 
 ## Validation Evidence
@@ -232,11 +232,13 @@ behavior, or full native interior Liquid Glass.
 - Step 133 closes the self-driven same-screen geometry snapshot gap, but real
   Stage Manager, split-view, and multi-display geometry behavior remains
   unproven.
-- Phase I is not implemented.
+- Phase I popup/modal policy is defined in
+  `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`, but the transient-window native
+  glass probe is not implemented.
 - Runtime switching remains a known limitation.
 - Full native glass inside fullscreen remains a known limitation.
 - Stage Manager and multi-display behavior remain known limitations.
-- Popup/modal native glass remains a separate phase.
+- Popup/modal native glass remains a separate implementation phase.
 
 ## Next Gates
 

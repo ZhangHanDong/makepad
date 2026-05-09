@@ -35,7 +35,7 @@ The current production path remains:
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active; Step 66 logs `native-display-frame-snapshot` / `native-panel-frame` from the cached native batch | Probe plus frame snapshot only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | Step 67 adds `makepad-example-aichat-macos-native-clear-geometry-probe` with `MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT=1` so same-screen position/size changes can log native frame snapshots | Probe only; Stage Manager and split-view behavior remain unproven | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | Step 55 keeps shader inactive dimming at `0.70` and uses `NATIVE_INACTIVE_GLASS_MULTIPLIER` for a weaker native inactive app-side dim | Readability policy only; native inactive-window support remains unproven | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
-| Popup/modal native glass | Makepad has popup/modal widgets and popup windows; no native glass transient-window policy exists | Not implemented | Define separate-window z-order, focus, dismissal, hit-test, and native surface ownership before creating AppKit `NSPanel` or UIKit `UIWindow` glass. |
+| Popup/modal native glass | `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md` defines separate transient-window ownership, z-order, focus, dismissal, hit-test, descriptor limits, and macOS/UIKit implementation gates | Policy only; not implemented | Add a transient-window native glass probe and prove popup dismissal/main-window panels do not regress. |
 
 ## Required Evidence Before Marking Complete
 
@@ -163,6 +163,10 @@ The current production path remains:
 - Makepad retains dismissal and focus semantics.
 - Native transient surfaces do not intercept input outside their explicit
   interactive controls.
+- `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md` freezes the Phase I design:
+  transient windows own independent native glass containers, main-window
+  descriptors are not reused, popup dismissal stays Makepad-owned, and the
+  first implementation must be a passthrough macOS popup probe.
 
 ## Non-Completion Signals
 
