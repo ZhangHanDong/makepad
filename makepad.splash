@@ -149,6 +149,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-action-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_action_probe: "Clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-mouse-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_mouse_probe: "Clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-cgevent-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_cg_probe: "Clear"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-cgevent-pid-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_cg_probe: "pid:Clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-layer-probe", backend: "macos-native-clear", interleave_layer_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-lower-scene-clear", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-lower-scene-mirror", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-mirror"}

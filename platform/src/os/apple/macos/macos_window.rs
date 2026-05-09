@@ -41,6 +41,12 @@ pub(crate) enum MacosNativeGlassStyle {
     Clear,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeGlassCgEventProbeMode {
+    Global,
+    Process,
+}
+
 impl MacosNativeGlassStyle {
     fn default_ns_style_raw(self) -> i64 {
         match self {
@@ -931,10 +937,29 @@ impl MacosWindow {
         )
     }
 
-    fn native_glass_control_cg_event_probe_matches(
+    fn native_glass_control_cg_event_probe_mode_value(
+        value: Option<&str>,
         control: &NativeGlassControlDescriptor,
-    ) -> bool {
-        Self::native_glass_control_perform_click_probe_matches_value(
+    ) -> Option<NativeGlassCgEventProbeMode> {
+        let value = value?.trim();
+        let (mode, target) = if let Some(target) = value.strip_prefix("pid:") {
+            (NativeGlassCgEventProbeMode::Process, target)
+        } else if let Some(target) = value.strip_prefix("process:") {
+            (NativeGlassCgEventProbeMode::Process, target)
+        } else if let Some(target) = value.strip_prefix("global:") {
+            (NativeGlassCgEventProbeMode::Global, target)
+        } else {
+            (NativeGlassCgEventProbeMode::Global, value)
+        };
+
+        Self::native_glass_control_perform_click_probe_matches_value(Some(target), control)
+            .then_some(mode)
+    }
+
+    fn native_glass_control_cg_event_probe_mode(
+        control: &NativeGlassControlDescriptor,
+    ) -> Option<NativeGlassCgEventProbeMode> {
+        Self::native_glass_control_cg_event_probe_mode_value(
             std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_CGEVENT_PROBE")
                 .ok()
                 .as_deref(),
@@ -1024,10 +1049,12 @@ impl MacosWindow {
         control: &NativeGlassControlDescriptor,
         control_frame: NSRect,
     ) {
-        if !Self::native_glass_control_cg_event_probe_matches(control)
-            || self
-                .native_glass_cg_event_probe_fired_controls
-                .contains(&control.id)
+        let Some(mode) = Self::native_glass_control_cg_event_probe_mode(control) else {
+            return;
+        };
+        if self
+            .native_glass_cg_event_probe_fired_controls
+            .contains(&control.id)
         {
             return;
         }
@@ -1048,7 +1075,8 @@ impl MacosWindow {
             }
         ];
         crate::log!(
-            "[liquid-glass] backend=apple-native-controls event=cg-event-probe control={:?} label={:?} local=({:.1},{:.1}) screen=({:.1},{:.1})",
+            "[liquid-glass] backend=apple-native-controls event=cg-event-probe mode={:?} control={:?} label={:?} local=({:.1},{:.1}) screen=({:.1},{:.1})",
+            mode,
             control.id,
             control.label,
             local_point.x,
@@ -1059,10 +1087,16 @@ impl MacosWindow {
         let source = CGEventSourceCreate(1);
         let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseDown, screen_rect.origin, 0);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
-        CGEventPost(0, event);
+        match mode {
+            NativeGlassCgEventProbeMode::Global => CGEventPost(0, event),
+            NativeGlassCgEventProbeMode::Process => CGEventPostToPid(std::process::id(), event),
+        }
         let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseUp, screen_rect.origin, 0);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
-        CGEventPost(0, event);
+        match mode {
+            NativeGlassCgEventProbeMode::Global => CGEventPost(0, event),
+            NativeGlassCgEventProbeMode::Process => CGEventPostToPid(std::process::id(), event),
+        }
     }
 
     unsafe fn install_native_glass_button_control(
@@ -2585,6 +2619,56 @@ mod tests {
             None,
             &control
         ));
+    }
+
+    #[test]
+    fn native_glass_control_cg_event_probe_mode_parses_process_prefix() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(11),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        assert_eq!(
+            MacosWindow::native_glass_control_cg_event_probe_mode_value(Some("Clear"), &control),
+            Some(NativeGlassCgEventProbeMode::Global)
+        );
+        assert_eq!(
+            MacosWindow::native_glass_control_cg_event_probe_mode_value(
+                Some("global:Clear"),
+                &control
+            ),
+            Some(NativeGlassCgEventProbeMode::Global)
+        );
+        assert_eq!(
+            MacosWindow::native_glass_control_cg_event_probe_mode_value(
+                Some("pid:Clear"),
+                &control
+            ),
+            Some(NativeGlassCgEventProbeMode::Process)
+        );
+        assert_eq!(
+            MacosWindow::native_glass_control_cg_event_probe_mode_value(
+                Some("process:clear"),
+                &control
+            ),
+            Some(NativeGlassCgEventProbeMode::Process)
+        );
+        assert_eq!(
+            MacosWindow::native_glass_control_cg_event_probe_mode_value(Some("pid:Send"), &control),
+            None
+        );
     }
 
     #[test]

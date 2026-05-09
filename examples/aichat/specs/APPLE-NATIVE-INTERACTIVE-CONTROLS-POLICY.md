@@ -218,6 +218,16 @@ produced `button-mouse-down`, `target-action`, `button-action`, or
 `native-control-probe=makepad-click`. The CGEvent probe is retained as a
 diagnostic entry point; the physical/system click gate remains open.
 
+Step 126 adds the process-targeted CGEvent probe runnable
+`makepad-example-aichat-macos-native-clear-control-cgevent-pid-probe`. It sets
+`MAKEPAD_NATIVE_GLASS_CONTROL_CGEVENT_PROBE=pid:Clear`, parses the `pid:`
+prefix, and posts the matching mouse down/up pair with `CGEventPostToPid`.
+Build `[138]` logged `cg-event-probe mode=Process`, but no subsequent
+`button-mouse-down`, `target-action`, `button-action`, or
+`native-control-probe=makepad-click` logs appeared. This keeps the remaining
+gate focused on physical/system event delivery rather than AppKit button
+geometry or the target/action bridge.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

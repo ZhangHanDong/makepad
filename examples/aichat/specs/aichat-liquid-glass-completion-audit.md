@@ -120,6 +120,13 @@ Recent verified gates:
   produced `cg-event-probe` logs, but no subsequent `button-mouse-down`,
   `target-action`, `button-action`, or `native-control-probe=makepad-click`
   logs. The system-click gate remains open.
+- Step 126 adds
+  `makepad-example-aichat-macos-native-clear-control-cgevent-pid-probe`, gated
+  by `MAKEPAD_NATIVE_GLASS_CONTROL_CGEVENT_PROBE=pid:Clear`. Build `[138]`
+  produced `cg-event-probe mode=Process`, but no subsequent
+  `button-mouse-down`, `target-action`, `button-action`, or
+  `native-control-probe=makepad-click` logs. PID-targeted CGEvent delivery did
+  not close the system-click gate.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -152,7 +159,8 @@ behavior, or full native interior Liquid Glass.
   proves AppKit center-point hit testing, Step 123 proves programmatic AppKit
   target/action bridging, and Step 124 proves synthetic AppKit mouse events
   posted through the application queue. Step 125 retains a CGEvent system-click
-  probe, but current builds `[135]` and `[136]` did not produce native click
+  probe, and Step 126 adds a PID-targeted `CGEventPostToPid` variant, but
+  current builds `[135]`, `[136]`, and `[138]` did not produce native click
   delivery. A physical user/system click is still unproven. UIKit controls are
   not installed, accessibility ownership is
   unresolved, and non-macOS backends remain no-op.
