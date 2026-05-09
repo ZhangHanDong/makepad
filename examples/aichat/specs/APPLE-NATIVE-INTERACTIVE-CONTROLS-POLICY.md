@@ -247,6 +247,17 @@ validation. This closes the first macOS native-button styling gap, but still
 does not prove physical/system click delivery, UIKit controls, or
 accessibility.
 
+Step 145 fixes the retained CGEvent diagnostic path to convert the AppKit
+bottom-left screen point into the Quartz event coordinate space before posting
+mouse down/up events. The probe log now records both `screen=(...)` and
+`cg=(...)`. This addresses the coordinate mismatch suspected in Steps 125-126,
+but Studio release builds `[173]` and `[174]` still produced no
+`button-mouse-down`, `target-action`, `button-action`, or
+`native-control-probe=makepad-click` logs. The remaining gate is now physical
+or trusted system click delivery, not native button geometry, target/action,
+synthetic AppKit mouse delivery, glass bezel styling, or CGEvent coordinate
+conversion.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

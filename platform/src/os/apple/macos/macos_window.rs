@@ -1000,6 +1000,25 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_cg_event_point_for_display_height(
+        appkit_screen_point: NSPoint,
+        display_height: f64,
+    ) -> NSPoint {
+        NSPoint {
+            x: appkit_screen_point.x,
+            y: display_height - appkit_screen_point.y,
+        }
+    }
+
+    unsafe fn native_glass_cg_event_point_from_appkit_screen_point(
+        appkit_screen_point: NSPoint,
+    ) -> NSPoint {
+        Self::native_glass_cg_event_point_for_display_height(
+            appkit_screen_point,
+            CGDisplayPixelsHigh(CGMainDisplayID()) as f64,
+        )
+    }
+
     unsafe fn log_native_glass_control_hit_test_probe(
         &self,
         control: &NativeGlassControlDescriptor,
@@ -1107,24 +1126,28 @@ impl MacosWindow {
                 },
             }
         ];
+        let cg_point =
+            Self::native_glass_cg_event_point_from_appkit_screen_point(screen_rect.origin);
         crate::log!(
-            "[liquid-glass] backend=apple-native-controls event=cg-event-probe mode={:?} control={:?} label={:?} local=({:.1},{:.1}) screen=({:.1},{:.1})",
+            "[liquid-glass] backend=apple-native-controls event=cg-event-probe mode={:?} control={:?} label={:?} local=({:.1},{:.1}) screen=({:.1},{:.1}) cg=({:.1},{:.1})",
             mode,
             control.id,
             control.label,
             local_point.x,
             local_point.y,
             screen_rect.origin.x,
-            screen_rect.origin.y
+            screen_rect.origin.y,
+            cg_point.x,
+            cg_point.y
         );
         let source = CGEventSourceCreate(1);
-        let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseDown, screen_rect.origin, 0);
+        let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseDown, cg_point, 0);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
         match mode {
             NativeGlassCgEventProbeMode::Global => CGEventPost(0, event),
             NativeGlassCgEventProbeMode::Process => CGEventPostToPid(std::process::id(), event),
         }
-        let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseUp, screen_rect.origin, 0);
+        let event = CGEventCreateMouseEvent(source, kCGEventLeftMouseUp, cg_point, 0);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
         match mode {
             NativeGlassCgEventProbeMode::Global => CGEventPost(0, event),
@@ -2813,6 +2836,17 @@ mod tests {
             MacosWindow::native_glass_control_cg_event_probe_mode_value(Some("pid:Send"), &control),
             None
         );
+    }
+
+    #[test]
+    fn native_glass_cg_event_point_flips_appkit_screen_y() {
+        let point = MacosWindow::native_glass_cg_event_point_for_display_height(
+            NSPoint { x: 320.0, y: 240.0 },
+            1080.0,
+        );
+
+        assert_eq!(point.x, 320.0);
+        assert_eq!(point.y, 840.0);
     }
 
     #[test]
