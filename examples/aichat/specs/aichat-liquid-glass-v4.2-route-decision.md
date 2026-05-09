@@ -50,6 +50,12 @@ two-layer interleave renderer is a larger renderer split, not a small aichat
 target change. A native-only upper label/control proof would not validate
 Makepad foreground interleave, so v4.2 rejects that as a fake proof.
 
+Step 96 later proved that a dedicated aichat pass can be rendered and routed to
+the macOS lower scene surface. Step 98 recorded the manual visual verdict for
+that prototype: the user saw only a gray/grid lower scene, with no transparency
+and no recognizable blur/refraction/liquid distortion. That verdict keeps
+`AppleNativeInterleave` as a prototype, not a production route.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
@@ -73,10 +79,12 @@ names should distinguish:
 Guarded backend value:
 
 - `AICHAT_GLASS_BACKEND=apple-native-interleave` is a known but unsupported
-  value. Step 48 keeps the name reserved and falls back to shader with the
-  warning `AppleNativeInterleave requires renderer split; falling back to
-  shader`. This prevents the reserved name from being mistaken for a working
-  full-native backend.
+  value. Step 99 keeps the name reserved and falls back to
+  `ShaderBackdropInterior` with the warning
+  `AppleNativeInterleave failed Step 98 visual verdict; falling back to
+  ShaderBackdropInterior`. This prevents the reserved name from being mistaken
+  for a working full-native backend while routing users to the current complete
+  interior fallback.
 
 ## Next Implementation Slice
 
