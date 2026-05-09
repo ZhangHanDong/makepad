@@ -1691,6 +1691,30 @@ fn native_fullscreen_probe_enabled() -> bool {
     )
 }
 
+fn native_geometry_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "self-resize"))
+}
+
+fn native_geometry_probe_enabled() -> bool {
+    native_geometry_probe_enabled_from_value(
+        std::env::var("MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_geometry_probe_should_start(
+    state: WindowNativeSubstrateState,
+    style: Option<WindowNativeSubstrateStyle>,
+    reason: &str,
+    already_started: bool,
+) -> bool {
+    !already_started
+        && state == WindowNativeSubstrateState::Installed
+        && style.is_some()
+        && reason == "installed-native-glass-batch"
+}
+
 fn native_fullscreen_probe_should_start(
     state: WindowNativeSubstrateState,
     style: Option<WindowNativeSubstrateStyle>,
@@ -4237,6 +4261,12 @@ pub struct App {
     #[rust]
     native_fullscreen_probe_next_frame: NextFrame,
     #[rust]
+    native_geometry_probe_started: bool,
+    #[rust]
+    native_geometry_probe_pending: bool,
+    #[rust]
+    native_geometry_probe_next_frame: NextFrame,
+    #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
     shader_backdrop_scene_texture: Option<Texture>,
@@ -5437,6 +5467,23 @@ impl App {
         self.native_fullscreen_probe_next_frame = cx.new_next_frame();
     }
 
+    fn start_native_geometry_probe(&mut self, cx: &mut Cx) {
+        self.native_geometry_probe_started = true;
+        self.native_geometry_probe_pending = true;
+        self.native_geometry_probe_next_frame = cx.new_next_frame();
+        log!("[liquid-glass] native-geometry-probe=schedule-resize");
+    }
+
+    fn run_native_geometry_probe(&mut self, cx: &mut Cx) {
+        self.native_geometry_probe_pending = false;
+        log!(
+            "[liquid-glass] native-geometry-probe=request-resize position=(180.0,120.0) size=(980.0,760.0)"
+        );
+        let window = self.ui.window(cx, ids!(main_window));
+        window.reposition(cx, dvec2(180.0, 120.0));
+        window.resize(cx, dvec2(980.0, 760.0));
+    }
+
     fn handle_native_fullscreen_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
         if !native_fullscreen_probe_enabled() {
             return;
@@ -5791,6 +5838,16 @@ impl App {
         {
             self.start_native_fullscreen_probe(cx);
         }
+        if native_geometry_probe_enabled()
+            && native_geometry_probe_should_start(
+                event.state,
+                event.style,
+                event.reason,
+                self.native_geometry_probe_started,
+            )
+        {
+            self.start_native_geometry_probe(cx);
+        }
 
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. } => {
@@ -6086,6 +6143,12 @@ impl MatchEvent for App {
                 log!("[liquid-glass] native-fullscreen-probe=timeout phase=enter");
             }
         }
+
+        if self.native_geometry_probe_pending
+            && event.set.contains(&self.native_geometry_probe_next_frame)
+        {
+            self.run_native_geometry_probe(cx);
+        }
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
@@ -6283,7 +6346,8 @@ mod tests {
         native_compositing_proof_transparent_overlay_from_value,
         native_control_probe_enabled_from_value, native_display_backing_scale_changed,
         native_fullscreen_probe_enabled_from_value, native_fullscreen_probe_should_continue_wait,
-        native_fullscreen_probe_should_start, native_inactive_probe_enabled_from_value,
+        native_fullscreen_probe_should_start, native_geometry_probe_enabled_from_value,
+        native_geometry_probe_should_start, native_inactive_probe_enabled_from_value,
         native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
         native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
         native_substrate_resolved_appearance, parse_glass_backend, render_state_templates,
@@ -6756,6 +6820,49 @@ mod tests {
         assert!(native_inactive_probe_enabled_from_value(Some("true")));
         assert!(!native_inactive_probe_enabled_from_value(None));
         assert!(!native_inactive_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_geometry_probe_env_accepts_truthy_values() {
+        assert!(native_geometry_probe_enabled_from_value(Some("1")));
+        assert!(native_geometry_probe_enabled_from_value(Some("true")));
+        assert!(native_geometry_probe_enabled_from_value(Some("self-resize")));
+        assert!(!native_geometry_probe_enabled_from_value(None));
+        assert!(!native_geometry_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_geometry_probe_starts_after_native_install_once() {
+        assert!(native_geometry_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            "installed-native-glass-batch",
+            false
+        ));
+        assert!(!native_geometry_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            "installed-native-glass-batch",
+            true
+        ));
+        assert!(!native_geometry_probe_should_start(
+            WindowNativeSubstrateState::PreflightFailed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            "installed-native-glass-batch",
+            false
+        ));
+        assert!(!native_geometry_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            None,
+            "installed-native-glass-batch",
+            false
+        ));
+        assert!(!native_geometry_probe_should_start(
+            WindowNativeSubstrateState::Installed,
+            Some(WindowNativeSubstrateStyle::MacosGlassClear),
+            "installed-on-proofed-hierarchy",
+            false
+        ));
     }
 
     #[test]

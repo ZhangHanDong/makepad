@@ -115,6 +115,11 @@ The current production path remains:
   reached State 4, but System Events reported no scriptable
   `makepad-example-aichat` window, so no resize/reposition happened and no
   `native-display-frame-snapshot reason=geometry-change` evidence was produced.
+- Step 132 makes the geometry probe self-driven by scheduling a next-frame
+  resize/reposition request after `installed-native-glass-batch`, and macOS
+  programmatic resize/reposition ops now emit `WindowGeomChange` with explicit
+  old geometry. Studio builds `[146]` and `[147]` logged the request, but still
+  produced no native frame snapshot evidence.
 
 ### Inactive window
 

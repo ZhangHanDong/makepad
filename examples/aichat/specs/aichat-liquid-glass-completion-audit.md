@@ -154,6 +154,11 @@ Recent verified gates:
   scriptable `makepad-example-aichat` window, so no geometry-change frame
   snapshot evidence was produced. Stage Manager/split-view and resize/reposition
   behavior remain unproven.
+- Step 132 makes the geometry probe self-driven after
+  `installed-native-glass-batch` and makes macOS programmatic resize/reposition
+  ops emit `WindowGeomChange` with explicit old geometry. Studio builds `[146]`
+  and `[147]` logged `native-geometry-probe=request-resize`, but still produced
+  no `native-display-frame-snapshot reason=geometry-change` evidence.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -204,6 +209,8 @@ behavior, or full native interior Liquid Glass.
   transition behavior is still unproven.
 - Step 131 confirms the geometry probe runnable reaches State 4, but current
   automation cannot drive a borderless Makepad window geometry change.
+- Step 132 confirms self-driven geometry requests are logged, but no native
+  frame snapshot follows in the current Studio run.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
 - Fullscreen-specific native glass behavior remains a known limitation.

@@ -1322,14 +1322,22 @@ impl Cx {
                     if let Some(metal_window) =
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
+                        let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_outer_size(size);
+                        metal_window
+                            .cocoa_window
+                            .send_change_event_from_old_geom(old_geom);
                     }
                 }
                 CxOsOp::RepositionWindow(window_id, pos) => {
                     if let Some(metal_window) =
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
+                        let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_position(pos);
+                        metal_window
+                            .cocoa_window
+                            .send_change_event_from_old_geom(old_geom);
                     }
                 }
                 CxOsOp::CloseWindow(window_id) => {

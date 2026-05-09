@@ -2219,6 +2219,17 @@ impl MacosWindow {
         // we should schedule a timer for +16ms another Paint
     }
 
+    pub fn send_change_event_from_old_geom(&mut self, old_geom: WindowGeom) {
+        let new_geom = self.get_window_geom();
+        self.last_window_geom = Some(new_geom.clone());
+        self.do_callback(MacosEvent::WindowGeomChange(WindowGeomChangeEvent {
+            window_id: self.window_id,
+            old_geom,
+            new_geom,
+        }));
+        self.do_callback(MacosEvent::Paint);
+    }
+
     pub fn send_got_focus_event(&mut self) {
         self.do_callback(MacosEvent::WindowGotFocus(self.window_id));
     }
