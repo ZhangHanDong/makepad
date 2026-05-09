@@ -924,6 +924,19 @@ impl Cx {
         }
         //self.process_desktop_pre_event(&mut event);
         match event {
+            MacosEvent::AppGotFocus => {
+                for window in metal_windows.iter_mut() {
+                    if let Some(main_pass_id) = self.windows[window.window_id].main_pass_id {
+                        self.repaint_pass(main_pass_id);
+                    }
+                    self.call_event_handler(&Event::WindowGotFocus(window.window_id));
+                }
+            }
+            MacosEvent::AppLostFocus => {
+                for window in metal_windows.iter() {
+                    self.call_event_handler(&Event::WindowLostFocus(window.window_id));
+                }
+            }
             MacosEvent::WindowGotFocus(window_id) => {
                 // repaint all window passes. Metal sometimes doesnt flip buffers when hidden/no focus
                 for window in metal_windows.iter_mut() {

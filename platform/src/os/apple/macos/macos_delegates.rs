@@ -54,8 +54,26 @@ pub fn define_macos_timer_delegate() -> *const Class {
 }
 
 pub fn define_app_delegate() -> *const Class {
+    extern "C" fn application_did_become_active(_this: &Object, _: Sel, _: ObjcId) {
+        MacosApp::do_callback(MacosEvent::AppGotFocus);
+    }
+
+    extern "C" fn application_did_resign_active(_this: &Object, _: Sel, _: ObjcId) {
+        MacosApp::do_callback(MacosEvent::AppLostFocus);
+    }
+
     let superclass = class!(NSObject);
-    let decl = ClassDecl::new("NSAppDelegate", superclass).unwrap();
+    let mut decl = ClassDecl::new("NSAppDelegate", superclass).unwrap();
+    unsafe {
+        decl.add_method(
+            sel!(applicationDidBecomeActive:),
+            application_did_become_active as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(applicationDidResignActive:),
+            application_did_resign_active as extern "C" fn(&Object, Sel, ObjcId),
+        );
+    }
 
     return decl.register();
 }

@@ -13,6 +13,8 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum MacosEvent {
+    AppGotFocus,
+    AppLostFocus,
     PopupDismissed(PopupDismissedEvent),
     WindowGotFocus(WindowId),
     WindowLostFocus(WindowId),

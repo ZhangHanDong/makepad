@@ -150,6 +150,11 @@ The current production path remains:
   logged `active=true style=clear multiplier=1.000`, but activating Finder did
   not produce `active=false` evidence in the Studio log stream. Inactive-window
   behavior remains unproven.
+- Step 135 adds app-level activation events:
+  `applicationDidBecomeActive:` maps to `WindowGotFocus`, and
+  `applicationDidResignActive:` maps to `WindowLostFocus`. Studio release build
+  `[157]` still could not produce `active=false` evidence because the current
+  automation environment did not allow Finder to become the frontmost process.
 
 ### Popup/modal
 

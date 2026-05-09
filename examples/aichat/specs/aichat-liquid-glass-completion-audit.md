@@ -157,6 +157,12 @@ Recent verified gates:
   build `[141]`. It logged `native-inactive-probe active=true style=clear
   multiplier=1.000`, but activating Finder did not produce `active=false`
   evidence. Inactive-window behavior remains unproven.
+- Step 135 adds app-level activation event handling so
+  `applicationDidBecomeActive:` maps to `WindowGotFocus` and
+  `applicationDidResignActive:` maps to `WindowLostFocus`. Studio release build
+  `[157]` reached State 4 and logged `active=true`, but the current automation
+  environment kept the host process frontmost, so Finder activation did not
+  produce app resign-active or `active=false` evidence.
 - Step 131 runs
   `makepad-example-aichat-macos-native-clear-geometry-probe` in Studio release
   build `[142]`. The app reached State 4, but System Events reported no
@@ -220,8 +226,9 @@ behavior, or full native interior Liquid Glass.
   inside fullscreen is still not implemented.
 - Step 129 confirms animated spacing updates keep the macOS native batch
   installed, but it does not prove final morphing visual quality.
-- Step 130 confirms native inactive logging for the active state only; inactive
-  transition behavior is still unproven.
+- Step 135 adds an app-level inactive event source, but inactive transition
+  behavior is still unproven until focus can be moved away from the
+  Studio-launched child app.
 - Step 133 closes the self-driven same-screen geometry snapshot gap, but real
   Stage Manager, split-view, and multi-display geometry behavior remains
   unproven.
