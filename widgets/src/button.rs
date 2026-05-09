@@ -1,5 +1,6 @@
 use crate::{
     animator::{Animate, Animator, AnimatorAction, AnimatorImpl, Play},
+    event::NativeGlassControlActivatedEvent,
     glass_panel::push_native_glass_control_descriptor,
     makepad_derive_widget::*,
     makepad_draw::*,
@@ -525,6 +526,33 @@ impl Widget for Button {
             self.draw_bg.redraw(cx);
         }
 
+        if self.native_control && self.enabled {
+            if let Event::Actions(actions) = event {
+                let control_id = Self::native_control_id_for_widget_uid(uid);
+                let activated = actions.iter().any(|action| {
+                    action
+                        .downcast_ref::<NativeGlassControlActivatedEvent>()
+                        .is_some_and(|event| event.control_id == control_id)
+                });
+                if activated {
+                    cx.widget_action_with_data(
+                        &self.action_data,
+                        uid,
+                        ButtonAction::Clicked(KeyModifiers::default()),
+                    );
+                    if !self.trigger_on_press {
+                        cx.widget_to_script_call(
+                            uid,
+                            NIL,
+                            self.source.clone(),
+                            self.on_click.clone(),
+                            &[],
+                        );
+                    }
+                }
+            }
+        }
+
         // The button only handles hits when it's visible and enabled.
         // If it's not enabled, we still show the button, but we set
         // the NotAllowed mouse cursor upon hover instead of the Hand cursor.
@@ -628,7 +656,7 @@ impl Widget for Button {
             push_native_glass_control_descriptor(
                 cx,
                 NativeGlassControlDescriptor {
-                    id: LiveId(self.widget_uid().0),
+                    id: Self::native_control_id_for_widget_uid(self.widget_uid()),
                     rect: self.draw_bg.area().rect(cx),
                     kind: NativeGlassControlKind::Button {
                         role: self.native_control_role.to_native(),
@@ -682,9 +710,21 @@ mod native_glass_button_tests {
             NativeGlassButtonRole::Utility
         );
     }
+
+    #[test]
+    fn button_native_glass_control_id_uses_widget_uid() {
+        assert_eq!(
+            Button::native_control_id_for_widget_uid(WidgetUid(42)),
+            LiveId(42)
+        );
+    }
 }
 
 impl Button {
+    fn native_control_id_for_widget_uid(uid: WidgetUid) -> LiveId {
+        LiveId(uid.0)
+    }
+
     pub fn draw_button(&mut self, cx: &mut Cx2d, label: &str) {
         self.draw_bg.begin(cx, self.walk, self.layout);
         self.draw_icon.draw_walk(cx, self.icon_walk);

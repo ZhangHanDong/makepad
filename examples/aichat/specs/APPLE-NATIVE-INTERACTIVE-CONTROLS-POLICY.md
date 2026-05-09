@@ -50,6 +50,15 @@ Because `GlassButton` remains a `ButtonFlat` alias, it inherits this opt-in
 field without changing existing action ownership. Current OS backends still
 ignore native control batches.
 
+Step 105 adds the shared activation bridge:
+
+- `NativeGlassControlActivatedEvent { window_id, control_id }`
+- `Button.native_control` converts matching activation events into the existing
+  `ButtonAction::Clicked` path
+
+This keeps application code on the current `button.clicked(actions)` API once a
+future AppKit/UIKit installer starts posting native activation events.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -70,6 +79,9 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   remain Makepad-rendered only.
 - `Button.native_control` can export descriptors for future native button
   mirrors, but it is disabled by default and has no installer yet.
+- `NativeGlassControlActivatedEvent` is the only app-facing native control
+  activation bridge for the first button slice; widgets translate it back into
+  their existing action APIs.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

@@ -210,6 +210,12 @@ pub struct NativeGlassControlBatch {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassControlActivatedEvent {
+    pub window_id: WindowId,
+    pub control_id: LiveId,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct NativeGlassPanelDescriptor {
     pub id: LiveId,
     pub rect: Rect,
