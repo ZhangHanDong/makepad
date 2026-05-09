@@ -143,6 +143,11 @@ Recent verified gates:
   repeatedly logged `native-container-spacing` while the native batch remained
   Installed. Morphing visual quality and resize-after-animation remain
   unproven.
+- Step 130 runs
+  `makepad-example-aichat-macos-native-clear-inactive-probe` in Studio release
+  build `[141]`. It logged `native-inactive-probe active=true style=clear
+  multiplier=1.000`, but activating Finder did not produce `active=false`
+  evidence. Inactive-window behavior remains unproven.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -189,6 +194,8 @@ behavior, or full native interior Liquid Glass.
   enter/exit validation did not complete in Studio build `[139]`.
 - Step 129 confirms animated spacing updates keep the macOS native batch
   installed, but it does not prove final morphing visual quality.
+- Step 130 confirms native inactive logging for the active state only; inactive
+  transition behavior is still unproven.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
 - Fullscreen-specific native glass behavior remains a known limitation.

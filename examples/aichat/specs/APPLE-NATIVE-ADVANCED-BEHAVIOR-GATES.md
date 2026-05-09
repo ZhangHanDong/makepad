@@ -123,6 +123,10 @@ The current production path remains:
 - Step 64 adds the `makepad-example-aichat-macos-native-clear-inactive-probe`
   Studio runnable and `AICHAT_NATIVE_INACTIVE_PROBE=1` logs for native active
   state, style, and multiplier.
+- Step 130 records Studio release build `[141]` for the inactive probe. It
+  logged `active=true style=clear multiplier=1.000`, but activating Finder did
+  not produce `active=false` evidence in the Studio log stream. Inactive-window
+  behavior remains unproven.
 
 ### Popup/modal
 
