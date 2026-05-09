@@ -477,6 +477,39 @@ pub fn define_macos_window_class() -> *const Class {
     extern "C" fn yes(_: &Object, _: Sel) -> BOOL {
         YES
     }
+    extern "C" fn send_event(this: &Object, _sel: Sel, event: ObjcId) {
+        unsafe {
+            if native_glass_control_probe_enabled() {
+                let ev_type: NSEventType = msg_send![event, type];
+                if matches!(
+                    ev_type,
+                    NSEventType::NSLeftMouseDown
+                        | NSEventType::NSLeftMouseUp
+                        | NSEventType::NSRightMouseDown
+                        | NSEventType::NSRightMouseUp
+                        | NSEventType::NSOtherMouseDown
+                        | NSEventType::NSOtherMouseUp
+                ) {
+                    let point: NSPoint = msg_send![event, locationInWindow];
+                    let content_view: ObjcId = msg_send![this, contentView];
+                    let hit: ObjcId = if content_view != nil {
+                        msg_send![content_view, hitTest: point]
+                    } else {
+                        nil
+                    };
+                    crate::log!(
+                        "[liquid-glass] backend=apple-native-controls event=window-send-event type={:?} point=({:.1},{:.1}) hit={}",
+                        ev_type,
+                        point.x,
+                        point.y,
+                        objc_class_name(hit)
+                    );
+                }
+            }
+            let superclass = superclass(this);
+            let () = msg_send![super (this, superclass), sendEvent: event];
+        }
+    }
     /*
     extern fn is_movable_by_window_background(_: &Object, _: Sel) -> BOOL {
         YES
@@ -492,6 +525,10 @@ pub fn define_macos_window_class() -> *const Class {
         decl.add_method(
             sel!(canBecomeKeyWindow),
             yes as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        decl.add_method(
+            sel!(sendEvent:),
+            send_event as extern "C" fn(&Object, Sel, ObjcId),
         );
     }
     return decl.register();

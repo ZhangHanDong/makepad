@@ -294,6 +294,13 @@ value was `false`, but the target/action side effect fired. This proves the
 macOS accessibility activation path reaches Makepad; it still does not prove
 physical/system mouse-click delivery.
 
+Step 150 adds probe-gated `NSWindow.sendEvent:` diagnostics for mouse events.
+When `AICHAT_NATIVE_CONTROL_PROBE` is enabled, physical click attempts can now
+log `window-send-event type=... point=(...) hit=...` before AppKit dispatches
+to views. This separates "event never reached the window" from "event reached
+the window but hit-tested somewhere other than `NativeGlassButton`" in the next
+manual validation run.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
