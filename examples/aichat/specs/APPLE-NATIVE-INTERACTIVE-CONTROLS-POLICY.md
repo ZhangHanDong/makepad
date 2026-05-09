@@ -301,6 +301,19 @@ to views. This separates "event never reached the window" from "event reached
 the window but hit-tested somewhere other than `NativeGlassButton`" in the next
 manual validation run.
 
+Step 151 reruns the retained global CGEvent probe after the Step 150
+`NSWindow.sendEvent:` diagnostics landed. Studio release build `[3]` of
+`makepad-example-aichat-macos-native-clear-control-cgevent-probe` again logged
+the native underlay, two installed glass `NativeGlassButton` mirrors, matching
+AppKit hit-test probes, and
+`cg-event-probe mode=Global ... screen=(2004.5,1024.0) cg=(2004.5,416.0)`.
+No `window-send-event`, `button-mouse-down`, `target-action`, `button-action`,
+or `native-control-probe=makepad-click` logs followed. This shows the retained
+global CGEvent probe does not enter `RenderWindow.sendEvent:` and therefore
+cannot replace the remaining physical/trusted click validation. A Studio remote
+`Click` at the current `clear_button` widget-dump center likewise produced no
+native/window event logs and is not AppKit click evidence.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
