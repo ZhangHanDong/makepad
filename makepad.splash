@@ -64,6 +64,7 @@ let RunAichatMacosGlass = RunItem{
     fullscreen_probe: ""
     geometry_probe: ""
     interleave_layer_probe: ""
+    native_control_probe: ""
     on_run: fn(id){
         hub.run(
             {
@@ -80,6 +81,7 @@ let RunAichatMacosGlass = RunItem{
                 "AICHAT_NATIVE_FULLSCREEN_PROBE": self.fullscreen_probe
                 "MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT": self.geometry_probe
                 "AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE": self.interleave_layer_probe
+                "AICHAT_NATIVE_CONTROL_PROBE": self.native_control_probe
             },
             "cargo",
             ["run" "-p" "makepad-example-aichat" "--release" "--message-format=json" "--" "--message-format=json"],
@@ -137,6 +139,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-inactive-probe", backend: "macos-native-clear", inactive_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-fullscreen-probe", backend: "macos-native-clear", fullscreen_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-geometry-probe", backend: "macos-native-clear", geometry_probe: "1"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-probe", backend: "macos-native-clear", native_control_probe: "buttons"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-layer-probe", backend: "macos-native-clear", interleave_layer_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-lower-scene-clear", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-lower-scene-mirror", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-mirror"}

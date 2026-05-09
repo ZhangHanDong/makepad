@@ -96,6 +96,24 @@ Step 109 adds an aichat runtime probe gate:
 This gives Studio a runnable path for macOS native-control validation while
 keeping default aichat behavior unchanged.
 
+Step 110 exposes that probe through Studio:
+
+- `makepad-example-aichat-macos-native-clear-control-probe`
+- `AICHAT_NATIVE_CONTROL_PROBE=buttons`
+
+This keeps the required RunItem validation path available without using bridge
+Cargo requests or changing the default native-clear runnable.
+
+Step 111 records the first runtime result from that runnable:
+
+- build `[111]`
+- `backend=apple-native-controls state=Installed
+  reason=installed-appkit-buttons controls_total=2 controls_visible=2`
+
+This proves descriptor delivery and AppKit button installation, but it does not
+yet prove real mouse-driven target/action delivery because Studio click
+injection bypasses AppKit overlay hit testing.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
