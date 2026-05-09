@@ -144,6 +144,18 @@ popup window, it logs:
 This is a gate closure for observability only; it does not implement UIKit
 transient native glass.
 
+Step 139 adds the macOS AppKit `keyDown:` Escape route for popup windows. When
+the route fires, the platform logs:
+
+```text
+[liquid-glass] transient-window=popup-dismiss event=escape popup=...
+```
+
+and dispatches `PopupDismissed(reason=Escape)`. Studio build `[169]` proved the
+popup native glass setup still works after the change, but automated
+`osascript` / `cliclick` Escape injection produced no post-input logs. Physical
+Escape validation therefore remains open.
+
 ## Acceptance
 
 Phase I is not complete until all of the following are true:

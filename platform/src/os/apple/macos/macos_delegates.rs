@@ -3,7 +3,7 @@ use {
         cursor::MouseCursor,
         cx::Cx,
         event::{
-            finger::MouseButton, DragEvent, DragItem, DragResponse, DropEvent,
+            finger::MouseButton, DragEvent, DragItem, DragResponse, DropEvent, KeyCode,
             NativeGlassControlActivatedEvent,
         },
         makepad_live_id::LiveId,
@@ -12,7 +12,7 @@ use {
             apple::apple_sys::*,
             apple_classes::get_apple_class_global,
             apple_util::{
-                get_event_key_modifier, get_event_mouse_button, load_mouse_cursor,
+                get_event_key_modifier, get_event_keycode, get_event_mouse_button, load_mouse_cursor,
                 nsstring_to_string, superclass,
             },
             macos::{
@@ -849,6 +849,10 @@ pub fn define_cocoa_view_class() -> *const Class {
 
     extern "C" fn key_down(this: &Object, _sel: Sel, event: ObjcId) {
         let cw = get_cocoa_window(this);
+        if get_event_keycode(event) == Some(KeyCode::Escape) && cw.send_popup_escape_dismiss_event()
+        {
+            return;
+        }
         // Only forward to NSTextInputContext when IME is active (a text field has focus).
         // Otherwise, typing outside the TextInput still trigger the system IME.
         if cw.ime_active {

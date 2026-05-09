@@ -2253,6 +2253,23 @@ impl MacosWindow {
         self.do_callback(MacosEvent::WindowLostFocus(self.window_id));
     }
 
+    pub fn send_popup_escape_dismiss_event(&mut self) -> bool {
+        if !self.is_popup {
+            return false;
+        }
+        crate::log!(
+            "[liquid-glass] transient-window=popup-dismiss event=escape popup={:?}",
+            self.window_id
+        );
+        self.do_callback(MacosEvent::PopupDismissed(
+            crate::event::window::PopupDismissedEvent {
+                window_id: self.window_id,
+                reason: crate::event::window::PopupDismissReason::Escape,
+            },
+        ));
+        true
+    }
+
     pub fn mouse_down_can_drag_window(&mut self) -> bool {
         let response = Rc::new(Cell::new(WindowDragQueryResponse::NoAnswer));
         self.do_callback(MacosEvent::WindowDragQuery(WindowDragQueryEvent {
