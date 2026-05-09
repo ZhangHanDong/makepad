@@ -17,10 +17,11 @@ AICHAT_GLASS_BACKEND=macos-native-clear
 MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE=1
 ```
 
-Studio release build:
+Studio release builds:
 
 ```text
-[160]
+[160] initial native substrate install proof
+[161] popup draw-pass proof
 ```
 
 ## Evidence
@@ -43,6 +44,12 @@ macOS installed native glass on the popup window:
 [liquid-glass] transient-window=popup state=Installed substrate=macos-native style=clear reason=installed-on-proofed-hierarchy
 ```
 
+The popup's own Metal pass drew content in build `[161]`:
+
+```text
+[liquid-glass] transient-window-probe=draw popup_size=(240.0,160.0)
+```
+
 The main native batch stayed installed after the popup probe:
 
 ```text
@@ -56,9 +63,16 @@ This closes the first macOS transient-window substrate installation gate:
 `CxOsOp::CreatePopupWindow` can install an independent native glass substrate
 for the popup window without reusing the main window's native container.
 
+Build `[161]` also closes the empty-popup gap: the transient popup can own a
+separate draw pass and present Makepad Metal content above its native glass
+substrate. Studio captured the popup framebuffer at:
+
+```text
+/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-161-kind-0-req-49-1778342316874.png
+```
+
 It does not close the full Phase I popup/modal gate. Still missing:
 
-- visual proof of popup glass composition with popup content,
 - popup widget-tree descriptor collection,
 - `PopupDismissed` runtime delivery evidence,
 - UIKit transient-window support or stable unsupported logging,

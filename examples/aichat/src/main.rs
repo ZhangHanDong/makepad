@@ -4224,6 +4224,12 @@ pub struct App {
     shader_backdrop_blur_h_draw_list: DrawList2d,
     #[new]
     shader_backdrop_blur_v_draw_list: DrawList2d,
+    #[new]
+    native_transient_popup_pass: DrawPass,
+    #[new]
+    native_transient_popup_draw_list: DrawList2d,
+    #[new]
+    draw_native_transient_popup_marker: DrawColor,
     #[live]
     draw_shader_backdrop_scene: DrawAichatBackdropScene,
     #[live]
@@ -4282,6 +4288,8 @@ pub struct App {
     native_transient_probe_started: bool,
     #[rust]
     native_transient_probe_popup: Option<WindowHandle>,
+    #[rust]
+    native_transient_probe_draw_logged: bool,
     #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
@@ -5514,12 +5522,60 @@ impl App {
             dvec2(240.0, 160.0),
         );
         popup.set_transparent(cx, true);
+        popup.set_pass(cx, &self.native_transient_popup_pass);
+        self.native_transient_popup_pass
+            .set_window_clear_color(cx, vec4(0.0, 0.0, 0.0, 0.0));
         log!(
             "[liquid-glass] transient-window-probe=request-open parent={:?} popup={:?}",
             parent_window_id,
             popup.window_id()
         );
         self.native_transient_probe_popup = Some(popup);
+        cx.redraw_all();
+    }
+
+    fn render_native_transient_popup_probe(&mut self, cx: &mut Cx2d) {
+        if self.native_transient_probe_popup.is_none() {
+            return;
+        }
+        if !cx.will_redraw(&mut self.native_transient_popup_draw_list, Walk::default()) {
+            return;
+        }
+
+        cx.begin_pass(&self.native_transient_popup_pass, None);
+        self.native_transient_popup_draw_list.begin_always(cx);
+        let size = cx.current_pass_size();
+        cx.begin_root_turtle(size, Layout::flow_down());
+
+        self.draw_native_transient_popup_marker.color = vec4(0.08, 0.28, 0.24, 0.34);
+        self.draw_native_transient_popup_marker.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size,
+            },
+        );
+        self.draw_native_transient_popup_marker.color = vec4(0.92, 0.85, 0.62, 0.50);
+        self.draw_native_transient_popup_marker.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(16.0, 16.0),
+                size: dvec2((size.x - 32.0).max(1.0), 2.0),
+            },
+        );
+
+        cx.end_pass_sized_turtle();
+        self.native_transient_popup_draw_list.end(cx);
+        cx.end_pass(&self.native_transient_popup_pass);
+
+        if !self.native_transient_probe_draw_logged {
+            self.native_transient_probe_draw_logged = true;
+            log!(
+                "[liquid-glass] transient-window-probe=draw popup_size=({:.1},{:.1})",
+                size.x,
+                size.y
+            );
+        }
     }
 
     fn handle_native_fullscreen_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
@@ -5921,6 +5977,8 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_draw_2d(&mut self, cx: &mut Cx2d) {
+        self.render_native_transient_popup_probe(cx);
+
         if native_lower_scene_pass_probe_enabled() {
             self.render_native_lower_scene_pass_probe(cx);
         }
