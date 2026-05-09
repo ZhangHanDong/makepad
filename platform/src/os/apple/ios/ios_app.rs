@@ -149,6 +149,23 @@ mod native_glass_tests {
     }
 
     #[test]
+    fn ios_native_glass_control_frame_snapshot_line_records_geometry() {
+        let control = test_control(NativeGlassStyle::Clear);
+        let frame = IosApp::native_glass_control_frame(&control);
+
+        let line = IosApp::native_glass_control_frame_snapshot_line(&control, frame);
+
+        assert!(line.contains("native-control-frame"));
+        assert!(line.contains("control=0000000000000007"));
+        assert!(line.contains("label=\"Clear\""));
+        assert!(line.contains("makepad=(24.0,48.0,120.0,44.0)"));
+        assert!(line.contains("ui=(24.0,48.0,120.0,44.0)"));
+        assert!(line.contains("z_order=0"));
+        assert!(line.contains("enabled=true"));
+        assert!(line.contains("visible=true"));
+    }
+
+    #[test]
     fn ios_native_glass_control_style_line_records_configuration() {
         assert_eq!(
             IosApp::native_glass_control_style_line(&test_control(NativeGlassStyle::Regular)),
@@ -712,6 +729,29 @@ impl IosApp {
         Self::native_glass_ui_rect_from_makepad_rect(control.rect)
     }
 
+    fn native_glass_control_frame_snapshot_line(
+        control: &NativeGlassControlDescriptor,
+        frame: NSRect,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios-controls native-control-frame control={:?} kind={:?} label={:?} makepad=({:.1},{:.1},{:.1},{:.1}) ui=({:.1},{:.1},{:.1},{:.1}) z_order={} enabled={} visible={}",
+            control.id,
+            control.kind,
+            control.label,
+            control.rect.pos.x,
+            control.rect.pos.y,
+            control.rect.size.x,
+            control.rect.size.y,
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+            control.z_order,
+            control.enabled,
+            control.visible
+        )
+    }
+
     fn native_glass_control_style_line(control: &NativeGlassControlDescriptor) -> String {
         format!(
             "[liquid-glass] backend=apple-native-ios-controls button-style control={:?} label={:?} configuration={} style={:?}",
@@ -1168,7 +1208,12 @@ impl IosApp {
                 let () = msg_send![button, setConfiguration: configuration];
                 let () = msg_send![button, setTitle: ns_label forState: 0u64];
                 let () = msg_send![button, setAccessibilityLabel: ns_label];
-                let () = msg_send![button, setFrame: Self::native_glass_control_frame(control)];
+                let control_frame = Self::native_glass_control_frame(control);
+                crate::log!(
+                    "{}",
+                    Self::native_glass_control_frame_snapshot_line(control, control_frame)
+                );
+                let () = msg_send![button, setFrame: control_frame];
                 let () = msg_send![
                     button,
                     setUserInteractionEnabled: if control.enabled { YES } else { NO }
