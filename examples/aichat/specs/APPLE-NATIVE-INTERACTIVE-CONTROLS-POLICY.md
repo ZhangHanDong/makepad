@@ -16,6 +16,19 @@ compatibility. It is intentionally rejected in v4.1:
 - `widgets/src/glass_panel.rs` exposes `native_hit_test`, defaulting to
   passthrough.
 
+Step 101 adds a separate shared descriptor model for future native interactive
+controls:
+
+- `NativeGlassControlBatch`
+- `NativeGlassControlDescriptor`
+- `NativeGlassControlKind`
+- `NativeGlassButtonRole`
+- `NativeGlassControlBatch::validate_v4_10`
+
+These descriptors are not installed by any platform backend yet. They exist so
+the native-control phase can proceed without reusing interactive glass panels
+as controls.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -27,6 +40,8 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - Native glass panels are visual surfaces only.
 - `NativeGlassHitTest::Interactive` must stay rejected until the gates below are
   implemented and validated.
+- `NativeGlassControlBatch` is the future native-control input model; it is
+  separate from `NativeGlassBatch` and has no installer in production yet.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

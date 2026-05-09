@@ -105,6 +105,7 @@ pub struct WindowNativeSubstrateResolvedEvent {
 }
 
 pub const NATIVE_GLASS_MAX_PANELS_PER_WINDOW_V4_1: usize = 12;
+pub const NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10: usize = 24;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NativeGlassShape {
@@ -176,6 +177,38 @@ pub enum NativeGlassHitTest {
     Interactive,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassButtonRole {
+    Default,
+    Primary,
+    Icon,
+    Nav,
+    Utility,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassControlKind {
+    Button { role: NativeGlassButtonRole },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassControlDescriptor {
+    pub id: LiveId,
+    pub rect: Rect,
+    pub kind: NativeGlassControlKind,
+    pub style: NativeGlassStyle,
+    pub tint: Option<Vec4f>,
+    pub z_order: i32,
+    pub enabled: bool,
+    pub visible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeGlassControlBatch {
+    pub window_id: WindowId,
+    pub controls: Vec<NativeGlassControlDescriptor>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeGlassPanelDescriptor {
     pub id: LiveId,
@@ -218,6 +251,12 @@ pub enum NativeGlassBatchValidationError {
         container_id: LiveId,
         panel_id: LiveId,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeGlassControlBatchValidationError {
+    TooManyVisibleControls { count: usize, max: usize },
+    EmptyVisibleControlRect { control_id: LiveId },
 }
 
 impl NativeGlassBatch {
@@ -321,6 +360,54 @@ impl NativeGlassBatch {
                         .iter()
                         .zip(&b.panels)
                         .all(|(a, b)| Self::native_panel_equivalent(a, b))
+            })
+    }
+}
+
+impl NativeGlassControlBatch {
+    pub fn visible_control_count(&self) -> usize {
+        self.controls
+            .iter()
+            .filter(|control| control.visible)
+            .count()
+    }
+
+    pub fn validate_v4_10(&self) -> Result<(), NativeGlassControlBatchValidationError> {
+        let visible_control_count = self.visible_control_count();
+        if visible_control_count > NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10 {
+            return Err(
+                NativeGlassControlBatchValidationError::TooManyVisibleControls {
+                    count: visible_control_count,
+                    max: NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10,
+                },
+            );
+        }
+
+        for control in &self.controls {
+            if control.visible && (control.rect.size.x <= 0.0 || control.rect.size.y <= 0.0) {
+                return Err(
+                    NativeGlassControlBatchValidationError::EmptyVisibleControlRect {
+                        control_id: control.id,
+                    },
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn equivalent_for_native_update(&self, other: &Self) -> bool {
+        self.window_id == other.window_id
+            && self.controls.len() == other.controls.len()
+            && self.controls.iter().zip(&other.controls).all(|(a, b)| {
+                a.id == b.id
+                    && NativeGlassBatch::native_rect_equivalent(a.rect, b.rect)
+                    && a.kind == b.kind
+                    && a.style == b.style
+                    && NativeGlassBatch::native_tint_equivalent(a.tint, b.tint)
+                    && a.z_order == b.z_order
+                    && a.enabled == b.enabled
+                    && a.visible == b.visible
             })
     }
 }
@@ -477,6 +564,31 @@ mod native_glass_tests {
                 spacing: 20.0,
                 panels,
             }],
+        }
+    }
+
+    fn control(id: u64) -> NativeGlassControlDescriptor {
+        NativeGlassControlDescriptor {
+            id: LiveId(id),
+            rect: Rect {
+                pos: Vec2d { x: 8.0, y: 8.0 },
+                size: Vec2d { x: 96.0, y: 36.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: id as i32,
+            enabled: true,
+            visible: true,
+        }
+    }
+
+    fn control_batch(controls: Vec<NativeGlassControlDescriptor>) -> NativeGlassControlBatch {
+        NativeGlassControlBatch {
+            window_id: WindowId(1, 1),
+            controls,
         }
     }
 
@@ -690,6 +802,85 @@ mod native_glass_tests {
 
         let mut visible = a.clone();
         visible.containers[0].panels[0].visible = false;
+        assert!(!a.equivalent_for_native_update(&visible));
+    }
+
+    #[test]
+    fn native_glass_control_batch_accepts_max_visible_controls() {
+        let controls = (0..NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10 as u64)
+            .map(control)
+            .collect();
+        let batch = control_batch(controls);
+
+        assert_eq!(batch.visible_control_count(), 24);
+        assert_eq!(batch.validate_v4_10(), Ok(()));
+    }
+
+    #[test]
+    fn native_glass_control_batch_rejects_too_many_visible_controls() {
+        let controls = (0..=NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10 as u64)
+            .map(control)
+            .collect();
+        let batch = control_batch(controls);
+
+        assert_eq!(
+            batch.validate_v4_10(),
+            Err(
+                NativeGlassControlBatchValidationError::TooManyVisibleControls {
+                    count: 25,
+                    max: NATIVE_GLASS_MAX_CONTROLS_PER_WINDOW_V4_10,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn native_glass_control_batch_rejects_empty_visible_control_rect() {
+        let mut empty = control(7);
+        empty.rect.size.x = 0.0;
+        let batch = control_batch(vec![empty]);
+
+        assert_eq!(
+            batch.validate_v4_10(),
+            Err(
+                NativeGlassControlBatchValidationError::EmptyVisibleControlRect {
+                    control_id: LiveId(7),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn native_glass_control_batch_allows_empty_hidden_control_rect() {
+        let mut hidden = control(8);
+        hidden.visible = false;
+        hidden.rect.size.x = 0.0;
+        let batch = control_batch(vec![hidden]);
+
+        assert_eq!(batch.visible_control_count(), 0);
+        assert_eq!(batch.validate_v4_10(), Ok(()));
+    }
+
+    #[test]
+    fn native_glass_control_batch_equivalent_for_native_update_detects_changes() {
+        let a = control_batch(vec![control(1)]);
+
+        let mut jitter = a.clone();
+        jitter.controls[0].rect.pos.x += 0.25;
+        assert!(a.equivalent_for_native_update(&jitter));
+
+        let mut role = a.clone();
+        role.controls[0].kind = NativeGlassControlKind::Button {
+            role: NativeGlassButtonRole::Primary,
+        };
+        assert!(!a.equivalent_for_native_update(&role));
+
+        let mut enabled = a.clone();
+        enabled.controls[0].enabled = false;
+        assert!(!a.equivalent_for_native_update(&enabled));
+
+        let mut visible = a.clone();
+        visible.controls[0].visible = false;
         assert!(!a.equivalent_for_native_update(&visible));
     }
 }
