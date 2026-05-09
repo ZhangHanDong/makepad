@@ -165,6 +165,31 @@ mod native_glass_tests {
         assert_eq!(UI_BUTTON_TYPE_SYSTEM, 1);
         assert_eq!(UI_CONTROL_EVENT_TOUCH_UP_INSIDE, 64);
     }
+
+    #[test]
+    fn ios_native_glass_visible_controls_are_sorted_by_z_order() {
+        let mut top = test_control(NativeGlassStyle::Regular);
+        top.id = crate::LiveId(20);
+        top.z_order = 20;
+        let mut hidden = test_control(NativeGlassStyle::Regular);
+        hidden.id = crate::LiveId(30);
+        hidden.z_order = -10;
+        hidden.visible = false;
+        let mut bottom = test_control(NativeGlassStyle::Clear);
+        bottom.id = crate::LiveId(10);
+        bottom.z_order = 10;
+        let batch = NativeGlassControlBatch {
+            window_id: crate::window::WindowId(1, 1),
+            controls: vec![top, hidden, bottom],
+        };
+
+        let ids: Vec<crate::LiveId> = IosApp::native_glass_visible_controls_in_z_order(&batch)
+            .iter()
+            .map(|control| control.id)
+            .collect();
+
+        assert_eq!(ids, vec![crate::LiveId(10), crate::LiveId(20)]);
+    }
 }
 
 pub fn with_ios_app<R>(f: impl FnOnce(&mut IosApp) -> R) -> R {
@@ -663,6 +688,18 @@ impl IosApp {
         }
     }
 
+    fn native_glass_visible_controls_in_z_order(
+        batch: &NativeGlassControlBatch,
+    ) -> Vec<&NativeGlassControlDescriptor> {
+        let mut visible_controls: Vec<&NativeGlassControlDescriptor> = batch
+            .controls
+            .iter()
+            .filter(|control| control.visible)
+            .collect();
+        visible_controls.sort_by_key(|control| control.z_order);
+        visible_controls
+    }
+
     fn native_glass_control_frame(control: &NativeGlassControlDescriptor) -> NSRect {
         Self::native_glass_ui_rect_from_makepad_rect(control.rect)
     }
@@ -1089,14 +1126,10 @@ impl IosApp {
 
             self.clear_native_glass_control_views();
 
-            let mut visible_controls: Vec<&NativeGlassControlDescriptor> = batch
-                .controls
-                .iter()
-                .filter(|control| control.visible)
-                .collect();
-            visible_controls.sort_by_key(|control| control.z_order);
+            let visible_controls = Self::native_glass_visible_controls_in_z_order(&batch);
 
             let mut installed = 0usize;
+            let mut insertion_anchor = mtk_view;
             for control in visible_controls {
                 let button: ObjcId = msg_send![button_class, buttonWithType: UI_BUTTON_TYPE_SYSTEM];
                 if button == nil {
@@ -1147,8 +1180,9 @@ impl IosApp {
                 let () = msg_send![
                     host_view,
                     insertSubview: button
-                    aboveSubview: mtk_view
+                    aboveSubview: insertion_anchor
                 ];
+                insertion_anchor = button;
                 self.native_glass_control_views.push(button);
                 self.native_glass_control_targets.push(target);
                 installed += 1;
