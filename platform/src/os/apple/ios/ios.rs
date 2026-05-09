@@ -12,6 +12,7 @@ use {
                 VideoYuvTexturesReady,
             },
             Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
+            NativeGlassControlBatch, NativeGlassControlBatchValidationError,
             WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
         },
         makepad_live_id::*,
@@ -113,6 +114,39 @@ fn ios_native_glass_runtime_preflight() -> IosNativeGlassPreflight {
         }
     }
     ios_native_glass_runtime_selector_preflight()
+}
+
+fn ios_native_glass_control_validation_reason(
+    error: NativeGlassControlBatchValidationError,
+) -> &'static str {
+    match error {
+        NativeGlassControlBatchValidationError::TooManyVisibleControls { .. } => {
+            "too-many-visible-controls"
+        }
+        NativeGlassControlBatchValidationError::EmptyVisibleControlRect { .. } => {
+            "empty-visible-control-rect"
+        }
+    }
+}
+
+fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch) {
+    match batch.validate_v4_10() {
+        Ok(()) => {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented controls_total={} controls_visible={}",
+                batch.controls.len(),
+                batch.visible_control_count()
+            );
+        }
+        Err(error) => {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-ios-controls state=Rejected reason={} controls_total={} controls_visible={}",
+                ios_native_glass_control_validation_reason(error),
+                batch.controls.len(),
+                batch.visible_control_count()
+            );
+        }
+    }
 }
 
 fn ios_native_glass_selector_preflight_result_from_missing_selector(
@@ -1165,7 +1199,9 @@ impl Cx {
                         }
                     }
                 }
-                CxOsOp::SetNativeGlassControlBatch(_) => {}
+                CxOsOp::SetNativeGlassControlBatch(batch) => {
+                    ios_log_native_glass_control_batch_unsupported(batch);
+                }
                 CxOsOp::FullscreenWindow(_window_id) => {
                     IosApp::set_fullscreen(true);
                 }
@@ -1844,6 +1880,27 @@ mod tests {
         assert_eq!(preflight.reason, "uikit-glass-selector-missing");
         assert_eq!(preflight.missing_class, None);
         assert_eq!(preflight.missing_selector, Some("setSpacing:"));
+    }
+
+    #[test]
+    fn ios_native_glass_control_validation_reason_maps_errors() {
+        assert_eq!(
+            ios_native_glass_control_validation_reason(
+                NativeGlassControlBatchValidationError::TooManyVisibleControls {
+                    count: 25,
+                    max: 24,
+                }
+            ),
+            "too-many-visible-controls"
+        );
+        assert_eq!(
+            ios_native_glass_control_validation_reason(
+                NativeGlassControlBatchValidationError::EmptyVisibleControlRect {
+                    control_id: LiveId(7),
+                }
+            ),
+            "empty-visible-control-rect"
+        );
     }
 
     #[test]

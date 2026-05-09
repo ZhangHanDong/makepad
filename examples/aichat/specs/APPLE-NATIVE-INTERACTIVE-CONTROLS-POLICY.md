@@ -34,8 +34,9 @@ Step 102 adds the platform op transport for those descriptors:
 - `CxOsOp::SetNativeGlassControlBatch`
 - `WindowHandle::set_native_glass_control_batch`
 
-Current OS backends explicitly ignore this op. Native AppKit/UIKit controls are
-still not created until the later installer and action bridge steps.
+Current OS backends do not create native controls from this op unless a later
+installer explicitly handles them. Native AppKit/UIKit controls are still not
+created until the later installer and action bridge steps.
 
 Step 103 extends `GlassContainer` collector plumbing so future widgets can push
 `NativeGlassControlDescriptor` values alongside native glass panels. The current
@@ -76,6 +77,16 @@ Step 107 makes macOS consume control batches for diagnostics:
 
 This is intentionally not AppKit control installation yet; it proves the op
 reaches the macOS backend and remains honest about missing native controls.
+
+Step 127 makes iOS consume control batches for diagnostics:
+
+- valid batches log
+  `backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented`
+- invalid batches log stable rejection reasons
+
+This is intentionally not UIKit control installation yet; it proves the op
+reaches the iOS backend and keeps descriptor validation observable until the
+iOS 26 native-control installer phase.
 
 Step 108 adds the first macOS AppKit installer skeleton:
 
@@ -241,8 +252,9 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   implemented and validated.
 - `NativeGlassControlBatch` is the native-control input model; it is separate
   from `NativeGlassBatch`.
-- `SetNativeGlassControlBatch` may be queued by future collectors, but current
-  non-macOS backends treat it as a no-op.
+- `SetNativeGlassControlBatch` may be queued by future collectors. macOS and
+  iOS now validate/log unsupported batches; other non-macOS backends treat it
+  as a no-op.
 - `GlassContainer` can carry native-control descriptors from explicit
   `Button.native_control` opt-ins, but current `GlassButton` variants remain
   Makepad-rendered only.

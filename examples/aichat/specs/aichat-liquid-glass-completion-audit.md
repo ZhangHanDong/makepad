@@ -127,6 +127,11 @@ Recent verified gates:
   `button-mouse-down`, `target-action`, `button-action`, or
   `native-control-probe=makepad-click` logs. PID-targeted CGEvent delivery did
   not close the system-click gate.
+- Step 127 makes iOS `SetNativeGlassControlBatch` observable instead of silent:
+  valid batches log
+  `backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented`;
+  invalid batches log stable rejection reasons. This does not implement UIKit
+  native controls.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -162,7 +167,8 @@ behavior, or full native interior Liquid Glass.
   probe, and Step 126 adds a PID-targeted `CGEventPostToPid` variant, but
   current builds `[135]`, `[136]`, and `[138]` did not produce native click
   delivery. A physical user/system click is still unproven. UIKit controls are
-  not installed, accessibility ownership is
+  not installed; Step 127 only validates/logs unsupported iOS control batches.
+  Accessibility ownership is
   unresolved, and non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
