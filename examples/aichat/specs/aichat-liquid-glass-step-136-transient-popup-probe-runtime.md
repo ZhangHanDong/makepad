@@ -82,7 +82,9 @@ substrate. Studio captured the popup framebuffer at:
 
 It does not close the full Phase I popup/modal gate. Still missing:
 
-- popup widget-tree descriptor collection,
 - physical outside-click or Escape dismissal evidence,
 - UIKit transient-window support or stable unsupported logging,
 - modal-window support.
+
+Step 137 closes popup widget-tree descriptor collection for the macOS probe
+path.

@@ -628,6 +628,55 @@ script_mod! {
     startup() do #(App::script_component(vm)){
         draw_shader_backdrop_scene: mod.draw.DrawAichatBackdropScene{}
         draw_shader_backdrop_blur: mod.draw.DrawAichatBackdropBlur{}
+        native_transient_popup_ui: GlassContainer {
+            width: Fill
+            height: Fill
+            native: true
+            spacing: 10.0
+            flow: Overlay
+            draw_bg.color: #x00000000
+
+            popup_probe_panel := GlassPanel {
+                width: Fill
+                height: Fill
+                native: true
+                native_radius: 22.0
+                native_z_order: 0.0
+                show_bg: true
+                draw_bg +: {
+                    tint_color: #x0A3A30
+                    tint_alpha: 0.32
+                    border_color: #xEAD8B8
+                    border_alpha: 0.30
+                    border_width: 1.0
+                    corner_radius: 22.0
+                    highlight_strength: 0.22
+                    highlight_band_height: 42.0
+                    halo_strength: 0.0
+                    noise_strength: 0.002
+                }
+            }
+
+            View {
+                width: Fill
+                height: Fill
+                flow: Down
+                align: Align{x: 0.5 y: 0.5}
+                padding: Inset{left: 18 right: 18 top: 18 bottom: 18}
+                spacing: 8
+
+                Label {
+                    text: "Popup Glass"
+                    draw_text.color: ai_cream
+                    draw_text.text_style.font_size: 13
+                }
+                Label {
+                    text: "widget descriptors"
+                    draw_text.color: ai_cream_dim
+                    draw_text.text_style.font_size: 11
+                }
+            }
+        }
         ui: Root{
             main_window := Window{
                 show_caption_bar: false
@@ -4212,6 +4261,8 @@ CommonMark closes a 3-backtick fence at the next 3-backtick sequence — there i
 pub struct App {
     #[live]
     ui: WidgetRef,
+    #[live]
+    native_transient_popup_ui: WidgetRef,
     #[new]
     shader_backdrop_scene_pass: DrawPass,
     #[new]
@@ -4228,8 +4279,6 @@ pub struct App {
     native_transient_popup_pass: DrawPass,
     #[new]
     native_transient_popup_draw_list: DrawList2d,
-    #[new]
-    draw_native_transient_popup_marker: DrawColor,
     #[live]
     draw_shader_backdrop_scene: DrawAichatBackdropScene,
     #[live]
@@ -4290,6 +4339,8 @@ pub struct App {
     native_transient_probe_popup: Option<WindowHandle>,
     #[rust]
     native_transient_probe_draw_logged: bool,
+    #[rust]
+    native_transient_probe_widget_logged: bool,
     #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
@@ -5546,28 +5597,27 @@ impl App {
         self.native_transient_popup_draw_list.begin_always(cx);
         let size = cx.current_pass_size();
         cx.begin_root_turtle(size, Layout::flow_down());
-
-        self.draw_native_transient_popup_marker.color = vec4(0.08, 0.28, 0.24, 0.34);
-        self.draw_native_transient_popup_marker.draw_abs(
-            cx,
-            Rect {
-                pos: dvec2(0.0, 0.0),
-                size,
-            },
-        );
-        self.draw_native_transient_popup_marker.color = vec4(0.92, 0.85, 0.62, 0.50);
-        self.draw_native_transient_popup_marker.draw_abs(
-            cx,
-            Rect {
-                pos: dvec2(16.0, 16.0),
-                size: dvec2((size.x - 32.0).max(1.0), 2.0),
-            },
-        );
+        let mut popup_probe_panel = self
+            .native_transient_popup_ui
+            .view(cx, ids!(popup_probe_panel));
+        script_apply_eval!(cx, popup_probe_panel, {
+            native_style: #(makepad_widgets::glass_panel::GlassNativeStyle::Clear)
+        });
+        self.native_transient_popup_ui
+            .draw_all(cx, &mut Scope::empty());
 
         cx.end_pass_sized_turtle();
         self.native_transient_popup_draw_list.end(cx);
         cx.end_pass(&self.native_transient_popup_pass);
 
+        if !self.native_transient_probe_widget_logged {
+            self.native_transient_probe_widget_logged = true;
+            log!(
+                "[liquid-glass] transient-window-probe=widget-tree popup_size=({:.1},{:.1}) panels=1",
+                size.x,
+                size.y
+            );
+        }
         if !self.native_transient_probe_draw_logged {
             self.native_transient_probe_draw_logged = true;
             log!(

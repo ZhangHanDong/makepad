@@ -74,8 +74,7 @@ Phase I should add a small transient-window native substrate path:
 ```
 
 5. Do not export main-window `GlassPanel` descriptors into the popup window.
-   Popup descriptors must come from the popup window's own widget tree in a
-   later collector phase.
+   Popup descriptors must come from the popup window's own widget tree.
 
 ## macOS Probe Evidence
 
@@ -107,6 +106,20 @@ prove popup widget-tree descriptor collection. Build `[166]` proves the
 platform-to-app `PopupDismissed(FocusLost)` delivery path through a synthetic
 platform dispatch; a physical outside-click or Escape dismissal remains a later
 manual/runtime validation.
+
+Step 137 changes the same transient probe to draw a real popup-local
+`GlassContainer` widget tree. Studio release build `[168]` logged:
+
+```text
+[liquid-glass] transient-window-probe=widget-tree popup_size=(240.0,160.0) panels=1
+[liquid-glass] native-container-spacing container=0000000000000047 spacing=10.000
+[liquid-glass] backend=apple-native-underlay state=Installed containers=1 panels_installed=1 panels_failed=0
+[liquid-glass] container=0000000000000047 state=Installed reason=installed panels_installed=1 panels_failed=0
+[liquid-glass] state=4 substrate=macos-native style=clear style_raw=1
+```
+
+The main native batch remained installed with four panels in the same run.
+This proves popup widget-tree descriptor export for the macOS probe path.
 
 ## UIKit Implementation Plan
 
