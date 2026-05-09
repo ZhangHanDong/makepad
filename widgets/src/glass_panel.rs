@@ -97,8 +97,7 @@ pub(crate) fn push_native_glass_control_descriptor(
     cx: &mut Cx2d,
     descriptor: NativeGlassControlDescriptor,
 ) {
-    cx.global::<NativeGlassCollector>()
-        .push_control(descriptor);
+    cx.global::<NativeGlassCollector>().push_control(descriptor);
 }
 
 script_mod! {
@@ -638,9 +637,9 @@ impl Widget for GlassContainer {
                             || self.last_native_control_batch.is_some()
                         {
                             if self.last_native_control_batch.as_ref() != Some(&control_batch) {
-                                cx.push_unique_platform_op(
-                                    CxOsOp::SetNativeGlassControlBatch(control_batch.clone()),
-                                );
+                                cx.push_unique_platform_op(CxOsOp::SetNativeGlassControlBatch(
+                                    control_batch.clone(),
+                                ));
                                 self.last_native_control_batch = Some(control_batch);
                             }
                         }
@@ -868,6 +867,7 @@ mod native_glass_tests {
             kind: NativeGlassControlKind::Button {
                 role: NativeGlassButtonRole::Primary,
             },
+            label: "Send".to_string(),
             style: NativeGlassStyle::Clear,
             tint: None,
             z_order: 1,
@@ -889,6 +889,7 @@ mod native_glass_tests {
                 role: NativeGlassButtonRole::Primary,
             }
         );
+        assert_eq!(collection.controls[0].label, "Send");
         assert_eq!(collector.stack.len(), 0);
     }
 

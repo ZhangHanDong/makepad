@@ -59,6 +59,14 @@ Step 105 adds the shared activation bridge:
 This keeps application code on the current `button.clicked(actions)` API once a
 future AppKit/UIKit installer starts posting native activation events.
 
+Step 106 adds descriptor content needed by a native button installer:
+
+- `NativeGlassControlDescriptor.label: String`
+- `Button.native_control` copies `Button.text` into that label
+
+Icon/image transport remains out of scope, so icon-only native controls can use
+an empty label until a later descriptor slice adds image data.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -82,6 +90,8 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - `NativeGlassControlActivatedEvent` is the only app-facing native control
   activation bridge for the first button slice; widgets translate it back into
   their existing action APIs.
+- `NativeGlassControlDescriptor.label` is the platform-neutral title payload for
+  the first native button installer; icon transport is not part of this slice.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

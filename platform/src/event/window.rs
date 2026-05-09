@@ -196,6 +196,7 @@ pub struct NativeGlassControlDescriptor {
     pub id: LiveId,
     pub rect: Rect,
     pub kind: NativeGlassControlKind,
+    pub label: String,
     pub style: NativeGlassStyle,
     pub tint: Option<Vec4f>,
     pub z_order: i32,
@@ -409,6 +410,7 @@ impl NativeGlassControlBatch {
                 a.id == b.id
                     && NativeGlassBatch::native_rect_equivalent(a.rect, b.rect)
                     && a.kind == b.kind
+                    && a.label == b.label
                     && a.style == b.style
                     && NativeGlassBatch::native_tint_equivalent(a.tint, b.tint)
                     && a.z_order == b.z_order
@@ -583,6 +585,7 @@ mod native_glass_tests {
             kind: NativeGlassControlKind::Button {
                 role: NativeGlassButtonRole::Default,
             },
+            label: format!("Control {id}"),
             style: NativeGlassStyle::Clear,
             tint: None,
             z_order: id as i32,
@@ -884,6 +887,10 @@ mod native_glass_tests {
         let mut enabled = a.clone();
         enabled.controls[0].enabled = false;
         assert!(!a.equivalent_for_native_update(&enabled));
+
+        let mut label = a.clone();
+        label.controls[0].label.push_str(" updated");
+        assert!(!a.equivalent_for_native_update(&label));
 
         let mut visible = a.clone();
         visible.controls[0].visible = false;

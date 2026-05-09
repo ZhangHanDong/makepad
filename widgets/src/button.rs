@@ -661,6 +661,7 @@ impl Widget for Button {
                     kind: NativeGlassControlKind::Button {
                         role: self.native_control_role.to_native(),
                     },
+                    label: self.text.as_ref().to_string(),
                     style: NativeGlassStyle::Clear,
                     tint: None,
                     z_order: 0,
