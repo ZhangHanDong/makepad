@@ -168,6 +168,17 @@ This closes the Studio/Makepad shared input outside-click gate. Physical AppKit
 outside-click validation remains open until a trusted system input run produces
 the same logs.
 
+Step 141 adds a default-off `native_glass` opt-in to the in-window
+`widgets::Modal`. Since this widget does not own a separate platform window,
+opening it logs a stable unsupported reason instead of installing native glass:
+
+```text
+[liquid-glass] transient-window=modal state=Unsupported reason=in-window-modal-has-no-platform-window
+```
+
+This closes the in-window Modal observability gate. Native modal glass still
+requires a separate platform-window phase.
+
 ## Acceptance
 
 Phase I is not complete until all of the following are true:
@@ -187,5 +198,7 @@ Phase I is not complete until all of the following are true:
 
 - No nested native containers inside the main window for popups.
 - No native per-row popup menu items in the first transient phase.
+- No native in-window modal glass. Native modal glass requires a separate
+  platform window.
 - No native modal text fields or buttons until native controls are complete.
 - No claim that existing Makepad-rendered `Modal` widgets are native glass.

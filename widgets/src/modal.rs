@@ -72,6 +72,13 @@ pub struct Modal {
     /// the back navigational gesture (e.g., on Android).
     #[live(true)]
     can_dismiss: bool,
+    /// Requests native transient glass for this modal. In-window modals do not
+    /// own a platform window, so this is explicitly unsupported until a
+    /// separate platform-modal window phase exists.
+    #[live(false)]
+    native_glass: bool,
+    #[rust]
+    native_glass_unsupported_logged: bool,
 }
 
 impl ScriptHook for Modal {
@@ -169,7 +176,15 @@ impl Widget for Modal {
 }
 
 impl Modal {
+    pub fn native_glass_unsupported_log_line() -> &'static str {
+        "[liquid-glass] transient-window=modal state=Unsupported reason=in-window-modal-has-no-platform-window"
+    }
+
     pub fn open(&mut self, cx: &mut Cx) {
+        if self.native_glass && !self.native_glass_unsupported_logged {
+            self.native_glass_unsupported_logged = true;
+            crate::log!("{}", Self::native_glass_unsupported_log_line());
+        }
         self.is_open = true;
         // Redraw the overlay draw_list directly so the first open is visible
         // even before the overlay content has refreshed its draw area.
@@ -241,5 +256,18 @@ impl ModalRef {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modal_native_glass_unsupported_log_line_is_stable() {
+        assert_eq!(
+            Modal::native_glass_unsupported_log_line(),
+            "[liquid-glass] transient-window=modal state=Unsupported reason=in-window-modal-has-no-platform-window"
+        );
     }
 }
