@@ -284,6 +284,16 @@ accessibility metadata slice. It does not complete accessibility ownership:
 focus traversal, VoiceOver behavior, duplicate labels between native and
 Makepad-rendered controls, and UIKit accessibility remain open.
 
+Step 149 adds
+`makepad-example-aichat-macos-native-clear-control-accessibility-press-probe`,
+gated by `MAKEPAD_NATIVE_GLASS_CONTROL_ACCESSIBILITY_PRESS_PROBE=Clear`.
+Studio release build `[2]` logged
+`accessibility-press-probe -> target-action -> button-action ->
+native-control-probe=makepad-click`. The `accessibilityPerformPress` return
+value was `false`, but the target/action side effect fired. This proves the
+macOS accessibility activation path reaches Makepad; it still does not prove
+physical/system mouse-click delivery.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

@@ -129,6 +129,7 @@ pub struct MacosWindow {
     pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     pub(crate) native_glass_perform_click_probe_fired_controls: Vec<LiveId>,
+    pub(crate) native_glass_accessibility_press_probe_fired_controls: Vec<LiveId>,
     pub(crate) native_glass_mouse_event_probe_fired_controls: Vec<LiveId>,
     pub(crate) native_glass_cg_event_probe_fired_controls: Vec<LiveId>,
     pub(crate) proof_substrate_view: ObjcId,
@@ -926,6 +927,17 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_accessibility_press_probe_matches(
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        Self::native_glass_control_perform_click_probe_matches_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_ACCESSIBILITY_PRESS_PROBE")
+                .ok()
+                .as_deref(),
+            control,
+        )
+    }
+
     fn native_glass_button_bezel_style_raw_from_value(value: Option<&str>) -> i64 {
         value
             .and_then(|value| value.trim().parse::<i64>().ok())
@@ -1237,6 +1249,37 @@ impl MacosWindow {
         self.log_native_glass_control_hit_test_probe(control, button, button_frame);
         self.run_native_glass_control_cg_event_probe(control, button_frame);
         self.run_native_glass_control_mouse_event_probe(control, button_frame);
+        if Self::native_glass_control_accessibility_press_probe_matches(control)
+            && !self
+                .native_glass_accessibility_press_probe_fired_controls
+                .contains(&control.id)
+        {
+            self.native_glass_accessibility_press_probe_fired_controls
+                .push(control.id);
+            let accessibility_press_sel = sel!(accessibilityPerformPress);
+            let can_accessibility_press: BOOL =
+                msg_send![button, respondsToSelector: accessibility_press_sel];
+            if can_accessibility_press == YES {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=accessibility-press-probe control={:?} label={:?}",
+                    control.id,
+                    control.label
+                );
+                let pressed: BOOL = msg_send![button, accessibilityPerformPress];
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=accessibility-press-result control={:?} label={:?} result={}",
+                    control.id,
+                    control.label,
+                    pressed == YES
+                );
+            } else {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=accessibility-press-probe control={:?} label={:?} state=Unsupported reason=accessibilityPerformPress-missing",
+                    control.id,
+                    control.label
+                );
+            }
+        }
         if Self::native_glass_control_perform_click_probe_matches(control)
             && !self
                 .native_glass_perform_click_probe_fired_controls
@@ -1632,6 +1675,7 @@ impl MacosWindow {
                 native_glass_control_targets: Vec::new(),
                 last_native_glass_control_batch: None,
                 native_glass_perform_click_probe_fired_controls: Vec::new(),
+                native_glass_accessibility_press_probe_fired_controls: Vec::new(),
                 native_glass_mouse_event_probe_fired_controls: Vec::new(),
                 native_glass_cg_event_probe_fired_controls: Vec::new(),
                 proof_substrate_view: nil,
