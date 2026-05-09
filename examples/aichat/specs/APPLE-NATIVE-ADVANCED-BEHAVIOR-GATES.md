@@ -77,6 +77,10 @@ The current production path remains:
   through the normal Makepad window path. If Studio or the OS does not emit a
   fullscreen-enter geometry event, the probe logs
   `native-fullscreen-probe=timeout phase=enter`.
+- Step 128 records Studio release build `[139]` for that fullscreen probe. The
+  app reached State 4 and requested fullscreen, but the probe timed out waiting
+  for fullscreen-enter geometry. No fallback, restore, exit, or native panel
+  frame evidence was produced, so fullscreen remains unproven.
 
 ### Multi-display
 

@@ -132,6 +132,11 @@ Recent verified gates:
   `backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented`;
   invalid batches log stable rejection reasons. This does not implement UIKit
   native controls.
+- Step 128 runs
+  `makepad-example-aichat-macos-native-clear-fullscreen-probe` in Studio release
+  build `[139]`. The app reached State 4 and requested fullscreen, but logged
+  `native-fullscreen-probe=timeout phase=enter` with no later fallback, restore,
+  exit, or native panel frame evidence. Fullscreen remains unproven.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -174,6 +179,8 @@ behavior, or full native interior Liquid Glass.
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.
 - Phase H is not implemented.
+- Step 128 confirms the fullscreen probe path is reachable, but fullscreen
+  enter/exit validation did not complete in Studio build `[139]`.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
 - Fullscreen-specific native glass behavior remains a known limitation.
