@@ -83,6 +83,18 @@ mod native_glass_tests {
         }
     }
 
+    fn test_container() -> NativeGlassContainerDescriptor {
+        NativeGlassContainerDescriptor {
+            id: crate::LiveId(11),
+            rect: Rect {
+                pos: dvec2(10.0, 20.0),
+                size: dvec2(500.0, 400.0),
+            },
+            spacing: 20.0,
+            panels: vec![test_panel(NativeGlassStyle::Clear)],
+        }
+    }
+
     fn test_control(style: NativeGlassStyle) -> NativeGlassControlDescriptor {
         NativeGlassControlDescriptor {
             id: crate::LiveId(7),
@@ -119,13 +131,10 @@ mod native_glass_tests {
 
     #[test]
     fn ios_native_glass_panel_ui_rect_is_relative_to_container() {
-        let container = Rect {
-            pos: dvec2(10.0, 20.0),
-            size: dvec2(500.0, 400.0),
-        };
+        let container = test_container();
         let panel = test_panel(NativeGlassStyle::Clear);
 
-        let ui_rect = IosApp::native_glass_panel_ui_rect(panel.rect, container);
+        let ui_rect = IosApp::native_glass_panel_ui_rect(panel.rect, container.rect);
 
         assert_eq!(ui_rect.origin.x, 32.0);
         assert_eq!(ui_rect.origin.y, 57.0);
@@ -135,18 +144,15 @@ mod native_glass_tests {
 
     #[test]
     fn ios_native_glass_panel_frame_snapshot_line_records_geometry() {
-        let container = Rect {
-            pos: dvec2(10.0, 20.0),
-            size: dvec2(500.0, 400.0),
-        };
+        let container = test_container();
         let panel = test_panel(NativeGlassStyle::Clear);
-        let frame = IosApp::native_glass_panel_ui_rect(panel.rect, container);
+        let frame = IosApp::native_glass_panel_ui_rect(panel.rect, container.rect);
         let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
         let tint = panel.tint.unwrap();
 
         let line = IosApp::native_glass_panel_frame_snapshot_line(
             &panel,
-            container,
+            container.rect,
             frame,
             tint,
             corner_radius,
@@ -159,6 +165,14 @@ mod native_glass_tests {
         assert!(line.contains("tint=(0.100,0.200,0.300,0.400)"));
         assert!(line.contains("corner_radius=12.0"));
         assert!(line.contains("z_order=3"));
+    }
+
+    #[test]
+    fn ios_native_glass_container_spacing_line_records_spacing() {
+        assert_eq!(
+            IosApp::native_glass_container_spacing_line(&test_container()),
+            "[liquid-glass] backend=apple-native-ios native-container-spacing container=000000000000000b spacing=20.000"
+        );
     }
 
     #[test]
@@ -701,6 +715,13 @@ impl IosApp {
         )
     }
 
+    fn native_glass_container_spacing_line(container: &NativeGlassContainerDescriptor) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios native-container-spacing container={:?} spacing={:.3}",
+            container.id, container.spacing
+        )
+    }
+
     fn ios_native_glass_effect_view_class() -> ObjcId {
         unsafe {
             makepad_objc_sys::runtime::objc_getClass(b"UIVisualEffectView\0".as_ptr() as *const _)
@@ -1043,6 +1064,7 @@ impl IosApp {
                 return (result, None);
             }
             let () = msg_send![container_effect, setSpacing: container.spacing];
+            crate::log!("{}", Self::native_glass_container_spacing_line(container));
 
             let container_frame = Self::native_glass_ui_rect_from_makepad_rect(container.rect);
             let native_container: ObjcId = msg_send![visual_effect_view_class, alloc];
