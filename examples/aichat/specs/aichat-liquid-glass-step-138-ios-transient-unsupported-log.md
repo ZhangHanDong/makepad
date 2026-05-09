@@ -46,12 +46,9 @@ iOS test compilation with:
 cargo test -p makepad-platform ios_native_glass_transient --target aarch64-apple-ios --release --no-run
 ```
 
-is currently blocked by an unrelated existing test-target compile error in
-`platform/src/live_reload.rs`:
-
-```text
-cannot find function `excluded_hot_reload_manifest_paths` in this scope
-```
+was initially blocked by an unrelated existing test-target compile error in
+`platform/src/live_reload.rs`. Step 142 removes that validation blocker; the
+iOS test target now compiles with `--no-run`.
 
 ## Verdict
 

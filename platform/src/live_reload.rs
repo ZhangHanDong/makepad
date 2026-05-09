@@ -488,7 +488,7 @@ fn collect_hot_reload_watch_plan(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[allow(dead_code)]
 fn excluded_hot_reload_manifest_paths() -> HashSet<String> {
     let platform_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     [
@@ -501,7 +501,7 @@ fn excluded_hot_reload_manifest_paths() -> HashSet<String> {
     .collect()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[allow(dead_code)]
 fn hot_reload_root_for_script_mod(
     script_mod: &ScriptMod,
     excluded_manifest_paths: &HashSet<String>,
@@ -516,7 +516,7 @@ fn hot_reload_root_for_script_mod(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[allow(dead_code)]
 fn resolve_script_mod_file_for_watch(script_mod: &ScriptMod) -> Option<String> {
     let candidates = resolve_script_mod_file_candidates(script_mod);
     candidates
