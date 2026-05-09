@@ -7,11 +7,13 @@ Date: 2026-05-10
 iOS now has a stable Phase I transient-window response when
 `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` is enabled and a popup window is created.
 
-The iOS backend does not claim transient native glass support yet. Instead,
+The iOS backend does not claim transient native glass support yet. iOS popup
+windows are currently rendered as overlays on the main `MTKView`; they do not
+own a separate UIKit platform window or native glass host. Instead,
 `CxOsOp::CreatePopupWindow` logs a deterministic unsupported result:
 
 ```text
-[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented
+[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-platform-window-missing
 ```
 
 If the current backend request is not an Apple native glass backend, it logs a

@@ -201,7 +201,7 @@ fn ios_native_glass_transient_unsupported_log_line(
 ) -> String {
     match style {
         Some(style) => format!(
-            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style={} reason=transient-installer-not-implemented",
+            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style={} reason=transient-platform-window-missing",
             style.log_name()
         ),
         None => {
@@ -2017,7 +2017,7 @@ mod tests {
     fn ios_native_glass_transient_unsupported_log_line_is_stable() {
         assert_eq!(
             ios_native_glass_transient_unsupported_log_line(Some(IosNativeGlassProbeStyle::Clear)),
-            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented"
+            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-platform-window-missing"
         );
         assert_eq!(
             ios_native_glass_transient_unsupported_log_line(None),

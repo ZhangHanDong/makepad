@@ -218,7 +218,7 @@ Recent verified gates:
 - Step 138 adds stable iOS transient popup unsupported logging. When
   `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` is enabled and iOS creates a popup,
   the backend logs
-  `transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented`
+  `transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-platform-window-missing`
   for Apple-native clear requests, or a stable `backend-not-native` rejection
   for non-native requests. `cargo check -p makepad-platform --target
   aarch64-apple-ios --release` passes. Step 142 removes the previous
@@ -301,6 +301,9 @@ behavior, or full native interior Liquid Glass.
   Step 138 proves stable iOS unsupported logging for transient popup probes,
   and Step 142 proves the iOS test target for that gate now compiles with
   `--no-run`.
+  Step 143 clarifies the iOS transient unsupported reason as
+  `transient-platform-window-missing`, because iOS popups currently render as
+  main-window overlay passes rather than separate UIKit platform windows.
   Step 139 implements the macOS Escape route, but physical/system Escape
   validation did not produce logs in the current automation environment.
   Step 140 proves Studio/Makepad outside-click dismissal. Physical AppKit

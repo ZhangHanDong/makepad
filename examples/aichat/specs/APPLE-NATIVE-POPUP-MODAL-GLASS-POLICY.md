@@ -138,7 +138,7 @@ path. When `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` is enabled and iOS creates a
 popup window, it logs:
 
 ```text
-[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented
+[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-platform-window-missing
 ```
 
 This is a gate closure for observability only; it does not implement UIKit
