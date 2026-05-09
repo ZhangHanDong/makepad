@@ -84,11 +84,12 @@ impl IosNativeGlassControlPreflight {
     }
 }
 
-fn ios_native_glass_required_class_names() -> [&'static str; 3] {
+fn ios_native_glass_required_class_names() -> [&'static str; 4] {
     [
         "UIVisualEffectView",
         "UIGlassContainerEffect",
         "UIGlassEffect",
+        "UIColor",
     ]
 }
 
@@ -113,6 +114,7 @@ fn ios_native_glass_class_name_bytes(class_name: &'static str) -> &'static [u8] 
         "UIGlassEffect" => b"UIGlassEffect\0",
         "UIView" => b"UIView\0",
         "CALayer" => b"CALayer\0",
+        "UIColor" => b"UIColor\0",
         "UIButton" => b"UIButton\0",
         "UIButtonConfiguration" => b"UIButtonConfiguration\0",
         _ => b"\0",
@@ -382,7 +384,7 @@ fn ios_native_glass_selector_preflight_result_from_missing_selector(
     }
 }
 
-fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 13] {
+fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 14] {
     [
         ("UIVisualEffectView", "initWithEffect:"),
         ("UIVisualEffectView", "contentView"),
@@ -397,6 +399,7 @@ fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str);
         ("UIView", "insertSubview:belowSubview:"),
         ("CALayer", "setMasksToBounds:"),
         ("CALayer", "setCornerRadius:"),
+        ("UIColor", "colorWithRed:green:blue:alpha:"),
     ]
 }
 
@@ -470,6 +473,11 @@ fn ios_native_glass_selector_exists(class_name: &'static str, selector_name: &'s
             "setCornerRadius:" => {
                 let responds: BOOL =
                     msg_send![class, instancesRespondToSelector: sel!(setCornerRadius:)];
+                responds == YES
+            }
+            "colorWithRed:green:blue:alpha:" => {
+                let responds: BOOL =
+                    msg_send![class, respondsToSelector: sel!(colorWithRed:green:blue:alpha:)];
                 responds == YES
             }
             _ => false,
@@ -2078,7 +2086,8 @@ mod tests {
             [
                 "UIVisualEffectView",
                 "UIGlassContainerEffect",
-                "UIGlassEffect"
+                "UIGlassEffect",
+                "UIColor"
             ]
         );
     }
@@ -2259,6 +2268,7 @@ mod tests {
                 ("UIView", "insertSubview:belowSubview:"),
                 ("CALayer", "setMasksToBounds:"),
                 ("CALayer", "setCornerRadius:"),
+                ("UIColor", "colorWithRed:green:blue:alpha:"),
             ]
         );
     }
