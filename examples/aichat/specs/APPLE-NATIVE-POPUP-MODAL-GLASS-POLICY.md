@@ -133,6 +133,17 @@ installer:
 3. Keyboard, safe-area, and scene activation behavior must be validated before
    enabling the UIKit path by default.
 
+Step 138 adds a stable unsupported log for the current iOS transient probe
+path. When `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` is enabled and iOS creates a
+popup window, it logs:
+
+```text
+[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented
+```
+
+This is a gate closure for observability only; it does not implement UIKit
+transient native glass.
+
 ## Acceptance
 
 Phase I is not complete until all of the following are true:
@@ -145,7 +156,8 @@ Phase I is not complete until all of the following are true:
 - The popup's native glass is passthrough unless explicit native controls are
   installed.
 - UIKit either has equivalent runtime evidence or logs a stable unsupported
-  reason.
+  reason. Step 138 covers the stable unsupported reason for the current probe
+  path.
 
 ## Non-Goals
 

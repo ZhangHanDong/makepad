@@ -149,6 +149,67 @@ fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IosNativeGlassProbeStyle {
+    Regular,
+    Clear,
+}
+
+impl IosNativeGlassProbeStyle {
+    fn log_name(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Clear => "clear",
+        }
+    }
+}
+
+fn requested_ios_native_glass_probe_style_from_value(
+    value: Option<&str>,
+) -> Option<IosNativeGlassProbeStyle> {
+    match value.map(str::trim) {
+        Some("apple-native-underlay") | Some("macos-native") | Some("auto") => {
+            Some(IosNativeGlassProbeStyle::Regular)
+        }
+        Some("apple-native-underlay-clear") | Some("macos-native-clear") => {
+            Some(IosNativeGlassProbeStyle::Clear)
+        }
+        _ => None,
+    }
+}
+
+fn requested_ios_native_glass_probe_style_from_env() -> Option<IosNativeGlassProbeStyle> {
+    requested_ios_native_glass_probe_style_from_value(
+        std::env::var("AICHAT_GLASS_BACKEND").ok().as_deref(),
+    )
+}
+
+fn ios_native_glass_transient_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true" | "on" | "dismiss"))
+}
+
+fn ios_native_glass_transient_probe_enabled() -> bool {
+    ios_native_glass_transient_probe_enabled_from_value(
+        std::env::var("MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn ios_native_glass_transient_unsupported_log_line(
+    style: Option<IosNativeGlassProbeStyle>,
+) -> String {
+    match style {
+        Some(style) => format!(
+            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style={} reason=transient-installer-not-implemented",
+            style.log_name()
+        ),
+        None => {
+            "[liquid-glass] transient-window=popup state=Rejected substrate=ios-native reason=backend-not-native".to_string()
+        }
+    }
+}
+
 fn ios_native_glass_selector_preflight_result_from_missing_selector(
     missing_selector: Option<&'static str>,
 ) -> IosNativeGlassPreflight {
@@ -1101,6 +1162,14 @@ impl Cx {
                     window.popup_size = Some(size);
                     window.popup_grab_keyboard = grab_keyboard;
                     window.is_created = true;
+                    if ios_native_glass_transient_probe_enabled() {
+                        crate::log!(
+                            "{}",
+                            ios_native_glass_transient_unsupported_log_line(
+                                requested_ios_native_glass_probe_style_from_env()
+                            )
+                        );
+                    }
                 }
                 CxOsOp::ShowTextIME(_area, pos, config) => {
                     IosApp::set_ime_position(pos);
@@ -1900,6 +1969,59 @@ mod tests {
                 }
             ),
             "empty-visible-control-rect"
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_transient_probe_env_contract() {
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some("1")));
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
+            "true"
+        )));
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some("on")));
+        assert!(ios_native_glass_transient_probe_enabled_from_value(Some(
+            "dismiss"
+        )));
+        assert!(!ios_native_glass_transient_probe_enabled_from_value(None));
+        assert!(!ios_native_glass_transient_probe_enabled_from_value(Some("0")));
+        assert!(!ios_native_glass_transient_probe_enabled_from_value(Some(
+            "false"
+        )));
+    }
+
+    #[test]
+    fn ios_native_glass_transient_probe_style_follows_backend_aliases() {
+        assert_eq!(
+            requested_ios_native_glass_probe_style_from_value(Some("macos-native")),
+            Some(IosNativeGlassProbeStyle::Regular)
+        );
+        assert_eq!(
+            requested_ios_native_glass_probe_style_from_value(Some("apple-native-underlay")),
+            Some(IosNativeGlassProbeStyle::Regular)
+        );
+        assert_eq!(
+            requested_ios_native_glass_probe_style_from_value(Some("macos-native-clear")),
+            Some(IosNativeGlassProbeStyle::Clear)
+        );
+        assert_eq!(
+            requested_ios_native_glass_probe_style_from_value(Some("apple-native-underlay-clear")),
+            Some(IosNativeGlassProbeStyle::Clear)
+        );
+        assert_eq!(
+            requested_ios_native_glass_probe_style_from_value(Some("shader")),
+            None
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_transient_unsupported_log_line_is_stable() {
+        assert_eq!(
+            ios_native_glass_transient_unsupported_log_line(Some(IosNativeGlassProbeStyle::Clear)),
+            "[liquid-glass] transient-window=popup state=Unsupported substrate=ios-native style=clear reason=transient-installer-not-implemented"
+        );
+        assert_eq!(
+            ios_native_glass_transient_unsupported_log_line(None),
+            "[liquid-glass] transient-window=popup state=Rejected substrate=ios-native reason=backend-not-native"
         );
     }
 
