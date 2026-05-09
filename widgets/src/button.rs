@@ -1,5 +1,6 @@
 use crate::{
     animator::{Animate, Animator, AnimatorAction, AnimatorImpl, Play},
+    glass_panel::push_native_glass_control_descriptor,
     makepad_derive_widget::*,
     makepad_draw::*,
     makepad_script::ScriptFnRef,
@@ -8,6 +9,28 @@ use crate::{
 };
 
 use crate::makepad_draw::DrawSvg;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Script, ScriptHook)]
+pub enum ButtonNativeGlassRole {
+    #[default]
+    Default,
+    Primary,
+    Icon,
+    Nav,
+    Utility,
+}
+
+impl ButtonNativeGlassRole {
+    fn to_native(self) -> NativeGlassButtonRole {
+        match self {
+            Self::Default => NativeGlassButtonRole::Default,
+            Self::Primary => NativeGlassButtonRole::Primary,
+            Self::Icon => NativeGlassButtonRole::Icon,
+            Self::Nav => NativeGlassButtonRole::Nav,
+            Self::Utility => NativeGlassButtonRole::Utility,
+        }
+    }
+}
 
 script_mod! {
     use mod.prelude.widgets_internal.*
@@ -418,6 +441,11 @@ pub struct Button {
     #[live]
     pub text: ArcStringMut,
 
+    #[live(false)]
+    pub native_control: bool,
+    #[live(ButtonNativeGlassRole::Default)]
+    pub native_control_role: ButtonNativeGlassRole,
+
     #[live]
     on_click: ScriptFnRef,
 
@@ -596,6 +624,23 @@ impl Widget for Button {
         self.draw_text
             .draw_walk(cx, self.label_walk, Align::default(), self.text.as_ref());
         self.draw_bg.end(cx);
+        if self.native_control {
+            push_native_glass_control_descriptor(
+                cx,
+                NativeGlassControlDescriptor {
+                    id: LiveId(self.widget_uid().0),
+                    rect: self.draw_bg.area().rect(cx),
+                    kind: NativeGlassControlKind::Button {
+                        role: self.native_control_role.to_native(),
+                    },
+                    style: NativeGlassStyle::Clear,
+                    tint: None,
+                    z_order: 0,
+                    enabled: self.enabled,
+                    visible: self.visible,
+                },
+            );
+        }
         cx.add_nav_stop(self.draw_bg.area(), NavRole::TextInput, Inset::default());
         DrawStep::done()
     }
@@ -607,6 +652,35 @@ impl Widget for Button {
     fn set_text(&mut self, cx: &mut Cx, v: &str) {
         self.text.as_mut_empty().push_str(v);
         self.redraw(cx);
+    }
+}
+
+#[cfg(test)]
+mod native_glass_button_tests {
+    use super::*;
+
+    #[test]
+    fn button_native_glass_role_maps_to_shared_descriptor_role() {
+        assert_eq!(
+            ButtonNativeGlassRole::Default.to_native(),
+            NativeGlassButtonRole::Default
+        );
+        assert_eq!(
+            ButtonNativeGlassRole::Primary.to_native(),
+            NativeGlassButtonRole::Primary
+        );
+        assert_eq!(
+            ButtonNativeGlassRole::Icon.to_native(),
+            NativeGlassButtonRole::Icon
+        );
+        assert_eq!(
+            ButtonNativeGlassRole::Nav.to_native(),
+            NativeGlassButtonRole::Nav
+        );
+        assert_eq!(
+            ButtonNativeGlassRole::Utility.to_native(),
+            NativeGlassButtonRole::Utility
+        );
     }
 }
 

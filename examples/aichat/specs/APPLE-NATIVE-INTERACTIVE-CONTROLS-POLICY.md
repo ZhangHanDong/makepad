@@ -41,6 +41,15 @@ Step 103 extends `GlassContainer` collector plumbing so future widgets can push
 `NativeGlassControlDescriptor` values alongside native glass panels. The current
 `GlassButton` aliases still do not export descriptors.
 
+Step 104 adds an opt-in export path to the base `Button` widget:
+
+- `native_control: bool`, default `false`
+- `native_control_role: ButtonNativeGlassRole`
+
+Because `GlassButton` remains a `ButtonFlat` alias, it inherits this opt-in
+field without changing existing action ownership. Current OS backends still
+ignore native control batches.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -59,6 +68,8 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - `GlassContainer` can carry native-control descriptors once a future
   `GlassButton` implementation pushes them, but current `GlassButton` variants
   remain Makepad-rendered only.
+- `Button.native_control` can export descriptors for future native button
+  mirrors, but it is disabled by default and has no installer yet.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

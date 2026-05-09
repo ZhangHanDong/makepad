@@ -93,6 +93,14 @@ impl NativeGlassCollector {
     }
 }
 
+pub(crate) fn push_native_glass_control_descriptor(
+    cx: &mut Cx2d,
+    descriptor: NativeGlassControlDescriptor,
+) {
+    cx.global::<NativeGlassCollector>()
+        .push_control(descriptor);
+}
+
 script_mod! {
     use mod.prelude.widgets_internal.*
     use mod.widgets.View
