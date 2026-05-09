@@ -97,6 +97,10 @@ Recent verified gates:
   `WidgetQuery` / `Click` coordinates are not directly comparable to AppKit
   subview frames. Studio screenshots capture the Metal framebuffer and do not
   prove native AppKit sibling-control visual alignment.
+- Step 122 adds an AppKit-side hit-test probe after native control insertion.
+  Build `[127]` produced `event=appkit-hit-test-probe ... result_class=NativeGlassButton
+  matches_control=true` for both `Clear` and `↑`, proving AppKit hit testing
+  resolves the installed native controls at their center points.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -125,9 +129,10 @@ behavior, or full native interior Liquid Glass.
   `button-action` logs, the Step 115 system-click attempt produced no activation
   logs, Step 118 shows the automated build `[116]` click attempts produced no
   post-click diagnostics, Step 121 shows Studio framebuffer/query evidence is
-  insufficient for native AppKit sibling-control visual validation, UIKit
-  controls are not installed, accessibility ownership is unresolved, and
-  non-macOS backends remain no-op.
+  insufficient for native AppKit sibling-control visual validation, Step 122
+  proves AppKit center-point hit testing but not end-to-end system click
+  delivery, UIKit controls are not installed, accessibility ownership is
+  unresolved, and non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.

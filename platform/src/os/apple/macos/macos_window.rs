@@ -878,6 +878,45 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_hit_test_probe_line(
+        control: &NativeGlassControlDescriptor,
+        point: NSPoint,
+        result_class: &str,
+        matches_control: bool,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-controls event=appkit-hit-test-probe control={:?} label={:?} point=({:.1},{:.1}) result_class={} matches_control={}",
+            control.id,
+            control.label,
+            point.x,
+            point.y,
+            result_class,
+            matches_control
+        )
+    }
+
+    unsafe fn log_native_glass_control_hit_test_probe(
+        &self,
+        control: &NativeGlassControlDescriptor,
+        control_view: ObjcId,
+        control_frame: NSRect,
+    ) {
+        let point = NSPoint {
+            x: control_frame.origin.x + control_frame.size.width * 0.5,
+            y: control_frame.origin.y + control_frame.size.height * 0.5,
+        };
+        let hit_view: ObjcId = msg_send![self.container_view, hitTest: point];
+        crate::log!(
+            "{}",
+            Self::native_glass_control_hit_test_probe_line(
+                control,
+                point,
+                &Self::native_glass_objc_class_name(hit_view),
+                hit_view == control_view,
+            )
+        );
+    }
+
     unsafe fn install_native_glass_button_control(
         &mut self,
         control: &NativeGlassControlDescriptor,
@@ -918,6 +957,7 @@ impl MacosWindow {
             positioned: 1i64
             relativeTo: nil
         ];
+        self.log_native_glass_control_hit_test_probe(control, button, button_frame);
         self.native_glass_control_views.push(button);
         self.native_glass_control_targets.push(target);
         true
@@ -2303,6 +2343,40 @@ mod tests {
         assert!(line.contains("appkit=(120.0,190.0,100.0,40.0)"));
         assert!(line.contains("z_order=4"));
         assert!(line.contains("visible=true"));
+    }
+
+    #[test]
+    fn native_glass_control_hit_test_probe_line_contains_result() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(9),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Send".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        let line = MacosWindow::native_glass_control_hit_test_probe_line(
+            &control,
+            NSPoint { x: 30.0, y: 32.0 },
+            "NativeGlassButton",
+            true,
+        );
+
+        assert!(line.contains("event=appkit-hit-test-probe"));
+        assert!(line.contains("control=0000000000000009"));
+        assert!(line.contains("label=\"Send\""));
+        assert!(line.contains("point=(30.0,32.0)"));
+        assert!(line.contains("result_class=NativeGlassButton"));
+        assert!(line.contains("matches_control=true"));
     }
 
     #[test]

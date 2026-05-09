@@ -183,6 +183,13 @@ Studio remote input space and must not be treated as AppKit subview frames.
 Studio framebuffer screenshots do not include AppKit sibling views, so they are
 not sufficient native-control visual proof.
 
+Step 122 adds an AppKit-side center-point hit-test probe after native control
+insertion. Build `[127]` logged `event=appkit-hit-test-probe` with
+`result_class=NativeGlassButton matches_control=true` for both `Clear` and `↑`.
+This proves AppKit geometry and sibling ordering are sufficient for AppKit to
+hit the installed native controls at their centers. It still does not prove
+end-to-end user/system click delivery.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
