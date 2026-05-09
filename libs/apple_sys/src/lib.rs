@@ -842,6 +842,7 @@ pub enum NSWindowStyleMask {
 }
 
 pub const NSWindowCollectionBehaviorCanJoinAllSpaces: u64 = 1 << 0;
+pub const NSWindowCollectionBehaviorFullScreenPrimary: u64 = 1 << 7;
 pub const NSWindowCollectionBehaviorFullScreenAuxiliary: u64 = 1 << 8;
 
 pub const NSNormalWindowLevel: i64 = 0;

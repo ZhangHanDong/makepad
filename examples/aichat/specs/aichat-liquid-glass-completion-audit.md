@@ -137,6 +137,15 @@ Recent verified gates:
   build `[139]`. The app reached State 4 and requested fullscreen, but logged
   `native-fullscreen-probe=timeout phase=enter` with no later fallback, restore,
   exit, or native panel frame evidence. Fullscreen remains unproven.
+- Step 134 reruns the fullscreen probe in Studio release build `[155]` after
+  adding `NSWindowCollectionBehaviorFullScreenPrimary` for standard windows and
+  routing programmatic fullscreen/normalize ops through the internal
+  `WindowGeomChange` path. The run logged
+  `native-fullscreen-probe=observed-enter`,
+  `fullscreen-native-fallback=shader reason=fullscreen-enter`,
+  `native-fullscreen-probe=request-exit`,
+  `fullscreen-native-restore=apple-native-underlay reason=fullscreen-exit`, and
+  `native-fullscreen-probe=observed-exit`.
 - Step 129 runs
   `makepad-example-aichat-macos-native-clear-spacing-probe` in Studio release
   build `[140]`. The probe ran frame `0 -> 120`, spacing `12 -> 36 -> 12`, and
@@ -207,8 +216,8 @@ behavior, or full native interior Liquid Glass.
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.
 - Phase H is not implemented.
-- Step 128 confirms the fullscreen probe path is reachable, but fullscreen
-  enter/exit validation did not complete in Studio build `[139]`.
+- Step 134 closes the v4.1 fullscreen fallback/restore probe. Full native glass
+  inside fullscreen is still not implemented.
 - Step 129 confirms animated spacing updates keep the macOS native batch
   installed, but it does not prove final morphing visual quality.
 - Step 130 confirms native inactive logging for the active state only; inactive
@@ -218,7 +227,7 @@ behavior, or full native interior Liquid Glass.
   unproven.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
-- Fullscreen-specific native glass behavior remains a known limitation.
+- Full native glass inside fullscreen remains a known limitation.
 - Stage Manager and multi-display behavior remain known limitations.
 - Popup/modal native glass remains a separate phase.
 

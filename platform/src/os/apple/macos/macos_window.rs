@@ -1607,6 +1607,8 @@ impl MacosWindow {
         }
         if config.full_screen_auxiliary {
             collection_behavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
+        } else {
+            collection_behavior |= NSWindowCollectionBehaviorFullScreenPrimary;
         }
         collection_behavior
     }
@@ -1753,6 +1755,8 @@ impl MacosWindow {
             if position.is_none() {
                 let () = msg_send![self.window, center];
             }
+
+            self.last_window_geom = Some(self.get_window_geom());
 
             let input_context: ObjcId = msg_send![self.view, inputContext];
             let () = msg_send![input_context, invalidateCharacterCoordinates];
@@ -2219,6 +2223,19 @@ impl MacosWindow {
         // we should schedule a timer for +16ms another Paint
     }
 
+    pub(crate) fn window_geom_change_from_old_geom(
+        &mut self,
+        old_geom: WindowGeom,
+    ) -> WindowGeomChangeEvent {
+        let new_geom = self.get_window_geom();
+        self.last_window_geom = Some(new_geom.clone());
+        WindowGeomChangeEvent {
+            window_id: self.window_id,
+            old_geom,
+            new_geom,
+        }
+    }
+
     pub fn send_got_focus_event(&mut self) {
         self.do_callback(MacosEvent::WindowGotFocus(self.window_id));
     }
@@ -2437,6 +2454,23 @@ mod tests {
             style_mask & NSWindowStyleMask::NSResizableWindowMask as u64,
             0
         );
+    }
+
+    #[test]
+    fn standard_windows_use_fullscreen_primary_collection_behavior() {
+        let behavior = MacosWindow::collection_behavior_for_config(MacosWindowConfig::default());
+
+        assert_ne!(behavior & NSWindowCollectionBehaviorFullScreenPrimary, 0);
+        assert_eq!(behavior & NSWindowCollectionBehaviorFullScreenAuxiliary, 0);
+    }
+
+    #[test]
+    fn auxiliary_windows_do_not_use_fullscreen_primary_collection_behavior() {
+        let behavior =
+            MacosWindow::collection_behavior_for_config(MacosWindowConfig::floating_panel());
+
+        assert_ne!(behavior & NSWindowCollectionBehaviorFullScreenAuxiliary, 0);
+        assert_eq!(behavior & NSWindowCollectionBehaviorFullScreenPrimary, 0);
     }
 
     #[test]

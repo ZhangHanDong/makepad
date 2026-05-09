@@ -94,6 +94,16 @@ fn requested_native_interleave_layer_probe_from_env() -> Option<MacosInterleaveP
     }
 }
 
+fn native_fullscreen_probe_log_enabled() -> bool {
+    matches!(
+        std::env::var("AICHAT_NATIVE_FULLSCREEN_PROBE")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1" | "true")
+    )
+}
+
 fn new_macos_ca_metal_layer(metal_cx: &MetalCx, delegate: ObjcId) -> ObjcId {
     let ca_layer: ObjcId = unsafe { msg_send![class!(CAMetalLayer), new] };
     unsafe {
@@ -1330,31 +1340,26 @@ impl Cx {
                         let metal_window = &mut metal_windows[index];
                         let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_outer_size(size);
-                        let new_geom = metal_window.cocoa_window.get_window_geom();
+                        let event = metal_window
+                            .cocoa_window
+                            .window_geom_change_from_old_geom(old_geom);
                         if MacosWindow::native_glass_geometry_snapshot_enabled() {
                             crate::log!(
                                 "[liquid-glass] native-geometry-op=resize old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) requested=({:.1},{:.1}) changed={}",
-                                old_geom.position.x,
-                                old_geom.position.y,
-                                new_geom.position.x,
-                                new_geom.position.y,
-                                old_geom.inner_size.x,
-                                old_geom.inner_size.y,
-                                new_geom.inner_size.x,
-                                new_geom.inner_size.y,
+                                event.old_geom.position.x,
+                                event.old_geom.position.y,
+                                event.new_geom.position.x,
+                                event.new_geom.position.y,
+                                event.old_geom.inner_size.x,
+                                event.old_geom.inner_size.y,
+                                event.new_geom.inner_size.x,
+                                event.new_geom.inner_size.y,
                                 size.x,
                                 size.y,
-                                MacosWindow::native_glass_window_geometry_changed(&old_geom, &new_geom)
+                                MacosWindow::native_glass_window_geometry_changed(&event.old_geom, &event.new_geom)
                             );
                         }
-                        self.handle_window_geom_change_event(
-                            metal_windows,
-                            WindowGeomChangeEvent {
-                                window_id,
-                                old_geom,
-                                new_geom,
-                            },
-                        );
+                        self.handle_window_geom_change_event(metal_windows, event);
                     }
                 }
                 CxOsOp::RepositionWindow(window_id, pos) => {
@@ -1363,31 +1368,26 @@ impl Cx {
                         let metal_window = &mut metal_windows[index];
                         let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_position(pos);
-                        let new_geom = metal_window.cocoa_window.get_window_geom();
+                        let event = metal_window
+                            .cocoa_window
+                            .window_geom_change_from_old_geom(old_geom);
                         if MacosWindow::native_glass_geometry_snapshot_enabled() {
                             crate::log!(
                                 "[liquid-glass] native-geometry-op=reposition old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) requested=({:.1},{:.1}) changed={}",
-                                old_geom.position.x,
-                                old_geom.position.y,
-                                new_geom.position.x,
-                                new_geom.position.y,
-                                old_geom.inner_size.x,
-                                old_geom.inner_size.y,
-                                new_geom.inner_size.x,
-                                new_geom.inner_size.y,
+                                event.old_geom.position.x,
+                                event.old_geom.position.y,
+                                event.new_geom.position.x,
+                                event.new_geom.position.y,
+                                event.old_geom.inner_size.x,
+                                event.old_geom.inner_size.y,
+                                event.new_geom.inner_size.x,
+                                event.new_geom.inner_size.y,
                                 pos.x,
                                 pos.y,
-                                MacosWindow::native_glass_window_geometry_changed(&old_geom, &new_geom)
+                                MacosWindow::native_glass_window_geometry_changed(&event.old_geom, &event.new_geom)
                             );
                         }
-                        self.handle_window_geom_change_event(
-                            metal_windows,
-                            WindowGeomChangeEvent {
-                                window_id,
-                                old_geom,
-                                new_geom,
-                            },
-                        );
+                        self.handle_window_geom_change_event(metal_windows, event);
                     }
                 }
                 CxOsOp::CloseWindow(window_id) => {
@@ -1427,7 +1427,31 @@ impl Cx {
                     if let Some(metal_window) =
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
+                        let old_geom = metal_window.cocoa_window.get_window_geom();
+                        let (style_mask, collection_behavior): (u64, u64) = unsafe {
+                            (
+                                msg_send![metal_window.cocoa_window.window, styleMask],
+                                msg_send![metal_window.cocoa_window.window, collectionBehavior],
+                            )
+                        };
                         metal_window.cocoa_window.maximize();
+                        let event = metal_window
+                            .cocoa_window
+                            .window_geom_change_from_old_geom(old_geom);
+                        if native_fullscreen_probe_log_enabled() {
+                            crate::log!(
+                                "[liquid-glass] native-fullscreen-op=enter old_fullscreen={} new_fullscreen={} old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) style_mask={} collection_behavior={}",
+                                event.old_geom.is_fullscreen,
+                                event.new_geom.is_fullscreen,
+                                event.old_geom.inner_size.x,
+                                event.old_geom.inner_size.y,
+                                event.new_geom.inner_size.x,
+                                event.new_geom.inner_size.y,
+                                style_mask,
+                                collection_behavior
+                            );
+                        }
+                        self.handle_window_geom_change_event(metal_windows, event);
                     }
                 }
                 CxOsOp::RestoreWindow(window_id) => {
@@ -1441,7 +1465,31 @@ impl Cx {
                     if let Some(metal_window) =
                         metal_windows.iter_mut().find(|w| w.window_id == window_id)
                     {
+                        let old_geom = metal_window.cocoa_window.get_window_geom();
+                        let (style_mask, collection_behavior): (u64, u64) = unsafe {
+                            (
+                                msg_send![metal_window.cocoa_window.window, styleMask],
+                                msg_send![metal_window.cocoa_window.window, collectionBehavior],
+                            )
+                        };
                         metal_window.cocoa_window.restore();
+                        let event = metal_window
+                            .cocoa_window
+                            .window_geom_change_from_old_geom(old_geom);
+                        if native_fullscreen_probe_log_enabled() {
+                            crate::log!(
+                                "[liquid-glass] native-fullscreen-op=exit old_fullscreen={} new_fullscreen={} old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) style_mask={} collection_behavior={}",
+                                event.old_geom.is_fullscreen,
+                                event.new_geom.is_fullscreen,
+                                event.old_geom.inner_size.x,
+                                event.old_geom.inner_size.y,
+                                event.new_geom.inner_size.x,
+                                event.new_geom.inner_size.y,
+                                style_mask,
+                                collection_behavior
+                            );
+                        }
+                        self.handle_window_geom_change_event(metal_windows, event);
                     }
                 }
                 CxOsOp::HideWindow(window_id) => {
