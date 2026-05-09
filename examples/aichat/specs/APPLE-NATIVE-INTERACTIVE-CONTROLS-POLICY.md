@@ -258,6 +258,13 @@ or trusted system click delivery, not native button geometry, target/action,
 synthetic AppKit mouse delivery, glass bezel styling, or CGEvent coordinate
 conversion.
 
+Step 146 copies each native button descriptor label into the installed
+`NSButton` mirror with `setAccessibilityLabel:` and logs
+`accessibility-label ... label=...`. This closes the first macOS accessibility
+metadata slice. It does not complete accessibility ownership: focus traversal,
+VoiceOver behavior, duplicate labels between native and Makepad-rendered
+controls, and UIKit accessibility remain open.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -288,8 +295,9 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - macOS validates and logs native control batches but does not create AppKit
   controls unless explicit `Button.native_control` descriptors are present.
 - macOS AppKit control installation mirrors `NSButton` title, enabled/hidden
-  state, rect, target/action, and the macOS 26 glass bezel raw value. Physical
-  click delivery and accessibility remain unproven.
+  state, rect, target/action, the macOS 26 glass bezel raw value, and the
+  descriptor label as an accessibility label. Physical click delivery and full
+  accessibility behavior remain unproven.
 - aichat native controls are opt-in behind `AICHAT_NATIVE_CONTROL_PROBE`.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
@@ -315,7 +323,9 @@ for explicit native controls only:
 - Accessibility ownership is platform-control first for native mirrored
   controls, with Makepad retaining ownership for non-native controls and all
   non-interactive glass panels. A later audit must prevent duplicate labels or
-  conflicting focus order before this becomes production default.
+  conflicting focus order before this becomes production default. macOS native
+  button mirrors now receive explicit accessibility labels from their
+  descriptors; the rest of the accessibility audit remains open.
 
 This decision keeps the first native-control slice bounded: it avoids inventing
 a synthetic event-forwarding layer while still allowing native buttons to use

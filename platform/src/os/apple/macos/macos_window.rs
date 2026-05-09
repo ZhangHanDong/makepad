@@ -959,6 +959,13 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_accessibility_line(control: &NativeGlassControlDescriptor) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-controls accessibility-label control={:?} label={:?}",
+            control.id, control.label
+        )
+    }
+
     fn native_glass_control_mouse_event_probe_matches(
         control: &NativeGlassControlDescriptor,
     ) -> bool {
@@ -1189,6 +1196,22 @@ impl MacosWindow {
         } else {
             crate::log!(
                 "[liquid-glass] backend=apple-native-controls button-style control={:?} label={:?} state=Unsupported reason=setBezelStyle-missing",
+                control.id,
+                control.label
+            );
+        }
+        let set_accessibility_label_sel = sel!(setAccessibilityLabel:);
+        let can_set_accessibility_label: BOOL =
+            msg_send![button, respondsToSelector: set_accessibility_label_sel];
+        if can_set_accessibility_label == YES {
+            let () = msg_send![button, setAccessibilityLabel: title];
+            crate::log!(
+                "{}",
+                Self::native_glass_control_accessibility_line(control)
+            );
+        } else {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls accessibility-label control={:?} label={:?} state=Unsupported reason=setAccessibilityLabel-missing",
                 control.id,
                 control.label
             );
@@ -2786,6 +2809,32 @@ mod tests {
         assert!(line.contains("label=\"Clear\""));
         assert!(line.contains("bezel=glass"));
         assert!(line.contains("raw=16"));
+    }
+
+    #[test]
+    fn native_glass_control_accessibility_line_records_label() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(13),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        let line = MacosWindow::native_glass_control_accessibility_line(&control);
+
+        assert!(line.contains("accessibility-label"));
+        assert!(line.contains("control=000000000000000d"));
+        assert!(line.contains("label=\"Clear\""));
     }
 
     #[test]
