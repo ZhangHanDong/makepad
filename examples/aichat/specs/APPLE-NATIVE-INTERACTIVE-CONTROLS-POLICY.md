@@ -30,12 +30,39 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 
+## v4.10 Ownership Decisions
+
+The first native interactive-control prototype uses direct platform hit testing
+for explicit native controls only:
+
+- Native controls are opt-in mirrors of Makepad semantic controls, not a new
+  replacement widget tree.
+- AppKit/UIKit owns hit testing only inside the native control rects registered
+  by Makepad.
+- Native glass panels outside those explicit control rects stay passthrough.
+- Native control actions bridge back into Makepad as Makepad actions; app state
+  remains owned by Makepad.
+- Makepad does not synthesize low-level mouse/key events into AppKit/UIKit for
+  v4.10. If a platform control cannot own its own native event handling, it
+  falls back to the Makepad-rendered `GlassButton` variant.
+- Studio `WidgetTreeDump` / `WidgetQuery` continue to report the Makepad
+  semantic owner. Native controls are platform mirrors and must log their
+  mapping to the Makepad widget/control id for diagnosis.
+- Accessibility ownership is platform-control first for native mirrored
+  controls, with Makepad retaining ownership for non-native controls and all
+  non-interactive glass panels. A later audit must prevent duplicate labels or
+  conflicting focus order before this becomes production default.
+
+This decision keeps the first native-control slice bounded: it avoids inventing
+a synthetic event-forwarding layer while still allowing native buttons to use
+their real platform glass appearance and accessibility behavior.
+
 ## Future Gates
 
 ### Hit-test gate
 
-- Decide whether AppKit/UIKit directly own native-control hit testing or
-  whether Makepad routes events and forwards them to native controls.
+- Implement the v4.10 decision: AppKit/UIKit directly own native-control hit
+  testing only for explicit native control rects.
 - Define coordinate conversion between Makepad logical coordinates and native
   control bounds.
 - Prove native glass panels outside explicit native controls remain
