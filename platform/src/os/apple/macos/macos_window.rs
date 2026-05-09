@@ -122,6 +122,7 @@ pub struct MacosWindow {
     pub(crate) native_glass_control_views: Vec<ObjcId>,
     pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
+    pub(crate) native_glass_perform_click_probe_fired_controls: Vec<LiveId>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) above_metal_glass_probe_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
@@ -895,6 +896,28 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_perform_click_probe_matches_value(
+        value: Option<&str>,
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return false;
+        };
+        matches!(value, "1" | "true" | "on" | "all")
+            || control.label.as_str().eq_ignore_ascii_case(value)
+    }
+
+    fn native_glass_control_perform_click_probe_matches(
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        Self::native_glass_control_perform_click_probe_matches_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE")
+                .ok()
+                .as_deref(),
+            control,
+        )
+    }
+
     unsafe fn log_native_glass_control_hit_test_probe(
         &self,
         control: &NativeGlassControlDescriptor,
@@ -958,6 +981,20 @@ impl MacosWindow {
             relativeTo: nil
         ];
         self.log_native_glass_control_hit_test_probe(control, button, button_frame);
+        if Self::native_glass_control_perform_click_probe_matches(control)
+            && !self
+                .native_glass_perform_click_probe_fired_controls
+                .contains(&control.id)
+        {
+            self.native_glass_perform_click_probe_fired_controls
+                .push(control.id);
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls event=perform-click-probe control={:?} label={:?}",
+                control.id,
+                control.label
+            );
+            let () = msg_send![button, performClick: nil];
+        }
         self.native_glass_control_views.push(button);
         self.native_glass_control_targets.push(target);
         true
@@ -1338,6 +1375,7 @@ impl MacosWindow {
                 native_glass_control_views: Vec::new(),
                 native_glass_control_targets: Vec::new(),
                 last_native_glass_control_batch: None,
+                native_glass_perform_click_probe_fired_controls: Vec::new(),
                 proof_substrate_view: nil,
                 above_metal_glass_probe_view: nil,
                 container_view,
@@ -2377,6 +2415,47 @@ mod tests {
         assert!(line.contains("point=(30.0,32.0)"));
         assert!(line.contains("result_class=NativeGlassButton"));
         assert!(line.contains("matches_control=true"));
+    }
+
+    #[test]
+    fn native_glass_control_perform_click_probe_matches_explicit_label() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(10),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
+            Some("Clear"),
+            &control
+        ));
+        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
+            Some("clear"),
+            &control
+        ));
+        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
+            Some("all"),
+            &control
+        ));
+        assert!(!MacosWindow::native_glass_control_perform_click_probe_matches_value(
+            Some("Send"),
+            &control
+        ));
+        assert!(!MacosWindow::native_glass_control_perform_click_probe_matches_value(
+            None,
+            &control
+        ));
     }
 
     #[test]

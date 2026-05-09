@@ -190,6 +190,15 @@ This proves AppKit geometry and sibling ordering are sufficient for AppKit to
 hit the installed native controls at their centers. It still does not prove
 end-to-end user/system click delivery.
 
+Step 123 adds the explicit action probe runnable
+`makepad-example-aichat-macos-native-clear-control-action-probe`. It sets
+`MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE=Clear`, calls AppKit
+`performClick:` once for the matching native control, and build `[130]` logged
+`perform-click-probe -> target-action -> button-action ->
+native-control-probe=makepad-click id=clear_button`. This proves the AppKit
+target/action bridge reaches Makepad's existing button action path, but still
+does not prove physical mouse/touch delivery.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

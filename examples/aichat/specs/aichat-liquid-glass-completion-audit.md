@@ -101,6 +101,12 @@ Recent verified gates:
   Build `[127]` produced `event=appkit-hit-test-probe ... result_class=NativeGlassButton
   matches_control=true` for both `Clear` and `↑`, proving AppKit hit testing
   resolves the installed native controls at their center points.
+- Step 123 adds
+  `makepad-example-aichat-macos-native-clear-control-action-probe`, gated by
+  `MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE=Clear`. Build `[130]`
+  produced `perform-click-probe -> target-action -> button-action ->
+  native-control-probe=makepad-click id=clear_button`, proving the AppKit
+  target/action bridge reaches Makepad's existing button action path.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -130,8 +136,9 @@ behavior, or full native interior Liquid Glass.
   logs, Step 118 shows the automated build `[116]` click attempts produced no
   post-click diagnostics, Step 121 shows Studio framebuffer/query evidence is
   insufficient for native AppKit sibling-control visual validation, Step 122
-  proves AppKit center-point hit testing but not end-to-end system click
-  delivery, UIKit controls are not installed, accessibility ownership is
+  proves AppKit center-point hit testing, Step 123 proves programmatic AppKit
+  target/action bridging, but neither proves end-to-end user/system click
+  delivery. UIKit controls are not installed, accessibility ownership is
   unresolved, and non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
