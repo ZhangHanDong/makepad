@@ -62,6 +62,27 @@ thread_local! {
 mod native_glass_tests {
     use super::*;
 
+    fn test_panel(style: NativeGlassStyle) -> NativeGlassPanelDescriptor {
+        NativeGlassPanelDescriptor {
+            id: crate::LiveId(9),
+            rect: Rect {
+                pos: dvec2(42.0, 77.0),
+                size: dvec2(100.0, 48.0),
+            },
+            shape: NativeGlassShape::RoundedRect { radius: 12.0 },
+            style,
+            tint: Some(Vec4f {
+                x: 0.1,
+                y: 0.2,
+                z: 0.3,
+                w: 0.4,
+            }),
+            hit_test: NativeGlassHitTest::Passthrough,
+            z_order: 3,
+            visible: true,
+        }
+    }
+
     fn test_control(style: NativeGlassStyle) -> NativeGlassControlDescriptor {
         NativeGlassControlDescriptor {
             id: crate::LiveId(7),
@@ -102,17 +123,42 @@ mod native_glass_tests {
             pos: dvec2(10.0, 20.0),
             size: dvec2(500.0, 400.0),
         };
-        let panel = Rect {
-            pos: dvec2(42.0, 77.0),
-            size: dvec2(100.0, 48.0),
-        };
+        let panel = test_panel(NativeGlassStyle::Clear);
 
-        let ui_rect = IosApp::native_glass_panel_ui_rect(panel, container);
+        let ui_rect = IosApp::native_glass_panel_ui_rect(panel.rect, container);
 
         assert_eq!(ui_rect.origin.x, 32.0);
         assert_eq!(ui_rect.origin.y, 57.0);
         assert_eq!(ui_rect.size.width, 100.0);
         assert_eq!(ui_rect.size.height, 48.0);
+    }
+
+    #[test]
+    fn ios_native_glass_panel_frame_snapshot_line_records_geometry() {
+        let container = Rect {
+            pos: dvec2(10.0, 20.0),
+            size: dvec2(500.0, 400.0),
+        };
+        let panel = test_panel(NativeGlassStyle::Clear);
+        let frame = IosApp::native_glass_panel_ui_rect(panel.rect, container);
+        let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
+        let tint = panel.tint.unwrap();
+
+        let line = IosApp::native_glass_panel_frame_snapshot_line(
+            &panel,
+            container,
+            frame,
+            tint,
+            corner_radius,
+        );
+
+        assert!(line.contains("native-panel-frame"));
+        assert!(line.contains("panel=0000000000000009"));
+        assert!(line.contains("makepad=(42.0,77.0,100.0,48.0)"));
+        assert!(line.contains("ui=(32.0,57.0,100.0,48.0)"));
+        assert!(line.contains("tint=(0.100,0.200,0.300,0.400)"));
+        assert!(line.contains("corner_radius=12.0"));
+        assert!(line.contains("z_order=3"));
     }
 
     #[test]
@@ -622,6 +668,39 @@ impl IosApp {
         Self::native_glass_ui_rect_from_makepad_rect(relative)
     }
 
+    fn native_glass_panel_frame_snapshot_line(
+        panel: &NativeGlassPanelDescriptor,
+        container_rect: Rect,
+        frame: NSRect,
+        tint: Vec4f,
+        corner_radius: f64,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios native-panel-frame container_rect=({:.1},{:.1},{:.1},{:.1}) panel={:?} makepad=({:.1},{:.1},{:.1},{:.1}) ui=({:.1},{:.1},{:.1},{:.1}) style={:?} tint=({:.3},{:.3},{:.3},{:.3}) corner_radius={:.1} z_order={} visible={}",
+            container_rect.pos.x,
+            container_rect.pos.y,
+            container_rect.size.x,
+            container_rect.size.y,
+            panel.id,
+            panel.rect.pos.x,
+            panel.rect.pos.y,
+            panel.rect.size.x,
+            panel.rect.size.y,
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+            panel.style,
+            tint.x,
+            tint.y,
+            tint.z,
+            tint.w,
+            corner_radius,
+            panel.z_order,
+            panel.visible
+        )
+    }
+
     fn ios_native_glass_effect_view_class() -> ObjcId {
         unsafe {
             makepad_objc_sys::runtime::objc_getClass(b"UIVisualEffectView\0".as_ptr() as *const _)
@@ -1040,11 +1119,21 @@ impl IosApp {
                 }
 
                 let panel_frame = Self::native_glass_panel_ui_rect(panel.rect, container.rect);
+                let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
+                crate::log!(
+                    "{}",
+                    Self::native_glass_panel_frame_snapshot_line(
+                        panel,
+                        container.rect,
+                        panel_frame,
+                        tint,
+                        corner_radius
+                    )
+                );
                 let () = msg_send![panel_view, setFrame: panel_frame];
                 let () = msg_send![panel_view, setUserInteractionEnabled: NO];
                 let layer: ObjcId = msg_send![panel_view, layer];
                 if layer != nil {
-                    let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
                     let () = msg_send![layer, setMasksToBounds: YES];
                     let () = msg_send![layer, setCornerRadius: corner_radius];
                 }
