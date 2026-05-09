@@ -176,12 +176,13 @@ fn ios_native_glass_control_required_class_names() -> [&'static str; 2] {
     ["UIButton", "UIButtonConfiguration"]
 }
 
-fn ios_native_glass_control_required_selector_checks() -> [(&'static str, &'static str); 9] {
+fn ios_native_glass_control_required_selector_checks() -> [(&'static str, &'static str); 10] {
     [
         ("UIButton", "buttonWithType:"),
         ("UIButton", "setFrame:"),
         ("UIButton", "setUserInteractionEnabled:"),
         ("UIButton", "setAccessibilityLabel:"),
+        ("UIButton", "setTitle:forState:"),
         ("UIButton", "setConfiguration:"),
         ("UIButton", "addTarget:action:forControlEvents:"),
         ("UIButtonConfiguration", "glassButtonConfiguration"),
@@ -218,6 +219,11 @@ fn ios_native_glass_control_selector_exists(
             "setAccessibilityLabel:" => {
                 let responds: BOOL =
                     msg_send![class, instancesRespondToSelector: sel!(setAccessibilityLabel:)];
+                responds == YES
+            }
+            "setTitle:forState:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setTitle:forState:)];
                 responds == YES
             }
             "setConfiguration:" => {
@@ -271,7 +277,7 @@ fn ios_native_glass_control_runtime_preflight() -> IosNativeGlassControlPrefligh
     ios_native_glass_control_preflight_result_from_missing_selector(None)
 }
 
-fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch) {
+fn ios_native_glass_control_batch_passes_preflight(batch: &NativeGlassControlBatch) -> bool {
     match batch.validate_v4_10() {
         Ok(()) => {
             let preflight = ios_native_glass_control_runtime_preflight();
@@ -284,13 +290,9 @@ fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch
                     batch.controls.len(),
                     batch.visible_control_count()
                 );
-                return;
+                return false;
             }
-            crate::log!(
-                "[liquid-glass] backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented missing_class=none missing_selector=none controls_total={} controls_visible={}",
-                batch.controls.len(),
-                batch.visible_control_count()
-            );
+            true
         }
         Err(error) => {
             crate::log!(
@@ -299,6 +301,7 @@ fn ios_log_native_glass_control_batch_unsupported(batch: NativeGlassControlBatch
                 batch.controls.len(),
                 batch.visible_control_count()
             );
+            false
         }
     }
 }
@@ -1423,7 +1426,9 @@ impl Cx {
                     }
                 }
                 CxOsOp::SetNativeGlassControlBatch(batch) => {
-                    ios_log_native_glass_control_batch_unsupported(batch);
+                    if ios_native_glass_control_batch_passes_preflight(&batch) {
+                        with_ios_app(|app| app.install_native_glass_control_batch(batch));
+                    }
                 }
                 CxOsOp::FullscreenWindow(_window_id) => {
                     IosApp::set_fullscreen(true);
@@ -2167,6 +2172,7 @@ mod tests {
                 ("UIButton", "setFrame:"),
                 ("UIButton", "setUserInteractionEnabled:"),
                 ("UIButton", "setAccessibilityLabel:"),
+                ("UIButton", "setTitle:forState:"),
                 ("UIButton", "setConfiguration:"),
                 ("UIButton", "addTarget:action:forControlEvents:"),
                 ("UIButtonConfiguration", "glassButtonConfiguration"),

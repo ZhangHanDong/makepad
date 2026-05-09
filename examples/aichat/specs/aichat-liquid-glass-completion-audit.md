@@ -155,6 +155,12 @@ Recent verified gates:
   `glassButtonConfiguration` / `clearGlassButtonConfiguration` selectors. The
   iOS target `--no-run` test build and release check pass, but UIKit runtime
   installation and iOS 26 validation remain open.
+- Step 148 adds a compiled UIKit native-control installer skeleton that creates
+  `UIButton` mirrors, applies `UIButtonConfiguration.glass()` / `clearGlass()`,
+  mirrors descriptor labels into title/accessibility label, and routes
+  `touchUpInside` into `NativeGlassControlActivatedEvent`. The iOS target
+  `--no-run` test build and release checks pass, but real iOS 26 visual/input
+  validation remains open.
 - Step 128 runs
   `makepad-example-aichat-macos-native-clear-fullscreen-probe` in Studio release
   build `[139]`. The app reached State 4 and requested fullscreen, but logged
@@ -302,9 +308,8 @@ behavior, or full native interior Liquid Glass.
   delivery. Step 145 fixes the retained CGEvent probe coordinate conversion,
   but post-fix Studio builds `[173]` and `[174]` still did not produce native
   click delivery. A physical user/system click is still unproven. UIKit
-  controls are not installed; Step 127 validates/logs unsupported iOS control
-  batches and Step 147 adds UIKit button/configuration class/selector preflight,
-  but no `UIButton` mirrors or iOS 26 runtime control validation exist yet.
+  controls now have a compiled UIKit installer skeleton from Step 148, but no
+  iOS 26 runtime control validation exists yet.
   Step 146 mirrors macOS native button descriptor labels into AppKit
   accessibility labels, and Studio release build `[2]` proves those labels are
   applied at runtime for the aichat probe controls. Focus traversal, VoiceOver

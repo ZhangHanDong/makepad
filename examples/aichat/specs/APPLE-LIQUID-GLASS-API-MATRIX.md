@@ -102,8 +102,8 @@ Decision for Phase B:
 | `UIGlassContainerEffect.spacing` | property | yes | Official Apple docs list `spacing` | Maps to `GlassContainer.spacing` morph distance. |
 | `UIView.isUserInteractionEnabled = false` | hit-test policy | yes | UIKit skeleton typecheck blocked by missing glass types; property itself is existing UIKit API | v4.1 panels are passthrough. |
 | `CALayer.cornerRadius` | shape | yes | UIKit skeleton typecheck blocked by missing glass types; property itself is existing UIKit API | `Capsule` maps to `min(width, height) / 2`. |
-| `UIButton` | native control | future | Step 147 runtime preflight checks class and ordinary button selectors dynamically | Native controls remain an opt-in future path, separate from visual panels. |
-| `UIButtonConfiguration.glass()` / `clearGlass()` | native control style | future | Official Apple docs list Liquid Glass button configuration; Step 147 checks ObjC selectors `glassButtonConfiguration` and `clearGlassButtonConfiguration` dynamically | Installer and iOS 26 runtime validation remain open. |
+| `UIButton` | native control | future | Step 147 runtime preflight checks class and ordinary button selectors dynamically; Step 148 compiles a UIKit installer skeleton | Native controls remain an opt-in future path, separate from visual panels. |
+| `UIButtonConfiguration.glass()` / `clearGlass()` | native control style | future | Official Apple docs list Liquid Glass button configuration; Step 147 checks ObjC selectors `glassButtonConfiguration` and `clearGlassButtonConfiguration` dynamically; Step 148 applies those configurations dynamically | iOS 26 runtime validation remains open. |
 
 ## SwiftUI Reference Model
 

@@ -96,6 +96,14 @@ iOS 26 glass configuration selectors `glassButtonConfiguration` and
 turns the iOS control gate from a generic unsupported reason into concrete
 class/selector evidence.
 
+Step 148 adds the first compiled UIKit installer skeleton. When preflight
+passes, visible button descriptors create `UIButton` mirrors above the MTK view,
+apply `UIButtonConfiguration.glass()` / `clearGlass()`, mirror labels into title
+and accessibility label, and route `touchUpInside` through
+`NativeGlassControlActivatedEvent`. This is still pending iOS 26 runtime
+validation for appearance, hit testing, accessibility ownership, and action
+delivery.
+
 Step 108 adds the first macOS AppKit installer skeleton:
 
 - visible native button descriptors create `NSButton` mirrors above the Metal

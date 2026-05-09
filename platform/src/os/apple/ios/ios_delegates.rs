@@ -1,11 +1,17 @@
 use crate::{
-    event::{Ease, SelectionHandleKind, SelectionHandlePhase, TouchState, VirtualKeyboardEvent},
+    cx::Cx,
+    event::{
+        Ease, NativeGlassControlActivatedEvent, SelectionHandleKind, SelectionHandlePhase,
+        TouchState, VirtualKeyboardEvent,
+    },
+    makepad_live_id::LiveId,
     makepad_math::*,
     os::{
         apple::apple_sys::*,
         apple::ios_app::IosApp,
         apple::ios_app::{with_ios_app, IOS_APP},
     },
+    window::WindowId,
 };
 use std::ffi::c_void;
 
@@ -106,6 +112,40 @@ pub fn define_ios_app_delegate() -> *const Class {
     }
 
     return decl.register();
+}
+
+pub fn define_ios_native_glass_control_target() -> *const Class {
+    let superclass = class!(NSObject);
+    let mut decl = ClassDecl::new("IosNativeGlassControlTarget", superclass).unwrap();
+
+    extern "C" fn native_glass_control_action(this: &Object, _sel: Sel, _sender: ObjcId) {
+        unsafe {
+            let window_index: usize = *this.get_ivar("window_index");
+            let window_generation: u64 = *this.get_ivar("window_generation");
+            let control_id_u64: u64 = *this.get_ivar("control_id_u64");
+            crate::log!(
+                "[liquid-glass] backend=apple-native-ios-controls event=target-action window_index={} window_generation={} control_id={}",
+                window_index,
+                window_generation,
+                control_id_u64
+            );
+            Cx::post_action(NativeGlassControlActivatedEvent {
+                window_id: WindowId(window_index, window_generation),
+                control_id: LiveId(control_id_u64),
+            });
+        }
+    }
+
+    unsafe {
+        decl.add_method(
+            sel!(nativeGlassControlAction:),
+            native_glass_control_action as extern "C" fn(&Object, Sel, ObjcId),
+        );
+    }
+    decl.add_ivar::<usize>("window_index");
+    decl.add_ivar::<u64>("window_generation");
+    decl.add_ivar::<u64>("control_id_u64");
+    decl.register()
 }
 
 pub fn define_mtk_view() -> *const Class {

@@ -132,6 +132,7 @@ pub struct IosTimer {
 
 pub struct IosClasses {
     pub app_delegate: *const Class,
+    pub native_glass_control_target: *const Class,
     pub view_controller: *const Class,
     pub mtk_view: *const Class,
     pub mtk_view_delegate: *const Class,
@@ -150,6 +151,7 @@ impl IosClasses {
     pub fn new() -> Self {
         Self {
             app_delegate: define_ios_app_delegate(),
+            native_glass_control_target: define_ios_native_glass_control_target(),
             view_controller: define_makepad_view_controller(),
             mtk_view: define_mtk_view(),
             mtk_view_delegate: define_mtk_view_delegate(),
@@ -213,6 +215,9 @@ pub struct IosApp {
     native_glass_panel_views: Vec<ObjcId>,
     last_native_glass_batch: Option<NativeGlassBatch>,
     last_native_glass_batch_result: Option<NativeGlassBatchResult>,
+    native_glass_control_views: Vec<ObjcId>,
+    native_glass_control_targets: Vec<ObjcId>,
+    last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     /// Native camera preview layers keyed by video_id.
     pub camera_preview_layers: HashMap<u64, ObjcId>,
     /// Selection handles overlayed over the MTK view (iOS 15+ custom implementation).
@@ -260,6 +265,9 @@ impl IosApp {
                 native_glass_panel_views: Vec::new(),
                 last_native_glass_batch: None,
                 last_native_glass_batch_result: None,
+                native_glass_control_views: Vec::new(),
+                native_glass_control_targets: Vec::new(),
+                last_native_glass_control_batch: None,
                 camera_preview_layers: HashMap::new(),
                 selection_handle_start_view: None,
                 selection_handle_end_view: None,
@@ -560,6 +568,64 @@ impl IosApp {
                 let () = msg_send![container, removeFromSuperview];
             }
         }
+    }
+
+    fn clear_native_glass_control_views(&mut self) {
+        unsafe {
+            for control in self.native_glass_control_views.drain(..) {
+                let () = msg_send![control, removeFromSuperview];
+            }
+            self.native_glass_control_targets.clear();
+        }
+    }
+
+    fn ios_native_glass_button_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(b"UIButton\0".as_ptr() as *const _) as ObjcId
+        }
+    }
+
+    fn ios_native_glass_button_configuration_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(
+                b"UIButtonConfiguration\0".as_ptr() as *const _,
+            ) as ObjcId
+        }
+    }
+
+    fn native_glass_control_configuration_selector(style: NativeGlassStyle) -> &'static str {
+        match style {
+            NativeGlassStyle::Regular => "glassButtonConfiguration",
+            NativeGlassStyle::Clear => "clearGlassButtonConfiguration",
+        }
+    }
+
+    fn native_glass_control_frame(control: &NativeGlassControlDescriptor) -> NSRect {
+        Self::native_glass_ui_rect_from_makepad_rect(control.rect)
+    }
+
+    fn native_glass_control_style_line(control: &NativeGlassControlDescriptor) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios-controls button-style control={:?} label={:?} configuration={} style={:?}",
+            control.id,
+            control.label,
+            Self::native_glass_control_configuration_selector(control.style),
+            control.style
+        )
+    }
+
+    fn log_native_glass_control_batch(
+        batch: &NativeGlassControlBatch,
+        state: &'static str,
+        reason: &'static str,
+    ) {
+        crate::log!(
+            "[liquid-glass] backend=apple-native-ios-controls state={} reason={} controls_total={} controls_visible={}",
+            state,
+            reason,
+            batch.controls.len(),
+            batch.visible_control_count()
+        );
     }
 
     fn native_glass_result_for_failure(
@@ -911,6 +977,125 @@ impl IosApp {
             });
 
             (result, compat_event)
+        }
+    }
+
+    pub(crate) fn install_native_glass_control_batch(&mut self, batch: NativeGlassControlBatch) {
+        if self
+            .last_native_glass_control_batch
+            .as_ref()
+            .map(|last| last.equivalent_for_native_update(&batch))
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        if let Err(error) = batch.validate_v4_10() {
+            let reason = match error {
+                NativeGlassControlBatchValidationError::TooManyVisibleControls { .. } => {
+                    "too-many-visible-controls"
+                }
+                NativeGlassControlBatchValidationError::EmptyVisibleControlRect { .. } => {
+                    "empty-visible-control-rect"
+                }
+            };
+            Self::log_native_glass_control_batch(&batch, "Rejected", reason);
+            self.last_native_glass_control_batch = Some(batch);
+            return;
+        }
+
+        let Some(host_view) = self.native_glass_host_view else {
+            Self::log_native_glass_control_batch(&batch, "Unsupported", "host-view-missing");
+            self.last_native_glass_control_batch = Some(batch);
+            return;
+        };
+        let Some(mtk_view) = self.mtk_view else {
+            Self::log_native_glass_control_batch(&batch, "Unsupported", "mtk-view-missing");
+            self.last_native_glass_control_batch = Some(batch);
+            return;
+        };
+
+        unsafe {
+            let button_class = Self::ios_native_glass_button_class();
+            let configuration_class = Self::ios_native_glass_button_configuration_class();
+            if button_class == nil || configuration_class == nil {
+                Self::log_native_glass_control_batch(&batch, "Unsupported", "class-missing");
+                self.last_native_glass_control_batch = Some(batch);
+                return;
+            }
+
+            self.clear_native_glass_control_views();
+
+            let mut visible_controls: Vec<&NativeGlassControlDescriptor> =
+                batch.controls.iter().filter(|control| control.visible).collect();
+            visible_controls.sort_by_key(|control| control.z_order);
+
+            let mut installed = 0usize;
+            for control in visible_controls {
+                let button: ObjcId = msg_send![button_class, buttonWithType: 1i64];
+                if button == nil {
+                    continue;
+                }
+
+                let configuration: ObjcId = match control.style {
+                    NativeGlassStyle::Regular => {
+                        msg_send![configuration_class, glassButtonConfiguration]
+                    }
+                    NativeGlassStyle::Clear => {
+                        msg_send![configuration_class, clearGlassButtonConfiguration]
+                    }
+                };
+                if configuration == nil {
+                    let () = msg_send![button, removeFromSuperview];
+                    continue;
+                }
+
+                let ns_label = str_to_nsstring(&control.label);
+                let () = msg_send![button, setConfiguration: configuration];
+                let () = msg_send![button, setTitle: ns_label forState: 0u64];
+                let () = msg_send![button, setAccessibilityLabel: ns_label];
+                let () = msg_send![button, setFrame: Self::native_glass_control_frame(control)];
+                let () = msg_send![
+                    button,
+                    setUserInteractionEnabled: if control.enabled { YES } else { NO }
+                ];
+
+                let target: ObjcId = msg_send![get_ios_class_global().native_glass_control_target, new];
+                if target == nil {
+                    let () = msg_send![button, removeFromSuperview];
+                    continue;
+                }
+                (*target).set_ivar("window_index", batch.window_id.0);
+                (*target).set_ivar("window_generation", batch.window_id.1);
+                (*target).set_ivar("control_id_u64", control.id.0);
+                let () = msg_send![
+                    button,
+                    addTarget: target
+                    action: sel!(nativeGlassControlAction:)
+                    forControlEvents: 64u64
+                ];
+
+                crate::log!("{}", Self::native_glass_control_style_line(control));
+                let () = msg_send![
+                    host_view,
+                    insertSubview: button
+                    aboveSubview: mtk_view
+                ];
+                self.native_glass_control_views.push(button);
+                self.native_glass_control_targets.push(target);
+                installed += 1;
+            }
+
+            let visible = batch.visible_control_count();
+            let (state, reason) = if installed == visible {
+                ("Installed", "installed-uikit-buttons")
+            } else if installed == 0 {
+                ("Unsupported", "button-install-failed")
+            } else {
+                ("Partial", "partial-uikit-buttons")
+            };
+            Self::log_native_glass_control_batch(&batch, state, reason);
+            self.last_native_glass_control_batch = Some(batch);
         }
     }
 
