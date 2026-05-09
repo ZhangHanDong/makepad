@@ -176,6 +176,21 @@ mod native_glass_tests {
     }
 
     #[test]
+    fn ios_native_glass_container_frame_snapshot_line_records_geometry() {
+        let container = test_container();
+        let frame = IosApp::native_glass_ui_rect_from_makepad_rect(container.rect);
+
+        let line = IosApp::native_glass_container_frame_snapshot_line(&container, frame);
+
+        assert!(line.contains("native-container-frame"));
+        assert!(line.contains("container=000000000000000b"));
+        assert!(line.contains("makepad=(10.0,20.0,500.0,400.0)"));
+        assert!(line.contains("ui=(10.0,20.0,500.0,400.0)"));
+        assert!(line.contains("spacing=20.000"));
+        assert!(line.contains("panels=1"));
+    }
+
+    #[test]
     fn ios_native_glass_style_raw_values_follow_current_apple_order() {
         assert_eq!(
             NativeGlassStyle::Regular.ios_raw_value_from_override(None),
@@ -722,6 +737,26 @@ impl IosApp {
         )
     }
 
+    fn native_glass_container_frame_snapshot_line(
+        container: &NativeGlassContainerDescriptor,
+        frame: NSRect,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios native-container-frame container={:?} makepad=({:.1},{:.1},{:.1},{:.1}) ui=({:.1},{:.1},{:.1},{:.1}) spacing={:.3} panels={}",
+            container.id,
+            container.rect.pos.x,
+            container.rect.pos.y,
+            container.rect.size.x,
+            container.rect.size.y,
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+            container.spacing,
+            container.panels.len()
+        )
+    }
+
     fn ios_native_glass_effect_view_class() -> ObjcId {
         unsafe {
             makepad_objc_sys::runtime::objc_getClass(b"UIVisualEffectView\0".as_ptr() as *const _)
@@ -1067,6 +1102,10 @@ impl IosApp {
             crate::log!("{}", Self::native_glass_container_spacing_line(container));
 
             let container_frame = Self::native_glass_ui_rect_from_makepad_rect(container.rect);
+            crate::log!(
+                "{}",
+                Self::native_glass_container_frame_snapshot_line(container, container_frame)
+            );
             let native_container: ObjcId = msg_send![visual_effect_view_class, alloc];
             let native_container: ObjcId =
                 msg_send![native_container, initWithEffect: container_effect];
