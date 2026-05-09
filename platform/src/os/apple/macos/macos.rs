@@ -105,7 +105,7 @@ fn native_fullscreen_probe_log_enabled() -> bool {
 }
 
 fn native_glass_transient_probe_enabled_from_value(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "true" | "on"))
+    matches!(value.map(str::trim), Some("1" | "true" | "on" | "dismiss"))
 }
 
 fn native_glass_transient_probe_enabled() -> bool {
@@ -113,6 +113,16 @@ fn native_glass_transient_probe_enabled() -> bool {
         std::env::var("MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE")
             .ok()
             .as_deref(),
+    )
+}
+
+fn native_glass_transient_dismiss_probe_enabled() -> bool {
+    matches!(
+        std::env::var("MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("dismiss")
     )
 }
 
@@ -1342,12 +1352,15 @@ impl Cx {
                     size,
                     grab_keyboard,
                 } => {
-                    let window = &mut self.windows[window_id];
-                    window.is_popup = true;
-                    window.popup_parent = Some(parent_window_id);
-                    window.popup_position = Some(position);
-                    window.popup_size = Some(size);
-                    window.popup_grab_keyboard = grab_keyboard;
+                    let visuals = {
+                        let window = &mut self.windows[window_id];
+                        window.is_popup = true;
+                        window.popup_parent = Some(parent_window_id);
+                        window.popup_position = Some(position);
+                        window.popup_size = Some(size);
+                        window.popup_grab_keyboard = grab_keyboard;
+                        window.window_visuals()
+                    };
                     // Find the parent NSWindow handle for coordinate conversion
                     let parent_ns_window = metal_windows
                         .iter()
@@ -1361,9 +1374,7 @@ impl Cx {
                         position,
                         parent_ns_window,
                     );
-                    metal_window
-                        .cocoa_window
-                        .set_window_visuals(window.window_visuals());
+                    metal_window.cocoa_window.set_window_visuals(visuals);
                     if native_glass_transient_probe_enabled() {
                         if let Some(style) = requested_native_glass_style_from_env() {
                             let event = metal_window
@@ -1380,10 +1391,27 @@ impl Cx {
                                 "[liquid-glass] transient-window=popup state=Rejected reason=backend-not-native"
                             );
                         }
+                        if native_glass_transient_dismiss_probe_enabled()
+                            && parent_ns_window != nil
+                        {
+                            let () = unsafe { msg_send![parent_ns_window, makeKeyWindow] };
+                            crate::log!(
+                                "[liquid-glass] transient-window=popup-dismiss-probe request=parent-make-key"
+                            );
+                            self.call_event_handler(&Event::PopupDismissed(
+                                crate::event::window::PopupDismissedEvent {
+                                    window_id,
+                                    reason: crate::event::window::PopupDismissReason::FocusLost,
+                                },
+                            ));
+                            crate::log!(
+                                "[liquid-glass] transient-window=popup-dismiss-probe request=dispatch-popup-dismissed"
+                            );
+                        }
                     }
-                    window.window_geom = metal_window.window_geom.clone();
+                    self.windows[window_id].window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
-                    window.is_created = true;
+                    self.windows[window_id].is_created = true;
                 }
                 CxOsOp::ResizeWindow(window_id, size) => {
                     if let Some(index) = metal_windows.iter().position(|w| w.window_id == window_id)
@@ -2185,6 +2213,9 @@ mod tests {
         assert!(native_glass_transient_probe_enabled_from_value(Some("on")));
         assert!(native_glass_transient_probe_enabled_from_value(Some(
             " true "
+        )));
+        assert!(native_glass_transient_probe_enabled_from_value(Some(
+            "dismiss"
         )));
     }
 

@@ -45,7 +45,7 @@ Current conclusion: not complete.
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md`; Step 96 lower scene pass probe; Step 98 fail verdict | Requirements and a prototype probe exist; current visual verdict rejects this as production full native glass. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals; Step 98 keeps complete interior work on ShaderBackdrop/hybrid; Step 99 makes guarded `apple-native-interleave` requests resolve to `ShaderBackdropInterior` | Separate route, not full Apple-native support. |
 | Phase H advanced behavior | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md`; Step 53 adds explicit fullscreen native fallback/suppression; Step 54 adds `native-display-change` backing-scale probe; Step 55 adds weaker native inactive-window app-side dimming; Step 56 adds `native-container-spacing` probe; Step 58 adds `GlassScrollEdge` widgets; Step 59 adds staged aichat wiring; Step 60 drives edge visibility from `PortalList` state; Step 61 ramps top edge opacity from scroll offset; Step 62 exposes bottom scroll distance and ramps bottom edge opacity; Step 63 adds a native spacing animation probe runnable; Step 64 adds a native inactive-window probe runnable; Step 65 adds a native fullscreen fallback probe runnable; Step 66 adds native display frame snapshot logs; Step 67 adds a Stage Manager/split-view geometry snapshot runnable | Phase H is gate-defined/probed only; fullscreen has explicit fallback and a Studio probe but is not full native fullscreen support; scroll edge visibility and strength are state-driven; animated spacing has a Studio probe but still needs visual drift validation; native inactive has a log probe but still needs visual focus-transition validation; multi-display has frame snapshot logs but remains unproven until real display-move validation; Stage Manager/split-view has a geometry snapshot probe but remains unproven until real runtime smoke validation. |
-| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design; Step 136 adds the gated `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` macOS popup installer and Studio runnable `makepad-example-aichat-macos-native-clear-transient-probe`; Studio release build `[161]` logs `transient-window=popup state=Installed substrate=macos-native style=clear` and `transient-window-probe=draw popup_size=(240.0,160.0)` while the main native batch remains `panels_installed=4 panels_failed=0`; Studio captured the popup framebuffer at `/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-161-kind-0-req-49-1778342316874.png` | macOS transient native substrate install and popup Metal draw-pass composition are proved for a self-driven popup probe; Phase I is still incomplete because popup widget-tree descriptor collection, `PopupDismissed` runtime delivery, UIKit transient support, and modal windows remain unproven. |
+| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design; Step 136 adds the gated `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` macOS popup installer and Studio runnables `makepad-example-aichat-macos-native-clear-transient-probe` / `makepad-example-aichat-macos-native-clear-transient-dismiss-probe`; Studio release build `[161]` logs `transient-window=popup state=Installed substrate=macos-native style=clear` and `transient-window-probe=draw popup_size=(240.0,160.0)` while the main native batch remains `panels_installed=4 panels_failed=0`; Studio captured the popup framebuffer at `/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-161-kind-0-req-49-1778342316874.png`; Studio release build `[166]` logs `transient-window=popup-dismiss-probe request=dispatch-popup-dismissed` and aichat receives `transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost` | macOS transient native substrate install, popup Metal draw-pass composition, and synthetic platform-to-app `PopupDismissed` delivery are proved for self-driven popup probes; Phase I is still incomplete because popup widget-tree descriptor collection, physical outside-click/Escape dismissal, UIKit transient support, and modal windows remain unproven. |
 | Release limitations | `aichat-liquid-glass-v4.1-release-notes.md` lists runtime switching, fullscreen, Stage Manager, multiple displays, rounded-corner sync, popup/modal, iOS backend | Documented limitations, not solved. |
 
 ## Validation Evidence
@@ -199,6 +199,14 @@ Recent verified gates:
   `/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-161-kind-0-req-49-1778342316874.png`,
   proving the popup can present Makepad Metal content above its independent
   native glass substrate.
+- Step 136 adds
+  `makepad-example-aichat-macos-native-clear-transient-dismiss-probe`, gated by
+  `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE=dismiss`. Studio release build `[166]`
+  logged `transient-window=popup-dismiss-probe
+  request=dispatch-popup-dismissed`, and aichat logged
+  `transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost`.
+  This proves synthetic platform-to-app `PopupDismissed` delivery. Physical
+  outside-click and Escape dismissal remain unproven.
 
 These gates prove the current macOS AppleNativeUnderlay path, semantic widget
 layer, and the Step 96 lower scene pass routing prototype. The Step 98 manual
@@ -249,8 +257,9 @@ behavior, or full native interior Liquid Glass.
 - Phase I popup/modal policy is defined in
   `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`, and Step 136 proves the first
   macOS transient-window native substrate install plus a popup-local draw pass.
-  Popup widget-tree descriptors, `PopupDismissed` delivery, UIKit transient
-  support, and modal windows remain incomplete.
+  Step 136 also proves synthetic platform-to-app `PopupDismissed` delivery.
+  Popup widget-tree descriptors, physical outside-click/Escape dismissal, UIKit
+  transient support, and modal windows remain incomplete.
 - Runtime switching remains a known limitation.
 - Full native glass inside fullscreen remains a known limitation.
 - Stage Manager and multi-display behavior remain known limitations.

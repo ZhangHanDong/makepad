@@ -1704,7 +1704,7 @@ fn native_geometry_probe_enabled() -> bool {
 }
 
 fn native_transient_probe_enabled_from_value(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "true" | "on"))
+    matches!(value.map(str::trim), Some("1" | "true" | "on" | "dismiss"))
 }
 
 fn native_transient_probe_enabled() -> bool {
@@ -6579,6 +6579,7 @@ mod tests {
         assert!(native_transient_probe_enabled_from_value(Some("true")));
         assert!(native_transient_probe_enabled_from_value(Some("on")));
         assert!(native_transient_probe_enabled_from_value(Some(" on ")));
+        assert!(native_transient_probe_enabled_from_value(Some("dismiss")));
         assert!(!native_transient_probe_enabled_from_value(None));
         assert!(!native_transient_probe_enabled_from_value(Some("0")));
         assert!(!native_transient_probe_enabled_from_value(Some("false")));

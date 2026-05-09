@@ -22,6 +22,7 @@ Studio release builds:
 ```text
 [160] initial native substrate install proof
 [161] popup draw-pass proof
+[166] synthetic PopupDismissed delivery proof
 ```
 
 ## Evidence
@@ -57,6 +58,14 @@ The main native batch stayed installed after the popup probe:
 [liquid-glass] container=0000000000000010 state=Installed reason=installed panels_installed=4 panels_failed=0
 ```
 
+The synthetic dismiss probe in build `[166]` dispatched
+`Event::PopupDismissed` from the macOS platform layer and aichat received it:
+
+```text
+[liquid-glass] transient-window=popup-dismiss-probe request=dispatch-popup-dismissed
+[liquid-glass] transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost
+```
+
 ## Verdict
 
 This closes the first macOS transient-window substrate installation gate:
@@ -74,6 +83,6 @@ substrate. Studio captured the popup framebuffer at:
 It does not close the full Phase I popup/modal gate. Still missing:
 
 - popup widget-tree descriptor collection,
-- `PopupDismissed` runtime delivery evidence,
+- physical outside-click or Escape dismissal evidence,
 - UIKit transient-window support or stable unsupported logging,
 - modal-window support.

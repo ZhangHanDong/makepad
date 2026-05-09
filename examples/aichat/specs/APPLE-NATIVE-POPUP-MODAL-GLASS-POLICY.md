@@ -83,12 +83,14 @@ Step 136 adds `makepad-example-aichat-macos-native-clear-transient-probe`.
 The run item sets `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE=1`; aichat opens a
 real platform popup after the main native substrate reaches State 4.
 
-Studio release build `[161]` logged:
+Studio release builds `[161]` and `[166]` logged:
 
 ```text
 [liquid-glass] transient-window-probe=request-open parent=WindowId(0, 0) popup=WindowId(1, 0)
 [liquid-glass] transient-window=popup state=Installed substrate=macos-native style=clear reason=installed-on-proofed-hierarchy
 [liquid-glass] transient-window-probe=draw popup_size=(240.0,160.0)
+[liquid-glass] transient-window=popup-dismiss-probe request=dispatch-popup-dismissed
+[liquid-glass] transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost
 ```
 
 The same run kept the main native batch installed:
@@ -101,8 +103,10 @@ The first probe proves macOS transient-window native substrate installation.
 Studio screenshot
 `/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-161-kind-0-req-49-1778342316874.png`
 captured the popup framebuffer with the probe marker content. It does not yet
-prove popup widget-tree descriptor collection or `PopupDismissed` delivery
-through Studio automation.
+prove popup widget-tree descriptor collection. Build `[166]` proves the
+platform-to-app `PopupDismissed(FocusLost)` delivery path through a synthetic
+platform dispatch; a physical outside-click or Escape dismissal remains a later
+manual/runtime validation.
 
 ## UIKit Implementation Plan
 
