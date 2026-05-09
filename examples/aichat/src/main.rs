@@ -1703,6 +1703,18 @@ fn native_geometry_probe_enabled() -> bool {
     )
 }
 
+fn native_transient_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true" | "on"))
+}
+
+fn native_transient_probe_enabled() -> bool {
+    native_transient_probe_enabled_from_value(
+        std::env::var("MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 fn native_geometry_probe_should_start(
     state: WindowNativeSubstrateState,
     style: Option<WindowNativeSubstrateStyle>,
@@ -4267,6 +4279,10 @@ pub struct App {
     #[rust]
     native_geometry_probe_next_frame: NextFrame,
     #[rust]
+    native_transient_probe_started: bool,
+    #[rust]
+    native_transient_probe_popup: Option<WindowHandle>,
+    #[rust]
     shader_backdrop_texture: Option<Texture>,
     #[rust]
     shader_backdrop_scene_texture: Option<Texture>,
@@ -5484,6 +5500,28 @@ impl App {
         window.resize(cx, dvec2(980.0, 760.0));
     }
 
+    fn start_native_transient_probe(&mut self, cx: &mut Cx) {
+        let Some(parent_window_id) = self.ui.window(cx, ids!(main_window)).window_id() else {
+            log!("[liquid-glass] transient-window-probe=skipped reason=missing-main-window-id");
+            return;
+        };
+
+        self.native_transient_probe_started = true;
+        let mut popup = WindowHandle::new_popup(
+            cx,
+            parent_window_id,
+            dvec2(560.0, 96.0),
+            dvec2(240.0, 160.0),
+        );
+        popup.set_transparent(cx, true);
+        log!(
+            "[liquid-glass] transient-window-probe=request-open parent={:?} popup={:?}",
+            parent_window_id,
+            popup.window_id()
+        );
+        self.native_transient_probe_popup = Some(popup);
+    }
+
     fn handle_native_fullscreen_probe(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
         if !native_fullscreen_probe_enabled() {
             return;
@@ -5848,6 +5886,12 @@ impl App {
         {
             self.start_native_geometry_probe(cx);
         }
+        if native_transient_probe_enabled()
+            && event.state == WindowNativeSubstrateState::Installed
+            && !self.native_transient_probe_started
+        {
+            self.start_native_transient_probe(cx);
+        }
 
         match self.glass_appearance.substrate {
             GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. } => {
@@ -6208,6 +6252,23 @@ impl AppMain for App {
             self.handle_native_fullscreen_probe(cx, event);
             self.handle_shader_backdrop_window_geom_change(cx, event);
         }
+        if let Event::PopupDismissed(event) = event {
+            if self
+                .native_transient_probe_popup
+                .as_ref()
+                .map(WindowHandle::window_id)
+                == Some(event.window_id)
+            {
+                log!(
+                    "[liquid-glass] transient-window-probe=dismissed popup={:?} reason={:?}",
+                    event.window_id,
+                    event.reason
+                );
+                if let Some(mut popup) = self.native_transient_probe_popup.take() {
+                    popup.close(cx);
+                }
+            }
+        }
 
         match event {
             Event::WindowGotFocus(window_id) => {
@@ -6350,13 +6411,13 @@ mod tests {
         native_geometry_probe_should_start, native_inactive_probe_enabled_from_value,
         native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
         native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
-        native_substrate_resolved_appearance, parse_glass_backend, render_state_templates,
-        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
-        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
-        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
-        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
-        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_substrate_resolved_appearance, native_transient_probe_enabled_from_value,
+        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
+        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
+        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
+        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
+        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6452,6 +6513,17 @@ mod tests {
             (GlassBackendRequest::Auto, None)
         );
         assert!(parse_glass_backend(Some("native")).1.is_some());
+    }
+
+    #[test]
+    fn aichat_native_transient_probe_env_contract() {
+        assert!(native_transient_probe_enabled_from_value(Some("1")));
+        assert!(native_transient_probe_enabled_from_value(Some("true")));
+        assert!(native_transient_probe_enabled_from_value(Some("on")));
+        assert!(native_transient_probe_enabled_from_value(Some(" on ")));
+        assert!(!native_transient_probe_enabled_from_value(None));
+        assert!(!native_transient_probe_enabled_from_value(Some("0")));
+        assert!(!native_transient_probe_enabled_from_value(Some("false")));
     }
 
     #[test]

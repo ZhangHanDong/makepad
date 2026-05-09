@@ -45,7 +45,7 @@ Current conclusion: not complete.
 | AppleNativeInterleave renderer requirements | `APPLE-NATIVE-INTERLEAVE-RENDERER-REQUIREMENTS.md`; Step 96 lower scene pass probe; Step 98 fail verdict | Requirements and a prototype probe exist; current visual verdict rejects this as production full native glass. |
 | ShaderBackdrop fallback route | `aichat-liquid-glass-v4.2-route-decision.md` selects `ShaderBackdropInterior` for complete aichat interior visuals; Step 98 keeps complete interior work on ShaderBackdrop/hybrid; Step 99 makes guarded `apple-native-interleave` requests resolve to `ShaderBackdropInterior` | Separate route, not full Apple-native support. |
 | Phase H advanced behavior | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md`; Step 53 adds explicit fullscreen native fallback/suppression; Step 54 adds `native-display-change` backing-scale probe; Step 55 adds weaker native inactive-window app-side dimming; Step 56 adds `native-container-spacing` probe; Step 58 adds `GlassScrollEdge` widgets; Step 59 adds staged aichat wiring; Step 60 drives edge visibility from `PortalList` state; Step 61 ramps top edge opacity from scroll offset; Step 62 exposes bottom scroll distance and ramps bottom edge opacity; Step 63 adds a native spacing animation probe runnable; Step 64 adds a native inactive-window probe runnable; Step 65 adds a native fullscreen fallback probe runnable; Step 66 adds native display frame snapshot logs; Step 67 adds a Stage Manager/split-view geometry snapshot runnable | Phase H is gate-defined/probed only; fullscreen has explicit fallback and a Studio probe but is not full native fullscreen support; scroll edge visibility and strength are state-driven; animated spacing has a Studio probe but still needs visual drift validation; native inactive has a log probe but still needs visual focus-transition validation; multi-display has frame snapshot logs but remains unproven until real display-move validation; Stage Manager/split-view has a geometry snapshot probe but remains unproven until real runtime smoke validation. |
-| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design | Phase I policy is defined; implementation and runtime evidence are still missing. |
+| Phase I popup/modal glass | `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`; `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`; v4 spec lists separate `NSPanel` / `UIWindow` popup/modal glass design; Step 136 adds the gated `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE` macOS popup installer and Studio runnable `makepad-example-aichat-macos-native-clear-transient-probe`; Studio release build `[160]` logs `transient-window=popup state=Installed substrate=macos-native style=clear` while the main native batch remains `panels_installed=4 panels_failed=0` | macOS transient native substrate install is proved for a self-driven popup probe; Phase I is still incomplete because popup visual composition, popup widget-tree descriptor collection, `PopupDismissed` runtime delivery, UIKit transient support, and modal windows remain unproven. |
 | Release limitations | `aichat-liquid-glass-v4.1-release-notes.md` lists runtime switching, fullscreen, Stage Manager, multiple displays, rounded-corner sync, popup/modal, iOS backend | Documented limitations, not solved. |
 
 ## Validation Evidence
@@ -185,6 +185,14 @@ Recent verified gates:
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
   it shows desktop wallpaper and icons visible through the window with broad
   blur/refraction, which Studio framebuffer screenshots do not fully capture.
+- Step 136 runs
+  `makepad-example-aichat-macos-native-clear-transient-probe` in Studio release
+  build `[160]`. The app reached main-window State 4, opened a real Makepad
+  popup `WindowId(1, 0)`, and the macOS platform logged
+  `transient-window=popup state=Installed substrate=macos-native style=clear
+  reason=installed-on-proofed-hierarchy`. The same run kept the main native
+  batch installed with `panels_installed=4 panels_failed=0`. Studio automation
+  did not prove popup visual composition or `PopupDismissed` delivery.
 
 These gates prove the current macOS AppleNativeUnderlay path, semantic widget
 layer, and the Step 96 lower scene pass routing prototype. The Step 98 manual
@@ -233,8 +241,10 @@ behavior, or full native interior Liquid Glass.
   Stage Manager, split-view, and multi-display geometry behavior remains
   unproven.
 - Phase I popup/modal policy is defined in
-  `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`, but the transient-window native
-  glass probe is not implemented.
+  `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md`, and Step 136 proves the first
+  macOS transient-window native substrate install. Popup visual composition,
+  popup widget-tree descriptors, `PopupDismissed` delivery, UIKit transient
+  support, and modal windows remain incomplete.
 - Runtime switching remains a known limitation.
 - Full native glass inside fullscreen remains a known limitation.
 - Stage Manager and multi-display behavior remain known limitations.

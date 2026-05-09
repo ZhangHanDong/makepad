@@ -16,7 +16,7 @@ Metal layer, with Makepad-owned input for ordinary glass panels.
 
 Makepad popup windows already use separate platform windows:
 
-- `platform/src/window.rs::CxWindowPool::new_popup` creates a popup `WindowId`
+- `platform/src/window.rs::WindowHandle::new_popup` creates a popup `WindowId`
   and emits `CxOsOp::CreatePopupWindow`.
 - macOS handles that op with `MetalWindow::new_popup`.
 - `MacosWindow::init_popup` creates a borderless `NSPanel` at popup-menu level,
@@ -76,6 +76,29 @@ Phase I should add a small transient-window native substrate path:
 5. Do not export main-window `GlassPanel` descriptors into the popup window.
    Popup descriptors must come from the popup window's own widget tree in a
    later collector phase.
+
+## macOS Probe Evidence
+
+Step 136 adds `makepad-example-aichat-macos-native-clear-transient-probe`.
+The run item sets `MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE=1`; aichat opens a
+real platform popup after the main native substrate reaches State 4.
+
+Studio release build `[160]` logged:
+
+```text
+[liquid-glass] transient-window-probe=request-open parent=WindowId(0, 0) popup=WindowId(1, 0)
+[liquid-glass] transient-window=popup state=Installed substrate=macos-native style=clear reason=installed-on-proofed-hierarchy
+```
+
+The same run kept the main native batch installed:
+
+```text
+[liquid-glass] backend=apple-native-underlay state=Installed containers=1 panels_installed=4 panels_failed=0
+```
+
+The first probe proves macOS transient-window native substrate installation.
+It does not yet prove popup visual composition, popup widget-tree descriptor
+collection, or `PopupDismissed` delivery through Studio automation.
 
 ## UIKit Implementation Plan
 

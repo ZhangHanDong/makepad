@@ -92,7 +92,7 @@ impl MacosNativeGlassStyle {
         }
     }
 
-    fn log_name(self) -> &'static str {
+    pub(crate) fn log_name(self) -> &'static str {
         match self {
             Self::Regular => "regular",
             Self::Clear => "clear",

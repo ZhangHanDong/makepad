@@ -11,7 +11,7 @@ use {
                 VideoSeekableRangesEvent, VideoTextureUpdatedEvent, VideoYuvTexturesReady,
             },
             Event, GameInputEventChannel, MouseButton, MouseUpEvent, VideoSource, WindowGeom,
-            WindowGeomChangeEvent,
+            WindowGeomChangeEvent, WindowNativeSubstrateState,
         },
         makepad_live_id::*,
         makepad_math::*,
@@ -102,6 +102,27 @@ fn native_fullscreen_probe_log_enabled() -> bool {
             .map(str::trim),
         Some("1" | "true")
     )
+}
+
+fn native_glass_transient_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true" | "on"))
+}
+
+fn native_glass_transient_probe_enabled() -> bool {
+    native_glass_transient_probe_enabled_from_value(
+        std::env::var("MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_substrate_state_log_name(state: WindowNativeSubstrateState) -> &'static str {
+    match state {
+        WindowNativeSubstrateState::ClassMissing => "ClassMissing",
+        WindowNativeSubstrateState::PreflightFailed => "PreflightFailed",
+        WindowNativeSubstrateState::VisibilityUnverified => "VisibilityUnverified",
+        WindowNativeSubstrateState::Installed => "Installed",
+    }
 }
 
 fn new_macos_ca_metal_layer(metal_cx: &MetalCx, delegate: ObjcId) -> ObjcId {
@@ -1343,6 +1364,23 @@ impl Cx {
                     metal_window
                         .cocoa_window
                         .set_window_visuals(window.window_visuals());
+                    if native_glass_transient_probe_enabled() {
+                        if let Some(style) = requested_native_glass_style_from_env() {
+                            let event = metal_window
+                                .cocoa_window
+                                .install_native_glass_substrate(style);
+                            crate::log!(
+                                "[liquid-glass] transient-window=popup state={} substrate=macos-native style={} reason={}",
+                                native_substrate_state_log_name(event.state),
+                                style.log_name(),
+                                event.reason
+                            );
+                        } else {
+                            crate::log!(
+                                "[liquid-glass] transient-window=popup state=Rejected reason=backend-not-native"
+                            );
+                        }
+                    }
                     window.window_geom = metal_window.window_geom.clone();
                     metal_windows.push(metal_window);
                     window.is_created = true;
@@ -2136,6 +2174,28 @@ mod tests {
                 CxOsOp::CreateWindow(window_id)
             ]
         );
+    }
+
+    #[test]
+    fn native_glass_transient_probe_accepts_explicit_truthy_values() {
+        assert!(native_glass_transient_probe_enabled_from_value(Some("1")));
+        assert!(native_glass_transient_probe_enabled_from_value(Some(
+            "true"
+        )));
+        assert!(native_glass_transient_probe_enabled_from_value(Some("on")));
+        assert!(native_glass_transient_probe_enabled_from_value(Some(
+            " true "
+        )));
+    }
+
+    #[test]
+    fn native_glass_transient_probe_rejects_empty_or_unknown_values() {
+        assert!(!native_glass_transient_probe_enabled_from_value(None));
+        assert!(!native_glass_transient_probe_enabled_from_value(Some("")));
+        assert!(!native_glass_transient_probe_enabled_from_value(Some("0")));
+        assert!(!native_glass_transient_probe_enabled_from_value(Some(
+            "false"
+        )));
     }
 }
 
