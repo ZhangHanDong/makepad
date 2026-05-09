@@ -37,6 +37,10 @@ Step 102 adds the platform op transport for those descriptors:
 Current OS backends explicitly ignore this op. Native AppKit/UIKit controls are
 still not created until the later installer and action bridge steps.
 
+Step 103 extends `GlassContainer` collector plumbing so future widgets can push
+`NativeGlassControlDescriptor` values alongside native glass panels. The current
+`GlassButton` aliases still do not export descriptors.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -52,6 +56,9 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   separate from `NativeGlassBatch` and has no installer in production yet.
 - `SetNativeGlassControlBatch` may be queued by future collectors, but current
   OS backends treat it as a no-op.
+- `GlassContainer` can carry native-control descriptors once a future
+  `GlassButton` implementation pushes them, but current `GlassButton` variants
+  remain Makepad-rendered only.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

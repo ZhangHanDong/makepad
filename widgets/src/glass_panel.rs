@@ -54,6 +54,7 @@ struct NativeGlassCollection {
     rect: Rect,
     spacing: f64,
     panels: Vec<NativeGlassPanelDescriptor>,
+    controls: Vec<NativeGlassControlDescriptor>,
 }
 
 #[derive(Default)]
@@ -68,12 +69,20 @@ impl NativeGlassCollector {
             rect: Rect::default(),
             spacing,
             panels: Vec::new(),
+            controls: Vec::new(),
         });
     }
 
     fn push_panel(&mut self, panel: NativeGlassPanelDescriptor) {
         if let Some(collection) = self.stack.last_mut() {
             collection.panels.push(panel);
+        }
+    }
+
+    #[allow(dead_code)]
+    fn push_control(&mut self, control: NativeGlassControlDescriptor) {
+        if let Some(collection) = self.stack.last_mut() {
+            collection.controls.push(control);
         }
     }
 
@@ -574,6 +583,8 @@ pub struct GlassContainer {
 
     #[rust]
     last_native_batch: Option<NativeGlassBatch>,
+    #[rust]
+    last_native_control_batch: Option<NativeGlassControlBatch>,
 
     #[rust]
     draw_state: DrawStateWrap<GlassContainerDrawState>,
@@ -597,6 +608,7 @@ impl Widget for GlassContainer {
                 if let Some(window_id) = cx.get_current_window_id() {
                     let collection = cx.global::<NativeGlassCollector>().finish(rect);
                     if let Some(collection) = collection {
+                        let controls = collection.controls;
                         let batch = NativeGlassBatch {
                             window_id,
                             containers: vec![NativeGlassContainerDescriptor {
@@ -610,12 +622,27 @@ impl Widget for GlassContainer {
                             cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch.clone()));
                             self.last_native_batch = Some(batch);
                         }
+                        let control_batch = NativeGlassControlBatch {
+                            window_id,
+                            controls,
+                        };
+                        if !control_batch.controls.is_empty()
+                            || self.last_native_control_batch.is_some()
+                        {
+                            if self.last_native_control_batch.as_ref() != Some(&control_batch) {
+                                cx.push_unique_platform_op(
+                                    CxOsOp::SetNativeGlassControlBatch(control_batch.clone()),
+                                );
+                                self.last_native_control_batch = Some(control_batch);
+                            }
+                        }
                     }
                 } else {
                     cx.global::<NativeGlassCollector>().finish(rect);
                 }
             } else {
                 self.last_native_batch = None;
+                self.last_native_control_batch = None;
             }
 
             self.draw_state.end();
@@ -817,6 +844,53 @@ mod native_glass_tests {
         assert_eq!(collection.id, LiveId(1));
         assert_eq!(collection.spacing, 20.0);
         assert_eq!(collection.panels.len(), 1);
+        assert_eq!(collector.stack.len(), 0);
+    }
+
+    #[test]
+    fn native_glass_collector_returns_container_with_pushed_controls() {
+        let mut collector = NativeGlassCollector::default();
+        collector.begin(LiveId(1), 20.0);
+        collector.push_control(NativeGlassControlDescriptor {
+            id: LiveId(3),
+            rect: Rect {
+                pos: dvec2(12.0, 16.0),
+                size: dvec2(80.0, 32.0),
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Primary,
+            },
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 1,
+            enabled: true,
+            visible: true,
+        });
+
+        let collection = collector.finish(Rect {
+            pos: dvec2(10.0, 20.0),
+            size: dvec2(300.0, 200.0),
+        });
+
+        let collection = collection.expect("collection should finish");
+        assert_eq!(collection.controls.len(), 1);
+        assert_eq!(collection.controls[0].id, LiveId(3));
+        assert_eq!(
+            collection.controls[0].kind,
+            NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Primary,
+            }
+        );
+        assert_eq!(collector.stack.len(), 0);
+    }
+
+    #[test]
+    fn native_glass_collector_finish_without_begin_returns_none() {
+        let mut collector = NativeGlassCollector::default();
+
+        let collection = collector.finish(Rect::default());
+
+        assert!(collection.is_none());
         assert_eq!(collector.stack.len(), 0);
     }
 
