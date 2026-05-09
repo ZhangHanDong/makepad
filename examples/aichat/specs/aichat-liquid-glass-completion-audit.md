@@ -341,7 +341,14 @@ behavior, or full native interior Liquid Glass.
   click delivery. Step 151 reruns the global CGEvent probe with Step 150
   `NSWindow.sendEvent:` diagnostics and still does not produce
   `window-send-event`, proving that retained probe does not close the
-  physical/system click gate. A physical user/system click is still unproven.
+  physical/system click gate. Step 162 records the latest
+  `macos-native-clear-control-probe` build `[4]`: it reaches State 4, installs
+  the native underlay with `panels_installed=4 panels_failed=0`, installs two
+  visible glass-bezel `NativeGlassButton` mirrors, and matches the user desktop
+  screenshot's expected macOS native visual result. The Step 162 live log query
+  still has no post-install `window-send-event`, `button-mouse-down`,
+  `target-action`, `button-action`, or `native-control-probe=makepad-click`
+  entries, so a physical user/system click is still unproven.
   UIKit controls now have a compiled UIKit installer skeleton from Step 148,
   and Step 152 makes the `touchUpInside` action mask explicit in code/tests,
   and Step 153 maps native enabled state with a selector preflight, but no iOS
@@ -405,8 +412,10 @@ behavior, or full native interior Liquid Glass.
    later AppleNativeInterleave attempt must first produce a new visual verdict
    with recognizable native transparency/refraction/liquid distortion before it
    can replace the current route.
-3. Before enabling native interactive controls, define event ownership and
-   hit-test forwarding for AppKit/UIKit controls.
+3. Close the macOS native-control physical-click gate by clicking the visible
+   `Clear` button in build `[4]` or a fresh `macos-native-clear-control-probe`
+   run and proving the diagnostic chain:
+   `window-send-event -> button-mouse-down -> target-action -> button-action -> native-control-probe=makepad-click`.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
    concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.
