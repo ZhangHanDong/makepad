@@ -119,7 +119,7 @@ native glass panel
 Metal layer for content above glass
 ```
 
-Status: partially proved, still high risk.
+Status: prototype only; not accepted for production.
 
 This is the closest native-API route for full glass if AppKit can sample the
 lower Metal layer through native glass. It requires splitting Makepad rendering
@@ -149,6 +149,19 @@ This proves the lower scene pass is being rendered and routed to the lower
 scene surface. It does not yet prove the final user-visible AppKit composition
 or recognizable native Liquid Glass refraction/blur over that lower scene,
 because Studio screenshots do not capture the full native overlay stack.
+
+Step 98 manual verdict:
+
+- The user observed only a gray/grid lower scene.
+- No transparency was visible.
+- No recognizable native blur/refraction/liquid distortion was visible in panel
+  interiors.
+
+This rejects `AppleNativeInterleave` as the current production route for full
+native Liquid Glass. The probe remains useful as diagnostics and renderer
+evidence, but the complete aichat interior visual route should stay on
+ShaderBackdrop or a hybrid design unless a later native sampling probe produces
+a different visual verdict.
 
 ### D. Native-Hosted Glass Islands
 
@@ -254,11 +267,12 @@ Therefore the next complete interior Liquid Glass implementation should be a
 Makepad-rendered `ShaderBackdropInterior`, while the current native targets are
 described as `AppleNativeUnderlay` diagnostics/proofs.
 
-Step 96 reopens the native interleave route as a prototype candidate by proving
-a Makepad-owned lower scene pass can be rendered and routed to the lower scene
-surface. The route remains unaccepted for production until visual validation
-confirms that native glass visibly samples that lower scene with recognizable
-Liquid Glass treatment.
+Step 96 reopened the native interleave route as a prototype candidate by
+proving a Makepad-owned lower scene pass can be rendered and routed to the
+lower scene surface. Step 98 then rejected that prototype for production full
+native Liquid Glass because the user saw a gray/grid scene without transparency,
+refraction, or liquid distortion. Keep `AppleNativeInterleave` as a prototype
+until a later probe produces a different visual verdict.
 
 ## Non-Goals
 
