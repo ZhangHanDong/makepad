@@ -856,6 +856,28 @@ impl MacosWindow {
         Self::native_glass_ns_rect_from_makepad_rect(control.rect, bounds.size.height)
     }
 
+    fn native_glass_control_frame_snapshot_line(
+        control: &NativeGlassControlDescriptor,
+        control_frame: NSRect,
+    ) -> String {
+        format!(
+            "[liquid-glass] native-control-frame control={:?} kind={:?} label={:?} makepad=({:.1},{:.1},{:.1},{:.1}) appkit=({:.1},{:.1},{:.1},{:.1}) z_order={} visible={}",
+            control.id,
+            control.kind,
+            control.label,
+            control.rect.pos.x,
+            control.rect.pos.y,
+            control.rect.size.x,
+            control.rect.size.y,
+            control_frame.origin.x,
+            control_frame.origin.y,
+            control_frame.size.width,
+            control_frame.size.height,
+            control.z_order,
+            control.visible
+        )
+    }
+
     unsafe fn install_native_glass_button_control(
         &mut self,
         control: &NativeGlassControlDescriptor,
@@ -863,6 +885,10 @@ impl MacosWindow {
         bounds: NSRect,
     ) -> bool {
         let button_frame = Self::native_glass_control_frame(control, bounds);
+        crate::log!(
+            "{}",
+            Self::native_glass_control_frame_snapshot_line(control, button_frame)
+        );
         let button: ObjcId = msg_send![button_class, alloc];
         let button: ObjcId = msg_send![button, initWithFrame: button_frame];
         if button == nil {
@@ -2152,8 +2178,8 @@ pub fn get_cocoa_window(this: &Object) -> &mut MacosWindow {
 mod tests {
     use super::*;
     use crate::{
-        LiveId, NativeGlassContainerDescriptor, NativeGlassControlBatchValidationError,
-        NativeGlassShape,
+        LiveId, NativeGlassButtonRole, NativeGlassContainerDescriptor,
+        NativeGlassControlBatchValidationError, NativeGlassControlKind, NativeGlassShape,
     };
 
     #[test]
@@ -2238,6 +2264,44 @@ mod tests {
         assert!(line.contains("makepad=(120.0,70.0,100.0,40.0)"));
         assert!(line.contains("appkit=(20.0,240.0,100.0,40.0)"));
         assert!(line.contains("z_order=7"));
+        assert!(line.contains("visible=true"));
+    }
+
+    #[test]
+    fn native_glass_control_frame_snapshot_line_contains_logical_and_appkit_frames() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(3),
+            rect: Rect {
+                pos: Vec2d { x: 120.0, y: 70.0 },
+                size: Vec2d { x: 100.0, y: 40.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 4,
+            enabled: true,
+            visible: true,
+        };
+        let control_frame = NSRect {
+            origin: NSPoint { x: 120.0, y: 190.0 },
+            size: NSSize {
+                width: 100.0,
+                height: 40.0,
+            },
+        };
+
+        let line =
+            MacosWindow::native_glass_control_frame_snapshot_line(&control, control_frame);
+
+        assert!(line.contains("native-control-frame"));
+        assert!(line.contains("control=0000000000000003"));
+        assert!(line.contains("label=\"Clear\""));
+        assert!(line.contains("makepad=(120.0,70.0,100.0,40.0)"));
+        assert!(line.contains("appkit=(120.0,190.0,100.0,40.0)"));
+        assert!(line.contains("z_order=4"));
         assert!(line.contains("visible=true"));
     }
 

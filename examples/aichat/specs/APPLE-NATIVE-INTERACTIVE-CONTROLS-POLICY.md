@@ -176,6 +176,13 @@ Step 119 found the native frame for `clear_button` did not match the Studio
 `empty-visible-control-rect`; a view-origin transform attempt produced invalid
 offscreen frames. Neither geometry fix is retained.
 
+Step 121 adds `native-control-frame` logs with `label` so runtime evidence can
+confirm the installed AppKit controls are the intended Makepad buttons. The
+same run also clarifies that Studio `WidgetQuery` / `Click` coordinates live in
+Studio remote input space and must not be treated as AppKit subview frames.
+Studio framebuffer screenshots do not include AppKit sibling views, so they are
+not sufficient native-control visual proof.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.

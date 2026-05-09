@@ -93,6 +93,10 @@ Recent verified gates:
   the Studio `WidgetQuery` rect. Two attempted geometry fixes were rejected:
   `clipped_rect(cx)` produced `empty-visible-control-rect`, and a view-origin
   transform produced invalid offscreen frames.
+- Step 121 adds `native-control-frame` logs with labels and records that Studio
+  `WidgetQuery` / `Click` coordinates are not directly comparable to AppKit
+  subview frames. Studio screenshots capture the Metal framebuffer and do not
+  prove native AppKit sibling-control visual alignment.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -120,9 +124,10 @@ behavior, or full native interior Liquid Glass.
   a real AppKit click still needs to produce `target-action` and
   `button-action` logs, the Step 115 system-click attempt produced no activation
   logs, Step 118 shows the automated build `[116]` click attempts produced no
-  post-click diagnostics, hierarchy evidence shows native control geometry is
-  still misaligned, UIKit controls are not installed, accessibility ownership is
-  unresolved, and non-macOS backends remain no-op.
+  post-click diagnostics, Step 121 shows Studio framebuffer/query evidence is
+  insufficient for native AppKit sibling-control visual validation, UIKit
+  controls are not installed, accessibility ownership is unresolved, and
+  non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.
