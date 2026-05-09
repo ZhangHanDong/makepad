@@ -11,6 +11,7 @@ use {
                 VideoSeekableRangesEvent, VideoTextureUpdatedEvent, VideoYuvTexturesReady,
             },
             Event, GameInputEventChannel, MouseButton, MouseUpEvent, VideoSource, WindowGeom,
+            WindowGeomChangeEvent,
         },
         makepad_live_id::*,
         makepad_math::*,
@@ -938,51 +939,8 @@ impl Cx {
                     window.stop_resize();
                 }
             }
-            MacosEvent::WindowGeomChange(mut re) => {
-                // do this here because mac
-                if let Some(window) = metal_windows
-                    .iter_mut()
-                    .find(|w| w.window_id == re.window_id)
-                {
-                    self.windows[re.window_id].os_dpi_factor = Some(re.new_geom.dpi_factor);
-                    if let Some(dpi_override) = self.windows[re.window_id].dpi_override {
-                        re.new_geom.inner_size *= re.new_geom.dpi_factor / dpi_override;
-                        re.new_geom.dpi_factor = dpi_override;
-                    }
-                    let backing_scale_changed =
-                        (re.old_geom.dpi_factor - re.new_geom.dpi_factor).abs() > 0.001;
-                    if backing_scale_changed {
-                        window.cocoa_window.log_native_glass_frame_snapshot(
-                            "backing-scale-change",
-                            &re.old_geom,
-                            &re.new_geom,
-                        );
-                    } else if MacosWindow::native_glass_geometry_snapshot_enabled()
-                        && MacosWindow::native_glass_window_geometry_changed(
-                            &re.old_geom,
-                            &re.new_geom,
-                        )
-                    {
-                        window.cocoa_window.log_native_glass_frame_snapshot(
-                            "geometry-change",
-                            &re.old_geom,
-                            &re.new_geom,
-                        );
-                    }
-                    window.window_geom = re.new_geom.clone();
-                    self.windows[re.window_id].window_geom = re.new_geom.clone();
-
-                    // redraw just this windows root draw list
-                    if re.old_geom.dpi_factor != re.new_geom.dpi_factor
-                        || re.old_geom.inner_size != re.new_geom.inner_size
-                    {
-                        if let Some(main_pass_id) = self.windows[re.window_id].main_pass_id {
-                            self.redraw_pass_and_child_passes(main_pass_id);
-                        }
-                    }
-                }
-                // ok lets not redraw all, just this window
-                self.call_event_handler(&Event::WindowGeomChange(re));
+            MacosEvent::WindowGeomChange(re) => {
+                self.handle_window_geom_change_event(metal_windows, re);
             }
             MacosEvent::WindowNativeSubstrateResolved(event) => {
                 self.call_event_handler(&Event::WindowNativeSubstrateResolved(event));
@@ -1230,6 +1188,54 @@ impl Cx {
         *pos = self.windows[window_id].remap_dpi_override(*pos)
     }
 
+    fn handle_window_geom_change_event(
+        &mut self,
+        metal_windows: &mut Vec<MetalWindow>,
+        mut re: WindowGeomChangeEvent,
+    ) {
+        // do this here because mac
+        if let Some(window) = metal_windows
+            .iter_mut()
+            .find(|w| w.window_id == re.window_id)
+        {
+            self.windows[re.window_id].os_dpi_factor = Some(re.new_geom.dpi_factor);
+            if let Some(dpi_override) = self.windows[re.window_id].dpi_override {
+                re.new_geom.inner_size *= re.new_geom.dpi_factor / dpi_override;
+                re.new_geom.dpi_factor = dpi_override;
+            }
+            let backing_scale_changed =
+                (re.old_geom.dpi_factor - re.new_geom.dpi_factor).abs() > 0.001;
+            if backing_scale_changed {
+                window.cocoa_window.log_native_glass_frame_snapshot(
+                    "backing-scale-change",
+                    &re.old_geom,
+                    &re.new_geom,
+                );
+            } else if MacosWindow::native_glass_geometry_snapshot_enabled()
+                && MacosWindow::native_glass_window_geometry_changed(&re.old_geom, &re.new_geom)
+            {
+                window.cocoa_window.log_native_glass_frame_snapshot(
+                    "geometry-change",
+                    &re.old_geom,
+                    &re.new_geom,
+                );
+            }
+            window.window_geom = re.new_geom.clone();
+            self.windows[re.window_id].window_geom = re.new_geom.clone();
+
+            // redraw just this windows root draw list
+            if re.old_geom.dpi_factor != re.new_geom.dpi_factor
+                || re.old_geom.inner_size != re.new_geom.inner_size
+            {
+                if let Some(main_pass_id) = self.windows[re.window_id].main_pass_id {
+                    self.redraw_pass_and_child_passes(main_pass_id);
+                }
+            }
+        }
+        // ok lets not redraw all, just this window
+        self.call_event_handler(&Event::WindowGeomChange(re));
+    }
+
     fn handle_platform_ops(
         &mut self,
         metal_windows: &mut Vec<MetalWindow>,
@@ -1319,25 +1325,69 @@ impl Cx {
                     window.is_created = true;
                 }
                 CxOsOp::ResizeWindow(window_id, size) => {
-                    if let Some(metal_window) =
-                        metal_windows.iter_mut().find(|w| w.window_id == window_id)
+                    if let Some(index) = metal_windows.iter().position(|w| w.window_id == window_id)
                     {
+                        let metal_window = &mut metal_windows[index];
                         let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_outer_size(size);
-                        metal_window
-                            .cocoa_window
-                            .send_change_event_from_old_geom(old_geom);
+                        let new_geom = metal_window.cocoa_window.get_window_geom();
+                        if MacosWindow::native_glass_geometry_snapshot_enabled() {
+                            crate::log!(
+                                "[liquid-glass] native-geometry-op=resize old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) requested=({:.1},{:.1}) changed={}",
+                                old_geom.position.x,
+                                old_geom.position.y,
+                                new_geom.position.x,
+                                new_geom.position.y,
+                                old_geom.inner_size.x,
+                                old_geom.inner_size.y,
+                                new_geom.inner_size.x,
+                                new_geom.inner_size.y,
+                                size.x,
+                                size.y,
+                                MacosWindow::native_glass_window_geometry_changed(&old_geom, &new_geom)
+                            );
+                        }
+                        self.handle_window_geom_change_event(
+                            metal_windows,
+                            WindowGeomChangeEvent {
+                                window_id,
+                                old_geom,
+                                new_geom,
+                            },
+                        );
                     }
                 }
                 CxOsOp::RepositionWindow(window_id, pos) => {
-                    if let Some(metal_window) =
-                        metal_windows.iter_mut().find(|w| w.window_id == window_id)
+                    if let Some(index) = metal_windows.iter().position(|w| w.window_id == window_id)
                     {
+                        let metal_window = &mut metal_windows[index];
                         let old_geom = metal_window.cocoa_window.get_window_geom();
                         metal_window.cocoa_window.set_position(pos);
-                        metal_window
-                            .cocoa_window
-                            .send_change_event_from_old_geom(old_geom);
+                        let new_geom = metal_window.cocoa_window.get_window_geom();
+                        if MacosWindow::native_glass_geometry_snapshot_enabled() {
+                            crate::log!(
+                                "[liquid-glass] native-geometry-op=reposition old_pos=({:.1},{:.1}) new_pos=({:.1},{:.1}) old_size=({:.1},{:.1}) new_size=({:.1},{:.1}) requested=({:.1},{:.1}) changed={}",
+                                old_geom.position.x,
+                                old_geom.position.y,
+                                new_geom.position.x,
+                                new_geom.position.y,
+                                old_geom.inner_size.x,
+                                old_geom.inner_size.y,
+                                new_geom.inner_size.x,
+                                new_geom.inner_size.y,
+                                pos.x,
+                                pos.y,
+                                MacosWindow::native_glass_window_geometry_changed(&old_geom, &new_geom)
+                            );
+                        }
+                        self.handle_window_geom_change_event(
+                            metal_windows,
+                            WindowGeomChangeEvent {
+                                window_id,
+                                old_geom,
+                                new_geom,
+                            },
+                        );
                     }
                 }
                 CxOsOp::CloseWindow(window_id) => {

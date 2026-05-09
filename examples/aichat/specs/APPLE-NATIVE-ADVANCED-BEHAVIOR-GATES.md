@@ -120,6 +120,13 @@ The current production path remains:
   programmatic resize/reposition ops now emit `WindowGeomChange` with explicit
   old geometry. Studio builds `[146]` and `[147]` logged the request, but still
   produced no native frame snapshot evidence.
+- Step 133 fixes the programmatic geometry event path by routing resize and
+  reposition ops through the same internal `WindowGeomChange` handler instead
+  of reentering `MacosApp::do_callback`. Studio release build `[150]` logged
+  `native-geometry-op=resize changed=true`,
+  `native-geometry-op=reposition changed=true`, and two
+  `native-display-frame-snapshot reason=geometry-change` entries followed by
+  four `native-panel-frame` entries each.
 
 ### Inactive window
 
