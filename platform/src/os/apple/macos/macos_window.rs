@@ -123,6 +123,7 @@ pub struct MacosWindow {
     pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     pub(crate) native_glass_perform_click_probe_fired_controls: Vec<LiveId>,
+    pub(crate) native_glass_mouse_event_probe_fired_controls: Vec<LiveId>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) above_metal_glass_probe_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
@@ -918,6 +919,17 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_mouse_event_probe_matches(
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        Self::native_glass_control_perform_click_probe_matches_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_MOUSE_EVENT_PROBE")
+                .ok()
+                .as_deref(),
+            control,
+        )
+    }
+
     unsafe fn log_native_glass_control_hit_test_probe(
         &self,
         control: &NativeGlassControlDescriptor,
@@ -938,6 +950,61 @@ impl MacosWindow {
                 hit_view == control_view,
             )
         );
+    }
+
+    unsafe fn run_native_glass_control_mouse_event_probe(
+        &mut self,
+        control: &NativeGlassControlDescriptor,
+        control_frame: NSRect,
+    ) {
+        if !Self::native_glass_control_mouse_event_probe_matches(control)
+            || self
+                .native_glass_mouse_event_probe_fired_controls
+                .contains(&control.id)
+        {
+            return;
+        }
+        self.native_glass_mouse_event_probe_fired_controls
+            .push(control.id);
+        let point = NSPoint {
+            x: control_frame.origin.x + control_frame.size.width * 0.5,
+            y: control_frame.origin.y + control_frame.size.height * 0.5,
+        };
+        crate::log!(
+            "[liquid-glass] backend=apple-native-controls event=synthetic-mouse-probe control={:?} label={:?} point=({:.1},{:.1})",
+            control.id,
+            control.label,
+            point.x,
+            point.y
+        );
+        let window_number: i64 = msg_send![self.window, windowNumber];
+        let mouse_down: ObjcId = msg_send![
+            class!(NSEvent),
+            mouseEventWithType: NSEventType::NSLeftMouseDown
+            location: point
+            modifierFlags: 0u64
+            timestamp: 0f64
+            windowNumber: window_number
+            context: nil
+            eventNumber: 1i64
+            clickCount: 1i64
+            pressure: 1.0f64
+        ];
+        let mouse_up: ObjcId = msg_send![
+            class!(NSEvent),
+            mouseEventWithType: NSEventType::NSLeftMouseUp
+            location: point
+            modifierFlags: 0u64
+            timestamp: 0f64
+            windowNumber: window_number
+            context: nil
+            eventNumber: 2i64
+            clickCount: 1i64
+            pressure: 0.0f64
+        ];
+        let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+        let () = msg_send![ns_app, postEvent: mouse_down atStart: NO];
+        let () = msg_send![ns_app, postEvent: mouse_up atStart: NO];
     }
 
     unsafe fn install_native_glass_button_control(
@@ -981,6 +1048,7 @@ impl MacosWindow {
             relativeTo: nil
         ];
         self.log_native_glass_control_hit_test_probe(control, button, button_frame);
+        self.run_native_glass_control_mouse_event_probe(control, button_frame);
         if Self::native_glass_control_perform_click_probe_matches(control)
             && !self
                 .native_glass_perform_click_probe_fired_controls
@@ -1376,6 +1444,7 @@ impl MacosWindow {
                 native_glass_control_targets: Vec::new(),
                 last_native_glass_control_batch: None,
                 native_glass_perform_click_probe_fired_controls: Vec::new(),
+                native_glass_mouse_event_probe_fired_controls: Vec::new(),
                 proof_substrate_view: nil,
                 above_metal_glass_probe_view: nil,
                 container_view,

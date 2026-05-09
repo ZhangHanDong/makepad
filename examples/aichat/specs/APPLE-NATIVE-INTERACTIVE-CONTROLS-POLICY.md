@@ -199,6 +199,16 @@ native-control-probe=makepad-click id=clear_button`. This proves the AppKit
 target/action bridge reaches Makepad's existing button action path, but still
 does not prove physical mouse/touch delivery.
 
+Step 124 adds the explicit synthetic mouse probe runnable
+`makepad-example-aichat-macos-native-clear-control-mouse-probe`. It sets
+`MAKEPAD_NATIVE_GLASS_CONTROL_MOUSE_EVENT_PROBE=Clear` and posts an AppKit
+`NSLeftMouseDown` / `NSLeftMouseUp` pair through the application event queue.
+Build `[133]` logged `synthetic-mouse-probe -> button-mouse-down ->
+target-action -> button-action -> native-control-probe=makepad-click
+id=clear_button`. This proves in-process AppKit mouse events reach the native
+button and re-enter Makepad, while leaving physical/system click validation as
+the remaining gate.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
