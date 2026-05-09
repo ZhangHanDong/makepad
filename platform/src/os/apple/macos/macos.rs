@@ -1451,6 +1451,7 @@ impl Cx {
                         }
                     }
                 }
+                CxOsOp::SetNativeGlassControlBatch(_) => {}
                 CxOsOp::ShowTextIME(area, pos, _config) => {
                     let pos = area.clipped_rect(self).pos + pos;
                     metal_windows.iter_mut().for_each(|w| {

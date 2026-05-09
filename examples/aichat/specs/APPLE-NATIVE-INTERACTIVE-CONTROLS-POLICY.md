@@ -29,6 +29,14 @@ These descriptors are not installed by any platform backend yet. They exist so
 the native-control phase can proceed without reusing interactive glass panels
 as controls.
 
+Step 102 adds the platform op transport for those descriptors:
+
+- `CxOsOp::SetNativeGlassControlBatch`
+- `WindowHandle::set_native_glass_control_batch`
+
+Current OS backends explicitly ignore this op. Native AppKit/UIKit controls are
+still not created until the later installer and action bridge steps.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -42,6 +50,8 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   implemented and validated.
 - `NativeGlassControlBatch` is the future native-control input model; it is
   separate from `NativeGlassBatch` and has no installer in production yet.
+- `SetNativeGlassControlBatch` may be queued by future collectors, but current
+  OS backends treat it as a no-op.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

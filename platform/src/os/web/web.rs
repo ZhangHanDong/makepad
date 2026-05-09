@@ -579,7 +579,7 @@ impl Cx {
                     self.os.from_wasm(FromWasmNormalScreen {});
                 }
                 CxOsOp::SetWindowVisuals(_, _) => {}
-                CxOsOp::SetNativeGlassBatch(_) => {}
+                CxOsOp::SetNativeGlassBatch(_) | CxOsOp::SetNativeGlassControlBatch(_) => {}
                 CxOsOp::XrStartPresenting => {
                     self.os.from_wasm(FromWasmXrStartPresenting {});
                 }

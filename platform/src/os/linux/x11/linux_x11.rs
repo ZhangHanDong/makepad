@@ -646,7 +646,7 @@ impl X11Cx {
                         log_linux_backdrop_unsupported_once();
                     }
                 }
-                CxOsOp::SetNativeGlassBatch(_) => {}
+                CxOsOp::SetNativeGlassBatch(_) | CxOsOp::SetNativeGlassControlBatch(_) => {}
                 CxOsOp::ShowClipboardActions { .. } => {}
                 CxOsOp::CopyToClipboard(content) => {
                     if let Some(window) = opengl_windows.get(0) {

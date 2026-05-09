@@ -1165,6 +1165,7 @@ impl Cx {
                         }
                     }
                 }
+                CxOsOp::SetNativeGlassControlBatch(_) => {}
                 CxOsOp::FullscreenWindow(_window_id) => {
                     IosApp::set_fullscreen(true);
                 }

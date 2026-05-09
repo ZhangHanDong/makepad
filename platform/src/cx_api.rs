@@ -11,8 +11,8 @@ use {
         event::keyboard::CharOffset,
         event::xr::XrAnchor,
         event::{
-            video_playback::CameraPreviewMode, DragItem, NativeGlassBatch, NextFrame, Timer,
-            Trigger, VideoSource,
+            video_playback::CameraPreviewMode, DragItem, NativeGlassBatch,
+            NativeGlassControlBatch, NextFrame, Timer, Trigger, VideoSource,
         },
         gpu_info::GpuInfo,
         ime::TextInputConfig,
@@ -259,6 +259,7 @@ pub enum CxOsOp {
     SetTopmost(WindowId, bool),
     SetWindowVisuals(WindowId, WindowVisuals),
     SetNativeGlassBatch(NativeGlassBatch),
+    SetNativeGlassControlBatch(NativeGlassControlBatch),
     ShowInDock(bool),
 
     ShowTextIME(Area, Vec2d, TextInputConfig),
@@ -417,6 +418,7 @@ impl std::fmt::Debug for CxOsOp {
             Self::SetTopmost(..) => write!(f, "SetTopmost"),
             Self::SetWindowVisuals(..) => write!(f, "SetWindowVisuals"),
             Self::SetNativeGlassBatch(..) => write!(f, "SetNativeGlassBatch"),
+            Self::SetNativeGlassControlBatch(..) => write!(f, "SetNativeGlassControlBatch"),
             Self::ShowInDock(..) => write!(f, "ShowInDock"),
 
             Self::ShowTextIME(..) => write!(f, "ShowTextIME"),
