@@ -161,6 +161,14 @@ mod native_glass_tests {
     }
 
     #[test]
+    fn ios_native_glass_control_accessibility_line_records_label() {
+        assert_eq!(
+            IosApp::native_glass_control_accessibility_line(&test_control(NativeGlassStyle::Clear)),
+            "[liquid-glass] backend=apple-native-ios-controls accessibility-label control=0000000000000007 label=\"Clear\""
+        );
+    }
+
+    #[test]
     fn ios_native_glass_control_installer_uses_touch_up_inside_action_mask() {
         assert_eq!(UI_BUTTON_TYPE_SYSTEM, 1);
         assert_eq!(UI_CONTROL_EVENT_TOUCH_UP_INSIDE, 64);
@@ -714,6 +722,13 @@ impl IosApp {
         )
     }
 
+    fn native_glass_control_accessibility_line(control: &NativeGlassControlDescriptor) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-ios-controls accessibility-label control={:?} label={:?}",
+            control.id, control.label
+        )
+    }
+
     fn log_native_glass_control_batch(
         batch: &NativeGlassControlBatch,
         state: &'static str,
@@ -1177,6 +1192,7 @@ impl IosApp {
                 ];
 
                 crate::log!("{}", Self::native_glass_control_style_line(control));
+                crate::log!("{}", Self::native_glass_control_accessibility_line(control));
                 let () = msg_send![
                     host_view,
                     insertSubview: button
