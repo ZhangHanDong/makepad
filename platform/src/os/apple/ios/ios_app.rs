@@ -47,6 +47,9 @@ pub const UI_RETURN_KEY_SEARCH: i64 = 6;
 pub const UI_RETURN_KEY_SEND: i64 = 7;
 pub const UI_RETURN_KEY_DONE: i64 = 9;
 
+pub const UI_BUTTON_TYPE_SYSTEM: i64 = 1;
+pub const UI_CONTROL_EVENT_TOUCH_UP_INSIDE: u64 = 1 << 6;
+
 // this value will be fetched from multiple threads (post signal uses it)
 pub static mut IOS_CLASSES: *const IosClasses = 0 as *const _;
 // this value should not. Todo: guard this somehow proper
@@ -58,6 +61,25 @@ thread_local! {
 #[cfg(test)]
 mod native_glass_tests {
     use super::*;
+
+    fn test_control(style: NativeGlassStyle) -> NativeGlassControlDescriptor {
+        NativeGlassControlDescriptor {
+            id: crate::LiveId(7),
+            rect: Rect {
+                pos: dvec2(24.0, 48.0),
+                size: dvec2(120.0, 44.0),
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        }
+    }
 
     #[test]
     fn ios_native_glass_ui_rect_keeps_makepad_logical_coordinates() {
@@ -116,22 +138,7 @@ mod native_glass_tests {
 
     #[test]
     fn ios_native_glass_control_frame_uses_makepad_logical_rect() {
-        let control = NativeGlassControlDescriptor {
-            id: crate::LiveId(7),
-            rect: Rect {
-                pos: dvec2(24.0, 48.0),
-                size: dvec2(120.0, 44.0),
-            },
-            kind: NativeGlassControlKind::Button {
-                role: NativeGlassButtonRole::Default,
-            },
-            label: "Clear".to_string(),
-            style: NativeGlassStyle::Clear,
-            tint: None,
-            z_order: 0,
-            enabled: true,
-            visible: true,
-        };
+        let control = test_control(NativeGlassStyle::Clear);
 
         let frame = IosApp::native_glass_control_frame(&control);
 
@@ -139,6 +146,24 @@ mod native_glass_tests {
         assert_eq!(frame.origin.y, 48.0);
         assert_eq!(frame.size.width, 120.0);
         assert_eq!(frame.size.height, 44.0);
+    }
+
+    #[test]
+    fn ios_native_glass_control_style_line_records_configuration() {
+        assert_eq!(
+            IosApp::native_glass_control_style_line(&test_control(NativeGlassStyle::Regular)),
+            "[liquid-glass] backend=apple-native-ios-controls button-style control=0000000000000007 label=\"Clear\" configuration=glassButtonConfiguration style=Regular"
+        );
+        assert_eq!(
+            IosApp::native_glass_control_style_line(&test_control(NativeGlassStyle::Clear)),
+            "[liquid-glass] backend=apple-native-ios-controls button-style control=0000000000000007 label=\"Clear\" configuration=clearGlassButtonConfiguration style=Clear"
+        );
+    }
+
+    #[test]
+    fn ios_native_glass_control_installer_uses_touch_up_inside_action_mask() {
+        assert_eq!(UI_BUTTON_TYPE_SYSTEM, 1);
+        assert_eq!(UI_CONTROL_EVENT_TOUCH_UP_INSIDE, 64);
     }
 }
 
@@ -626,9 +651,8 @@ impl IosApp {
 
     fn ios_native_glass_button_configuration_class() -> ObjcId {
         unsafe {
-            makepad_objc_sys::runtime::objc_getClass(
-                b"UIButtonConfiguration\0".as_ptr() as *const _,
-            ) as ObjcId
+            makepad_objc_sys::runtime::objc_getClass(b"UIButtonConfiguration\0".as_ptr() as *const _)
+                as ObjcId
         }
     }
 
@@ -1065,13 +1089,16 @@ impl IosApp {
 
             self.clear_native_glass_control_views();
 
-            let mut visible_controls: Vec<&NativeGlassControlDescriptor> =
-                batch.controls.iter().filter(|control| control.visible).collect();
+            let mut visible_controls: Vec<&NativeGlassControlDescriptor> = batch
+                .controls
+                .iter()
+                .filter(|control| control.visible)
+                .collect();
             visible_controls.sort_by_key(|control| control.z_order);
 
             let mut installed = 0usize;
             for control in visible_controls {
-                let button: ObjcId = msg_send![button_class, buttonWithType: 1i64];
+                let button: ObjcId = msg_send![button_class, buttonWithType: UI_BUTTON_TYPE_SYSTEM];
                 if button == nil {
                     continue;
                 }
@@ -1099,7 +1126,8 @@ impl IosApp {
                     setUserInteractionEnabled: if control.enabled { YES } else { NO }
                 ];
 
-                let target: ObjcId = msg_send![get_ios_class_global().native_glass_control_target, new];
+                let target: ObjcId =
+                    msg_send![get_ios_class_global().native_glass_control_target, new];
                 if target == nil {
                     let () = msg_send![button, removeFromSuperview];
                     continue;
@@ -1111,7 +1139,7 @@ impl IosApp {
                     button,
                     addTarget: target
                     action: sel!(nativeGlassControlAction:)
-                    forControlEvents: 64u64
+                    forControlEvents: UI_CONTROL_EVENT_TOUCH_UP_INSIDE
                 ];
 
                 crate::log!("{}", Self::native_glass_control_style_line(control));
