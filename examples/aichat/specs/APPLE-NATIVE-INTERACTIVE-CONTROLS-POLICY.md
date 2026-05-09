@@ -260,10 +260,13 @@ conversion.
 
 Step 146 copies each native button descriptor label into the installed
 `NSButton` mirror with `setAccessibilityLabel:` and logs
-`accessibility-label ... label=...`. This closes the first macOS accessibility
-metadata slice. It does not complete accessibility ownership: focus traversal,
-VoiceOver behavior, duplicate labels between native and Makepad-rendered
-controls, and UIKit accessibility remain open.
+`accessibility-label ... label=...`. Studio release build `[2]` of
+`makepad-example-aichat-macos-native-clear-control-probe` logged the label
+mirrors for both `Clear` and `↑` while the native-control batch remained
+installed with glass bezel raw value `16`. This closes the first macOS
+accessibility metadata slice. It does not complete accessibility ownership:
+focus traversal, VoiceOver behavior, duplicate labels between native and
+Makepad-rendered controls, and UIKit accessibility remain open.
 
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,

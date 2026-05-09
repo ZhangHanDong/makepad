@@ -139,6 +139,12 @@ Recent verified gates:
   process-targeted CGEvent probes, but neither run produced
   `button-mouse-down`, `target-action`, `button-action`, or
   `native-control-probe=makepad-click`.
+- Step 146 mirrors macOS native button descriptor labels into AppKit
+  accessibility labels. Studio release build `[2]` of
+  `makepad-example-aichat-macos-native-clear-control-probe` logged
+  `accessibility-label ... label="Clear"` and
+  `accessibility-label ... label="↑"` while the native-control batch remained
+  installed with glass bezel raw value `16`.
 - Step 127 makes iOS `SetNativeGlassControlBatch` observable instead of silent:
   valid batches log
   `backend=apple-native-ios-controls state=Unsupported reason=installer-not-implemented`;
@@ -293,9 +299,10 @@ behavior, or full native interior Liquid Glass.
   click delivery. A physical user/system click is still unproven. UIKit
   controls are not installed; Step 127 only validates/logs unsupported iOS
   control batches. Step 146 mirrors macOS native button descriptor labels into
-  AppKit accessibility labels, but focus traversal, VoiceOver behavior,
-  duplicate native/Makepad labels, and UIKit accessibility remain unresolved.
-  Non-macOS backends remain no-op.
+  AppKit accessibility labels, and Studio release build `[2]` proves those
+  labels are applied at runtime for the aichat probe controls. Focus traversal,
+  VoiceOver behavior, duplicate native/Makepad labels, and UIKit accessibility
+  remain unresolved. Non-macOS backends remain no-op.
 - full native interior Liquid Glass is not implemented; Step 96 proves lower
   scene pass routing, and Step 98 records that the current native interleave
   visual result has no transparency/refraction/liquid distortion.

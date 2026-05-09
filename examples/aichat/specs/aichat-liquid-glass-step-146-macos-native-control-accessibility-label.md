@@ -27,6 +27,20 @@ cargo check -p makepad-platform --release
 git diff --check
 ```
 
+Studio release runtime validation:
+
+```text
+RunItem makepad-example-aichat-macos-native-clear-control-probe
+build_id=[2]
+
+[liquid-glass] state=4 substrate=macos-native style=clear style_raw=1
+[liquid-glass] backend=apple-native-controls button-style ... label="Clear" bezel=glass raw=16
+[liquid-glass] backend=apple-native-controls accessibility-label ... label="Clear"
+[liquid-glass] backend=apple-native-controls button-style ... label="↑" bezel=glass raw=16
+[liquid-glass] backend=apple-native-controls accessibility-label ... label="↑"
+[liquid-glass] backend=apple-native-controls state=Installed reason=installed-appkit-buttons controls_total=2 controls_visible=2
+```
+
 ## Verdict
 
 This closes the first macOS native-control accessibility metadata slice: labels
