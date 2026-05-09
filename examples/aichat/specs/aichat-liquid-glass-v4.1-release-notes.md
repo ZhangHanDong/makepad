@@ -97,6 +97,14 @@ route for complete aichat interior glass is now `ShaderBackdropInterior`; the
 current native macOS path should be described as `AppleNativeUnderlay`, not
 "full native" Liquid Glass.
 
+Later native interleave probes reached a more specific conclusion. Step 96
+proved a dedicated aichat lower scene pass can be rendered and routed to the
+macOS lower scene surface. Step 98 recorded the manual visual verdict: the user
+saw only a gray/grid lower scene, with no transparency and no recognizable
+blur/refraction/liquid distortion. Step 99 therefore keeps
+`AICHAT_GLASS_BACKEND=apple-native-interleave` as a guarded prototype value and
+falls back to `ShaderBackdropInterior` with a fail-verdict warning.
+
 ## Known v4.1 Limitations
 
 v4.1 intentionally does not handle:
@@ -111,12 +119,14 @@ v4.1 intentionally does not handle:
 - native popup/modal windows
 - iOS/iPadOS native backend
 - native + shader backdrop mixing in one window
+- production AppleNativeInterleave
 - complete interior Liquid Glass treatment in the current under-Metal
   compositing model
 
-ShaderBackdrop remains a separate future phase. It requires offscreen scene
-capture, blur/refraction passes, and panel sampling; it should not be mixed with
-the AppleNative backend in the same v4.1 window.
+ShaderBackdrop is now the selected route for complete aichat interior visuals
+after the native interleave fail verdict. It requires offscreen scene capture,
+blur/refraction passes, and panel sampling; it should not be mixed with the
+AppleNative underlay backend in the same v4.1 window.
 
 ## Required Smoke Targets
 
