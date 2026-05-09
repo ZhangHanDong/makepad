@@ -88,6 +88,14 @@ This proves the native-control hit-test/action ownership path on macOS, but it
 does not prove macOS 26 glass-specific `NSButton` styling. aichat remains
 opt-in; no app buttons are enabled as native controls by default.
 
+Step 109 adds an aichat runtime probe gate:
+
+- `AICHAT_NATIVE_CONTROL_PROBE=buttons|1|true|on`
+- startup marks `clear_button` and `send_button` as `native_control: true`
+
+This gives Studio a runnable path for macOS native-control validation while
+keeping default aichat behavior unchanged.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -118,6 +126,7 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - macOS AppKit control installation currently mirrors only `NSButton` title,
   enabled/hidden state, rect, and target/action; glass-specific button styling
   remains unproven.
+- aichat native controls are opt-in behind `AICHAT_NATIVE_CONTROL_PROBE`.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

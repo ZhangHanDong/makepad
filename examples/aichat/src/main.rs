@@ -1643,6 +1643,16 @@ fn native_spacing_probe_enabled() -> bool {
     )
 }
 
+fn native_control_probe_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "on" | "buttons"))
+}
+
+fn native_control_probe_enabled() -> bool {
+    native_control_probe_enabled_from_value(
+        std::env::var("AICHAT_NATIVE_CONTROL_PROBE").ok().as_deref(),
+    )
+}
+
 fn native_spacing_probe_spacing_for_frame(frame: u32) -> f64 {
     let phase = frame % 120;
     let t = if phase <= 60 {
@@ -5493,6 +5503,21 @@ impl App {
         self.ui.redraw(cx);
     }
 
+    fn apply_native_control_probe(&mut self, cx: &mut Cx) {
+        let mut clear_button = self.ui.widget(cx, ids!(clear_button));
+        script_apply_eval!(cx, clear_button, {
+            native_control: true
+        });
+
+        let mut send_button = self.ui.widget(cx, ids!(send_button));
+        script_apply_eval!(cx, send_button, {
+            native_control: true
+        });
+
+        log!("[liquid-glass] native-control-probe=buttons-enabled ids=clear_button,send_button");
+        self.ui.redraw(cx);
+    }
+
     fn apply_glass_appearance(&mut self, cx: &mut Cx, appearance: GlassAppearance, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         AICHAT_NATIVE_GLASS_ACTIVE.store(
@@ -6014,6 +6039,9 @@ impl MatchEvent for App {
             self.apply_native_spacing_probe(cx);
             self.native_spacing_probe_next_frame = cx.new_next_frame();
         }
+        if native_control_probe_enabled() {
+            self.apply_native_control_probe(cx);
+        }
     }
 
     fn handle_next_frame(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
@@ -6247,17 +6275,18 @@ mod tests {
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
-        native_display_backing_scale_changed, native_fullscreen_probe_enabled_from_value,
-        native_fullscreen_probe_should_continue_wait, native_fullscreen_probe_should_start,
-        native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
-        native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
-        native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
-        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
-        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
-        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
-        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
-        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
-        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_control_probe_enabled_from_value, native_display_backing_scale_changed,
+        native_fullscreen_probe_enabled_from_value, native_fullscreen_probe_should_continue_wait,
+        native_fullscreen_probe_should_start, native_inactive_probe_enabled_from_value,
+        native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
+        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
+        native_substrate_resolved_appearance, parse_glass_backend, render_state_templates,
+        render_state_templates_for_ui, resolve_glass_appearance, resolve_startup_glass_appearance,
+        shader_backdrop_visual_profile, should_start_window_drag, Agent, App, AppCapability,
+        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6649,6 +6678,16 @@ mod tests {
         assert!(native_spacing_probe_enabled_from_value(Some("true")));
         assert!(!native_spacing_probe_enabled_from_value(None));
         assert!(!native_spacing_probe_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn aichat_native_control_probe_env_accepts_button_values() {
+        assert!(native_control_probe_enabled_from_value(Some("buttons")));
+        assert!(native_control_probe_enabled_from_value(Some("1")));
+        assert!(native_control_probe_enabled_from_value(Some("true")));
+        assert!(native_control_probe_enabled_from_value(Some("on")));
+        assert!(!native_control_probe_enabled_from_value(None));
+        assert!(!native_control_probe_enabled_from_value(Some("off")));
     }
 
     #[test]
