@@ -49,6 +49,10 @@ The current production path remains:
 - Step 63 adds the `makepad-example-aichat-macos-native-clear-spacing-probe`
   Studio runnable and `AICHAT_NATIVE_SPACING_PROBE=animate` app-side animation
   to exercise repeated native spacing updates.
+- Step 129 records Studio release build `[140]` for the spacing animation
+  probe. It ran frame `0 -> 120`, spacing `12 -> 36 -> 12`, and repeatedly
+  logged `native-container-spacing` while the native batch remained Installed.
+  This proves the runtime update path but not the final morphing visual quality.
 
 ### Scroll edge glass
 

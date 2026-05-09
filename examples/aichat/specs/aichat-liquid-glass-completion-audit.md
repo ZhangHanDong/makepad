@@ -137,6 +137,12 @@ Recent verified gates:
   build `[139]`. The app reached State 4 and requested fullscreen, but logged
   `native-fullscreen-probe=timeout phase=enter` with no later fallback, restore,
   exit, or native panel frame evidence. Fullscreen remains unproven.
+- Step 129 runs
+  `makepad-example-aichat-macos-native-clear-spacing-probe` in Studio release
+  build `[140]`. The probe ran frame `0 -> 120`, spacing `12 -> 36 -> 12`, and
+  repeatedly logged `native-container-spacing` while the native batch remained
+  Installed. Morphing visual quality and resize-after-animation remain
+  unproven.
 - macOS system screenshot
   `/Users/zhangalex/Desktop/截屏2026-05-09 18.15.46.png` captured the final
   AppKit/window-server composition for `makepad-example-aichat-macos-native-clear`;
@@ -181,6 +187,8 @@ behavior, or full native interior Liquid Glass.
 - Phase H is not implemented.
 - Step 128 confirms the fullscreen probe path is reachable, but fullscreen
   enter/exit validation did not complete in Studio build `[139]`.
+- Step 129 confirms animated spacing updates keep the macOS native batch
+  installed, but it does not prove final morphing visual quality.
 - Phase I is not implemented.
 - Runtime switching remains a known limitation.
 - Fullscreen-specific native glass behavior remains a known limitation.
