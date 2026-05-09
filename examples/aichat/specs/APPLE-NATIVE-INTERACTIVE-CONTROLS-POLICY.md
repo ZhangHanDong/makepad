@@ -77,6 +77,17 @@ Step 107 makes macOS consume control batches for diagnostics:
 This is intentionally not AppKit control installation yet; it proves the op
 reaches the macOS backend and remains honest about missing native controls.
 
+Step 108 adds the first macOS AppKit installer skeleton:
+
+- visible native button descriptors create `NSButton` mirrors above the Metal
+  view
+- `NativeGlassControlTarget` posts `NativeGlassControlActivatedEvent`
+- descriptor labels become `NSButton` titles
+
+This proves the native-control hit-test/action ownership path on macOS, but it
+does not prove macOS 26 glass-specific `NSButton` styling. aichat remains
+opt-in; no app buttons are enabled as native controls by default.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -103,7 +114,10 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
 - `NativeGlassControlDescriptor.label` is the platform-neutral title payload for
   the first native button installer; icon transport is not part of this slice.
 - macOS validates and logs native control batches but does not create AppKit
-  controls yet.
+  controls unless explicit `Button.native_control` descriptors are present.
+- macOS AppKit control installation currently mirrors only `NSButton` title,
+  enabled/hidden state, rect, and target/action; glass-specific button styling
+  remains unproven.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

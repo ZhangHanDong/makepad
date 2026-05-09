@@ -5,9 +5,10 @@ use {
             finger::MouseButton, DragItem, KeyModifiers, MouseDownEvent, MouseMoveEvent,
             MouseUpEvent, NativeGlassBackendState, NativeGlassBatch, NativeGlassBatchResult,
             NativeGlassBatchValidationError, NativeGlassContainerResult, NativeGlassControlBatch,
-            NativeGlassControlBatchValidationError, NativeGlassHitTest, NativeGlassInstallState,
-            NativeGlassPanelDescriptor, NativeGlassPanelResult, NativeGlassStyle, ScrollEvent,
-            TextInputEvent, WindowCloseRequestedEvent, WindowClosedEvent, WindowDragQueryEvent,
+            NativeGlassControlBatchValidationError, NativeGlassControlDescriptor,
+            NativeGlassHitTest, NativeGlassInstallState, NativeGlassPanelDescriptor,
+            NativeGlassPanelResult, NativeGlassStyle, ScrollEvent, TextInputEvent,
+            WindowCloseRequestedEvent, WindowClosedEvent, WindowDragQueryEvent,
             WindowDragQueryResponse, WindowGeom, WindowGeomChangeEvent,
             WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
             WindowNativeSubstrateStyle,
@@ -118,6 +119,8 @@ pub struct MacosWindow {
     pub(crate) native_glass_panel_views: Vec<ObjcId>,
     pub(crate) last_native_glass_batch: Option<NativeGlassBatch>,
     pub(crate) last_native_glass_batch_result: Option<NativeGlassBatchResult>,
+    pub(crate) native_glass_control_views: Vec<ObjcId>,
+    pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) above_metal_glass_probe_view: ObjcId,
@@ -665,6 +668,15 @@ impl MacosWindow {
         }
     }
 
+    fn clear_native_glass_control_views(&mut self) {
+        unsafe {
+            for control in self.native_glass_control_views.drain(..) {
+                let () = msg_send![control, removeFromSuperview];
+            }
+            self.native_glass_control_targets.clear();
+        }
+    }
+
     fn native_glass_result_for_validation_error(
         &self,
         batch: &NativeGlassBatch,
@@ -789,6 +801,61 @@ impl MacosWindow {
         );
     }
 
+    fn native_glass_button_class() -> ObjcId {
+        unsafe {
+            makepad_objc_sys::runtime::objc_getClass(b"NSButton\0".as_ptr() as *const c_char)
+                as ObjcId
+        }
+    }
+
+    fn native_glass_control_frame(
+        control: &NativeGlassControlDescriptor,
+        bounds: NSRect,
+    ) -> NSRect {
+        Self::native_glass_ns_rect_from_makepad_rect(control.rect, bounds.size.height)
+    }
+
+    unsafe fn install_native_glass_button_control(
+        &mut self,
+        control: &NativeGlassControlDescriptor,
+        button_class: ObjcId,
+        bounds: NSRect,
+    ) -> bool {
+        let button_frame = Self::native_glass_control_frame(control, bounds);
+        let button: ObjcId = msg_send![button_class, alloc];
+        let button: ObjcId = msg_send![button, initWithFrame: button_frame];
+        if button == nil {
+            return false;
+        }
+
+        let title = str_to_nsstring(&control.label);
+        let () = msg_send![button, setTitle: title];
+        let () = msg_send![button, setEnabled: if control.enabled { YES } else { NO }];
+        let () = msg_send![button, setHidden: if control.visible { NO } else { YES }];
+        let () = msg_send![button, setWantsLayer: YES];
+
+        let target: ObjcId = msg_send![get_macos_class_global().native_glass_control_target, new];
+        if target == nil {
+            let () = msg_send![button, removeFromSuperview];
+            return false;
+        }
+        (*target).set_ivar("window_index", self.window_id.0);
+        (*target).set_ivar("window_generation", self.window_id.1);
+        (*target).set_ivar("control_id_u64", control.id.0);
+        let () = msg_send![button, setTarget: target];
+        let () = msg_send![button, setAction: sel!(nativeGlassControlAction:)];
+
+        let () = msg_send![
+            self.container_view,
+            addSubview: button
+            positioned: 1i64
+            relativeTo: self.view
+        ];
+        self.native_glass_control_views.push(button);
+        self.native_glass_control_targets.push(target);
+        true
+    }
+
     pub(crate) fn update_native_glass_control_batch(&mut self, batch: NativeGlassControlBatch) {
         if self
             .last_native_glass_control_batch
@@ -809,12 +876,48 @@ impl MacosWindow {
             return;
         }
 
-        Self::log_native_glass_control_batch(
-            &batch,
-            NativeGlassBackendState::Unsupported,
-            "installer-not-implemented",
-        );
-        self.last_native_glass_control_batch = Some(batch);
+        unsafe {
+            self.clear_native_glass_control_views();
+            let button_class = Self::native_glass_button_class();
+            if button_class == nil {
+                Self::log_native_glass_control_batch(
+                    &batch,
+                    NativeGlassBackendState::Unsupported,
+                    "nsbutton-class-missing",
+                );
+                self.last_native_glass_control_batch = Some(batch);
+                return;
+            }
+
+            let bounds: NSRect = msg_send![self.container_view, bounds];
+            let mut visible_controls: Vec<&NativeGlassControlDescriptor> = batch
+                .controls
+                .iter()
+                .filter(|control| control.visible)
+                .collect();
+            visible_controls.sort_by_key(|control| control.z_order);
+
+            let mut installed = 0usize;
+            for control in visible_controls {
+                if self.install_native_glass_button_control(control, button_class, bounds) {
+                    installed += 1;
+                }
+            }
+
+            let visible_count = batch.visible_control_count();
+            let (state, reason) = if visible_count == installed {
+                (
+                    NativeGlassBackendState::Installed,
+                    "installed-appkit-buttons",
+                )
+            } else if installed == 0 {
+                (NativeGlassBackendState::Rejected, "button-install-failed")
+            } else {
+                (NativeGlassBackendState::Partial, "partial-button-install")
+            };
+            Self::log_native_glass_control_batch(&batch, state, reason);
+            self.last_native_glass_control_batch = Some(batch);
+        }
     }
 
     pub(crate) fn log_native_glass_frame_snapshot(
@@ -1124,6 +1227,8 @@ impl MacosWindow {
                 native_glass_panel_views: Vec::new(),
                 last_native_glass_batch: None,
                 last_native_glass_batch_result: None,
+                native_glass_control_views: Vec::new(),
+                native_glass_control_targets: Vec::new(),
                 last_native_glass_control_batch: None,
                 proof_substrate_view: nil,
                 above_metal_glass_probe_view: nil,

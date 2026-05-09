@@ -1,7 +1,11 @@
 use {
     crate::{
         cursor::MouseCursor,
-        event::{finger::MouseButton, DragEvent, DragItem, DragResponse, DropEvent},
+        cx::Cx,
+        event::{
+            finger::MouseButton, DragEvent, DragItem, DragResponse, DropEvent,
+            NativeGlassControlActivatedEvent,
+        },
         makepad_live_id::LiveId,
         makepad_math::Vec2d,
         os::{
@@ -17,6 +21,7 @@ use {
                 macos_window::get_cocoa_window,
             },
         },
+        window::WindowId,
     },
     std::{ffi::CStr, os::raw::c_void, sync::Arc, sync::Mutex},
 };
@@ -79,6 +84,33 @@ pub fn define_menu_target_class() -> *const Class {
         );
     }
     decl.add_ivar::<usize>("command_u64");
+    return decl.register();
+}
+
+pub fn define_native_glass_control_target_class() -> *const Class {
+    extern "C" fn native_glass_control_action(this: &Object, _sel: Sel, _item: ObjcId) {
+        unsafe {
+            let window_index: usize = *this.get_ivar("window_index");
+            let window_generation: u64 = *this.get_ivar("window_generation");
+            let control_id_u64: u64 = *this.get_ivar("control_id_u64");
+            Cx::post_action(NativeGlassControlActivatedEvent {
+                window_id: WindowId(window_index, window_generation),
+                control_id: LiveId(control_id_u64),
+            });
+        }
+    }
+
+    let superclass = class!(NSObject);
+    let mut decl = ClassDecl::new("NativeGlassControlTarget", superclass).unwrap();
+    unsafe {
+        decl.add_method(
+            sel!(nativeGlassControlAction:),
+            native_glass_control_action as extern "C" fn(&Object, Sel, ObjcId),
+        );
+    }
+    decl.add_ivar::<usize>("window_index");
+    decl.add_ivar::<u64>("window_generation");
+    decl.add_ivar::<u64>("control_id_u64");
     return decl.register();
 }
 
