@@ -384,12 +384,13 @@ fn ios_native_glass_selector_preflight_result_from_missing_selector(
     }
 }
 
-fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 14] {
+fn ios_native_glass_required_selector_checks() -> [(&'static str, &'static str); 15] {
     [
         ("UIVisualEffectView", "initWithEffect:"),
         ("UIVisualEffectView", "contentView"),
         ("UIVisualEffectView", "setFrame:"),
         ("UIVisualEffectView", "setUserInteractionEnabled:"),
+        ("UIVisualEffectView", "setAutoresizingMask:"),
         ("UIVisualEffectView", "addSubview:"),
         ("UIVisualEffectView", "layer"),
         ("UIGlassEffect", "initWithStyle:"),
@@ -429,6 +430,11 @@ fn ios_native_glass_selector_exists(class_name: &'static str, selector_name: &'s
             "setUserInteractionEnabled:" => {
                 let responds: BOOL =
                     msg_send![class, instancesRespondToSelector: sel!(setUserInteractionEnabled:)];
+                responds == YES
+            }
+            "setAutoresizingMask:" => {
+                let responds: BOOL =
+                    msg_send![class, instancesRespondToSelector: sel!(setAutoresizingMask:)];
                 responds == YES
             }
             "addSubview:" => {
@@ -2259,6 +2265,7 @@ mod tests {
                 ("UIVisualEffectView", "contentView"),
                 ("UIVisualEffectView", "setFrame:"),
                 ("UIVisualEffectView", "setUserInteractionEnabled:"),
+                ("UIVisualEffectView", "setAutoresizingMask:"),
                 ("UIVisualEffectView", "addSubview:"),
                 ("UIVisualEffectView", "layer"),
                 ("UIGlassEffect", "initWithStyle:"),
