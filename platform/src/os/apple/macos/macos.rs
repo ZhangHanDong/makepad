@@ -1451,7 +1451,16 @@ impl Cx {
                         }
                     }
                 }
-                CxOsOp::SetNativeGlassControlBatch(_) => {}
+                CxOsOp::SetNativeGlassControlBatch(batch) => {
+                    if let Some(metal_window) = metal_windows
+                        .iter_mut()
+                        .find(|w| w.window_id == batch.window_id)
+                    {
+                        metal_window
+                            .cocoa_window
+                            .update_native_glass_control_batch(batch);
+                    }
+                }
                 CxOsOp::ShowTextIME(area, pos, _config) => {
                     let pos = area.clipped_rect(self).pos + pos;
                     metal_windows.iter_mut().for_each(|w| {

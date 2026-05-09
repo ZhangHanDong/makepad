@@ -67,6 +67,16 @@ Step 106 adds descriptor content needed by a native button installer:
 Icon/image transport remains out of scope, so icon-only native controls can use
 an empty label until a later descriptor slice adds image data.
 
+Step 107 makes macOS consume control batches for diagnostics:
+
+- `CxOsOp::SetNativeGlassControlBatch` forwards to
+  `MacosWindow::update_native_glass_control_batch`
+- valid batches log `state=Unsupported reason=installer-not-implemented`
+- invalid batches log stable rejection reasons
+
+This is intentionally not AppKit control installation yet; it proves the op
+reaches the macOS backend and remains honest about missing native controls.
+
 This keeps the landed AppleNativeUnderlay path safe: AppKit native glass panels
 do not become input owners, and Makepad continues to handle text, scroll,
 clicks, command menus, drag, generated Splash UI, and Studio inspection.
@@ -92,6 +102,8 @@ clicks, command menus, drag, generated Splash UI, and Studio inspection.
   their existing action APIs.
 - `NativeGlassControlDescriptor.label` is the platform-neutral title payload for
   the first native button installer; icon transport is not part of this slice.
+- macOS validates and logs native control batches but does not create AppKit
+  controls yet.
 - Native button research lives in `APPLE-NATIVE-BUTTON-GLASS-RESEARCH.md`; it is
   not implementation evidence.
 

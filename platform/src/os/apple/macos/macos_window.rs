@@ -4,11 +4,12 @@ use {
         event::{
             finger::MouseButton, DragItem, KeyModifiers, MouseDownEvent, MouseMoveEvent,
             MouseUpEvent, NativeGlassBackendState, NativeGlassBatch, NativeGlassBatchResult,
-            NativeGlassBatchValidationError, NativeGlassContainerResult, NativeGlassHitTest,
-            NativeGlassInstallState, NativeGlassPanelDescriptor, NativeGlassPanelResult,
-            NativeGlassStyle, ScrollEvent, TextInputEvent, WindowCloseRequestedEvent,
-            WindowClosedEvent, WindowDragQueryEvent, WindowDragQueryResponse, WindowGeom,
-            WindowGeomChangeEvent, WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
+            NativeGlassBatchValidationError, NativeGlassContainerResult, NativeGlassControlBatch,
+            NativeGlassControlBatchValidationError, NativeGlassHitTest, NativeGlassInstallState,
+            NativeGlassPanelDescriptor, NativeGlassPanelResult, NativeGlassStyle, ScrollEvent,
+            TextInputEvent, WindowCloseRequestedEvent, WindowClosedEvent, WindowDragQueryEvent,
+            WindowDragQueryResponse, WindowGeom, WindowGeomChangeEvent,
+            WindowNativeSubstrateResolvedEvent, WindowNativeSubstrateState,
             WindowNativeSubstrateStyle,
         },
         makepad_math::{Rect, Vec2d, Vec4f},
@@ -117,6 +118,7 @@ pub struct MacosWindow {
     pub(crate) native_glass_panel_views: Vec<ObjcId>,
     pub(crate) last_native_glass_batch: Option<NativeGlassBatch>,
     pub(crate) last_native_glass_batch_result: Option<NativeGlassBatchResult>,
+    pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) above_metal_glass_probe_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
@@ -760,6 +762,61 @@ impl MacosWindow {
         }
     }
 
+    fn native_glass_control_validation_reason(
+        error: NativeGlassControlBatchValidationError,
+    ) -> &'static str {
+        match error {
+            NativeGlassControlBatchValidationError::TooManyVisibleControls { .. } => {
+                "too-many-visible-controls"
+            }
+            NativeGlassControlBatchValidationError::EmptyVisibleControlRect { .. } => {
+                "empty-visible-control-rect"
+            }
+        }
+    }
+
+    fn log_native_glass_control_batch(
+        batch: &NativeGlassControlBatch,
+        state: NativeGlassBackendState,
+        reason: &'static str,
+    ) {
+        crate::log!(
+            "[liquid-glass] backend=apple-native-controls state={:?} reason={} controls_total={} controls_visible={}",
+            state,
+            reason,
+            batch.controls.len(),
+            batch.visible_control_count()
+        );
+    }
+
+    pub(crate) fn update_native_glass_control_batch(&mut self, batch: NativeGlassControlBatch) {
+        if self
+            .last_native_glass_control_batch
+            .as_ref()
+            .map(|last| last.equivalent_for_native_update(&batch))
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        if let Err(error) = batch.validate_v4_10() {
+            Self::log_native_glass_control_batch(
+                &batch,
+                NativeGlassBackendState::Rejected,
+                Self::native_glass_control_validation_reason(error),
+            );
+            self.last_native_glass_control_batch = Some(batch);
+            return;
+        }
+
+        Self::log_native_glass_control_batch(
+            &batch,
+            NativeGlassBackendState::Unsupported,
+            "installer-not-implemented",
+        );
+        self.last_native_glass_control_batch = Some(batch);
+    }
+
     pub(crate) fn log_native_glass_frame_snapshot(
         &self,
         reason: &'static str,
@@ -1067,6 +1124,7 @@ impl MacosWindow {
                 native_glass_panel_views: Vec::new(),
                 last_native_glass_batch: None,
                 last_native_glass_batch_result: None,
+                last_native_glass_control_batch: None,
                 proof_substrate_view: nil,
                 above_metal_glass_probe_view: nil,
                 container_view,
@@ -1946,7 +2004,10 @@ pub fn get_cocoa_window(this: &Object) -> &mut MacosWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LiveId, NativeGlassContainerDescriptor, NativeGlassShape};
+    use crate::{
+        LiveId, NativeGlassContainerDescriptor, NativeGlassControlBatchValidationError,
+        NativeGlassShape,
+    };
 
     #[test]
     fn borderless_standard_windows_can_still_resize() {
@@ -2039,6 +2100,27 @@ mod tests {
         assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("true")));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn native_glass_control_validation_reason_maps_errors() {
+        assert_eq!(
+            MacosWindow::native_glass_control_validation_reason(
+                NativeGlassControlBatchValidationError::TooManyVisibleControls {
+                    count: 25,
+                    max: 24,
+                }
+            ),
+            "too-many-visible-controls"
+        );
+        assert_eq!(
+            MacosWindow::native_glass_control_validation_reason(
+                NativeGlassControlBatchValidationError::EmptyVisibleControlRect {
+                    control_id: LiveId(7),
+                }
+            ),
+            "empty-visible-control-rect"
+        );
     }
 
     #[test]
