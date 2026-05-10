@@ -1275,6 +1275,11 @@ impl Cx {
                     &re.new_geom,
                 );
             }
+            if MacosWindow::native_glass_window_geometry_changed(&re.old_geom, &re.new_geom) {
+                window
+                    .cocoa_window
+                    .refresh_native_glass_control_frames_for_geometry_change();
+            }
             window.window_geom = re.new_geom.clone();
             self.windows[re.window_id].window_geom = re.new_geom.clone();
 
@@ -1392,8 +1397,7 @@ impl Cx {
                                 "[liquid-glass] transient-window=popup state=Rejected reason=backend-not-native"
                             );
                         }
-                        if native_glass_transient_dismiss_probe_enabled()
-                            && parent_ns_window != nil
+                        if native_glass_transient_dismiss_probe_enabled() && parent_ns_window != nil
                         {
                             let () = unsafe { msg_send![parent_ns_window, makeKeyWindow] };
                             crate::log!(

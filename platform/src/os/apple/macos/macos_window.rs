@@ -1217,10 +1217,7 @@ impl MacosWindow {
             msg_send![button, respondsToSelector: set_accessibility_label_sel];
         if can_set_accessibility_label == YES {
             let () = msg_send![button, setAccessibilityLabel: title];
-            crate::log!(
-                "{}",
-                Self::native_glass_control_accessibility_line(control)
-            );
+            crate::log!("{}", Self::native_glass_control_accessibility_line(control));
         } else {
             crate::log!(
                 "[liquid-glass] backend=apple-native-controls accessibility-label control={:?} label={:?} state=Unsupported reason=setAccessibilityLabel-missing",
@@ -1300,11 +1297,28 @@ impl MacosWindow {
     }
 
     pub(crate) fn update_native_glass_control_batch(&mut self, batch: NativeGlassControlBatch) {
+        self.update_native_glass_control_batch_inner(batch, false, "descriptor-update");
+    }
+
+    pub(crate) fn refresh_native_glass_control_frames_for_geometry_change(&mut self) {
+        let Some(batch) = self.last_native_glass_control_batch.clone() else {
+            return;
+        };
+        self.update_native_glass_control_batch_inner(batch, true, "geometry-change");
+    }
+
+    fn update_native_glass_control_batch_inner(
+        &mut self,
+        batch: NativeGlassControlBatch,
+        force_reinstall: bool,
+        reason: &'static str,
+    ) {
         if self
             .last_native_glass_control_batch
             .as_ref()
             .map(|last| last.equivalent_for_native_update(&batch))
             .unwrap_or(false)
+            && !force_reinstall
         {
             return;
         }
@@ -1320,6 +1334,14 @@ impl MacosWindow {
         }
 
         unsafe {
+            if force_reinstall {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=frame-refresh reason={} controls_total={} controls_visible={}",
+                    reason,
+                    batch.controls.len(),
+                    batch.visible_control_count()
+                );
+            }
             self.clear_native_glass_control_views();
             let button_class = Self::native_glass_button_class();
             if button_class == nil {
@@ -2724,8 +2746,7 @@ mod tests {
             },
         };
 
-        let line =
-            MacosWindow::native_glass_control_frame_snapshot_line(&control, control_frame);
+        let line = MacosWindow::native_glass_control_frame_snapshot_line(&control, control_frame);
 
         assert!(line.contains("native-control-frame"));
         assert!(line.contains("control=0000000000000003"));
@@ -2789,26 +2810,33 @@ mod tests {
             visible: true,
         };
 
-        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
-            Some("Clear"),
-            &control
-        ));
-        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
-            Some("clear"),
-            &control
-        ));
-        assert!(MacosWindow::native_glass_control_perform_click_probe_matches_value(
-            Some("all"),
-            &control
-        ));
-        assert!(!MacosWindow::native_glass_control_perform_click_probe_matches_value(
-            Some("Send"),
-            &control
-        ));
-        assert!(!MacosWindow::native_glass_control_perform_click_probe_matches_value(
-            None,
-            &control
-        ));
+        assert!(
+            MacosWindow::native_glass_control_perform_click_probe_matches_value(
+                Some("Clear"),
+                &control
+            )
+        );
+        assert!(
+            MacosWindow::native_glass_control_perform_click_probe_matches_value(
+                Some("clear"),
+                &control
+            )
+        );
+        assert!(
+            MacosWindow::native_glass_control_perform_click_probe_matches_value(
+                Some("all"),
+                &control
+            )
+        );
+        assert!(
+            !MacosWindow::native_glass_control_perform_click_probe_matches_value(
+                Some("Send"),
+                &control
+            )
+        );
+        assert!(
+            !MacosWindow::native_glass_control_perform_click_probe_matches_value(None, &control)
+        );
     }
 
     #[test]
@@ -2946,7 +2974,9 @@ mod tests {
     fn native_glass_geometry_snapshot_env_accepts_truthy_values() {
         assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("1")));
         assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("true")));
-        assert!(MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("self-resize")));
+        assert!(
+            MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("self-resize"))
+        );
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
     }

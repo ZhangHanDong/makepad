@@ -348,7 +348,13 @@ behavior, or full native interior Liquid Glass.
   screenshot's expected macOS native visual result. The Step 162 live log query
   still has no post-install `window-send-event`, `button-mouse-down`,
   `target-action`, `button-action`, or `native-control-probe=makepad-click`
-  entries, so a physical user/system click is still unproven.
+  entries. Step 163 records a subsequent physical click against build `[4]`:
+  the click reached `NSWindow.sendEvent:` and the Metal view, but hit
+  `RenderViewClass` rather than `NativeGlassButton`, with no `target-action`,
+  `button-action`, or `makepad-click` logs. Step 163 fixes the identified
+  geometry-sync root cause by forcing native-control AppKit frame refresh on
+  macOS window geometry changes, and build `[5]` revalidated native-control
+  installation. A post-fix physical click is still unproven.
   UIKit controls now have a compiled UIKit installer skeleton from Step 148,
   and Step 152 makes the `touchUpInside` action mask explicit in code/tests,
   and Step 153 maps native enabled state with a selector preflight, but no iOS
@@ -413,8 +419,8 @@ behavior, or full native interior Liquid Glass.
    with recognizable native transparency/refraction/liquid distortion before it
    can replace the current route.
 3. Close the macOS native-control physical-click gate by clicking the visible
-   `Clear` button in build `[4]` or a fresh `macos-native-clear-control-probe`
-   run and proving the diagnostic chain:
+   `Clear` button in build `[5]` or a fresh `macos-native-clear-control-probe`
+   run after Step 163 and proving the diagnostic chain:
    `window-send-event -> button-mouse-down -> target-action -> button-action -> native-control-probe=makepad-click`.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
