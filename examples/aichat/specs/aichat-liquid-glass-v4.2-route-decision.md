@@ -16,6 +16,22 @@ view and kept input owned by Makepad. It reached native State 4 and showed edge
 or substrate effects, but the user could not identify meaningful full interior
 glass. That path is `AppleNativeUnderlay`, not full native Liquid Glass.
 
+The edge-heavy visual result is expected for this compositing model. The native
+`NSGlassEffectView` / `NSGlassEffectContainerView` hierarchy is below the
+transparent Makepad Metal view, while aichat's panels, cards, readability
+overlays, input field, text, and generated UI are painted above it. The native
+material is therefore most visible where Makepad coverage is thinnest: rounded
+edges, rims, halos, gaps, and other low-alpha regions. The opaque or
+semi-opaque interior layers hide most of the native material in the middle of a
+panel.
+
+This is an architecture boundary, not just a tuning issue. More aggressive
+tint/noise/halo tuning can make the underlay easier or harder to perceive, but
+it cannot make AppKit sample and refract the already-rendered Makepad interior
+content through a single Metal layer. Full interior glass requires either a
+Makepad-rendered backdrop/refraction route or a later native interleave renderer
+with separate lower and upper Makepad surfaces.
+
 ### Above-Metal Probe
 
 The v4.2 above-Metal probe installed a diagnostic `NSGlassEffectView` above the
