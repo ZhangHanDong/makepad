@@ -91,6 +91,12 @@ the primary pass. This keeps Studio screenshots useful for the Makepad
 foreground surface, while native AppKit material visibility still requires
 manual/system visual validation.
 
+Step 175 audits the fixed screenshot's alpha channel. The apparent black
+background is mostly alpha=0, so the current transparent-overlay probe is close
+to a foreground-only upper Makepad surface at the framebuffer level. The
+remaining gate is manual/system validation of whether AppKit native glass is
+visibly sampling the lower Makepad surface through that foreground.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
