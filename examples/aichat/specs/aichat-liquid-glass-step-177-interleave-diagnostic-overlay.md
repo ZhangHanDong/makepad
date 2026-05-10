@@ -82,6 +82,26 @@ Key logs:
 [liquid-glass] backend=apple-native-underlay state=Installed containers=1 panels_installed=4 panels_failed=0
 ```
 
+Studio foreground screenshot:
+
+```text
+/var/folders/rj/fpdb5j3d71v4h0464cs2xn500000gn/T/makepad_studio_hub/build-30-kind-0-req-2833-1778411977919.png
+```
+
+Alpha histogram:
+
+```text
+size (900, 700)
+zero_alpha 589869
+nonzero_alpha 40131
+opaque_alpha 1706
+min_alpha 0
+max_alpha 255
+```
+
+The diagnostic target therefore preserves the foreground-only property from
+Step 175 while switching the lower scene to the stronger `Refraction` profile.
+
 ## Verdict
 
 The diagnostic overlay target is now the preferred manual visual gate for the
