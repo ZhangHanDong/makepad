@@ -1,72 +1,86 @@
-# 两种运行模式
+# 传输绑定
 
-Agent2View 有两种已经落地或计划落地的模式。
+传输绑定把通用协议内核映射到具体消息承载。它不改变协议语义，只改变数据如何传输、谁能观察、失败如何降级。
 
-## Local Runtime
+## 内核到绑定的映射
 
-Local Runtime 模式用于 aichat。
+| Core Concept | Local Binding | Remote/Event Binding |
+|---|---|---|
+| AgentEndpoint | 当前 LLM session / 本地工具 Agent | Matrix room Agent / 服务端 producer |
+| ViewSpec | `appplan json` + `runsplash` | `org.octos.app` envelope + template id |
+| DataSnapshot | Host-owned data / APP_DEMO_STATE | Matrix event content |
+| Host State | local session state / input drafts | in-memory AgentViewSession |
+| Template | LLM-generated runsplash 或本地模板 | 本地注册静态模板 |
+| Action | `agent.notify(event_id, payload)` | `org.octos.action_response` |
+| ActionResult | Host local reducer 结果或新 DataSnapshot | Agent 产生的新 snapshot event |
+| Failure | log/ignore 或显示错误 view | fallback 到 `body` |
+
+## Local Binding
+
+Local binding 用于 aichat 这类本地 AppGen 场景。
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant L as LLM
+    participant A as Local AgentEndpoint
+    participant H as Host
     participant M as Markdown/Splash
-    participant H as aichat Host
-    participant S as APP_DEMO_STATE
+    participant S as HostState
 
     U->>H: prompt
-    H->>L: prompt + current app state
-    L-->>H: appplan + runsplash
-    H->>M: render runsplash
+    H->>A: prompt + current data snapshot/capability
+    A-->>H: ViewSpec(appplan + runsplash)
+    H->>M: render template with data + HostState
     U->>M: click / type
-    M->>H: agent.notify(event_id, payload)
-    H->>S: validate + mutate
-    H->>M: re-render visible views from raw message + state
+    M->>H: Action via agent.notify
+    H->>S: validate + reduce
+    H->>M: re-render visible views
 ```
 
 特征：
 
 - Agent 与 Host 在同一个本地交互闭环里。
-- Host 拥有当前 LLM session。
-- Host 拥有 local state。
-- Host 可以立即处理按钮事件并更新 UI。
-- `agent.notify` 是可接受的本地 reverse channel。
+- Host 拥有当前 Agent session。
+- Host 可以直接维护本地 data 和 HostState。
+- Host 可以立即处理 local action 并更新 UI。
+- `agent.notify` 是 local binding 的 reverse channel，不是通用协议内核本身。
 
-## Matrix Event-Sourced
+## Remote/Event Binding
 
-Matrix Event-Sourced 模式用于 Robrix2。
+Remote/Event binding 用于 Robrix2 这类远程、可审计、事件源场景。
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent / Producer
-    participant MX as Matrix Timeline
-    participant R as Robrix2
-    participant AR as AppRegistry
-    participant SH as SplashHost
+    participant A as Remote AgentEndpoint / Producer
+    participant E as Event Log
+    participant H as Host
+    participant R as AppRegistry
+    participant V as View Runtime
 
-    A->>MX: event with org.octos.app
-    R->>MX: read original event content
-    R->>AR: lookup type + validate version/state
-    AR->>SH: render static template with state
-    SH-->>R: Splash card
-    R-->>R: display in RoomScreen
+    A->>E: data snapshot event with ViewSpec
+    H->>E: read original event content
+    H->>R: lookup AppType + validate version/state
+    R->>V: render registered template with data snapshot
+    V-->>H: app card
+    H-->>H: display view
 ```
 
 特征：
 
-- Matrix timeline 是共享审计日志。
-- Agent/producer 是共享事实的来源。
-- Robrix2 是 event consumer，不是 Agent 的私有 RPC peer。
-- 共享变更必须通过 Matrix/OctOS action response，再由 Agent 发送新 snapshot event。
-- Robrix2 v1 不接受 LLM 生成的运行时 Splash template。
+- 共享事件日志是审计来源。
+- Agent/producer 是共享 data 的来源。
+- Host 是 event consumer，不是 Agent 的私有 RPC peer。
+- 共享变更必须通过 action response，再由 Agent 发送新 DataSnapshot。
+- Host 可以做 optimistic local view update，但不得把 optimistic state 当作 shared truth。
 
-## 模式差异
+## Binding 不是应用场景
 
-| 维度 | aichat Local Runtime | Robrix2 Matrix Event-Sourced |
-|---|---|---|
-| 视图来源 | LLM response 中的 `runsplash` | Matrix event 中的 `org.octos.app` |
-| 模板来源 | LLM 生成 | 本地静态模板 |
-| 状态权威 | 本地 HostState | Agent-produced Matrix event |
-| action 回路 | `agent.notify` | `org.octos.action_response` |
-| 失败策略 | log/ignore 或显示错误 | fallback 到 `body` |
-| 适合场景 | 本地 demo、快速交互原型 | IM 中可审计、可回放的 app card |
+Local binding 与 Remote/Event binding 是传输绑定，不是业务场景。aichat 使用 Local binding；Robrix2 使用 Remote/Event binding；未来其它宿主可以使用同一个内核绑定到 HTTP、WebSocket 或文件同步。
+
+## 应用场景矩阵
+
+| 场景 | 使用内核 | Binding | Profile 重点 |
+|---|---|---|---|
+| aichat AppGen | Agent2View Core | Local Binding | LLM-generated UI、本地 HostState、快速交互 |
+| Robrix2 IM Card | Agent2View Core | Remote/Event Binding | Matrix timeline、静态模板、plain text fallback |
+| Mission Room | Agent2View Core | Remote/Event Binding | room-scoped data、shared action、human supervision |

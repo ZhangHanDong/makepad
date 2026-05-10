@@ -74,7 +74,71 @@ fn is_full_script(body: &str) -> bool {
     // Only treat as full script if it starts with scripting keywords
     // (let/fn/mod) — these can't appear inside a View{} property list.
     // Uppercase widget names (View{, SolidView{, Label{) stay in View-children mode.
-    trimmed.starts_with("let ") || trimmed.starts_with("fn ") || trimmed.starts_with("mod.")
+    trimmed.starts_with("let ")
+        || trimmed.starts_with("fn ")
+        || trimmed.starts_with("mod.")
+        || trimmed.starts_with("use ")
+}
+
+fn strip_leading_widget_prelude_imports(body: &str) -> &str {
+    let mut rest = body.trim_start();
+    loop {
+        let Some(after_use) = rest.strip_prefix("use mod.prelude.widgets.*") else {
+            return rest;
+        };
+        rest = after_use.trim_start();
+        if let Some(after_semicolon) = rest.strip_prefix(';') {
+            rest = after_semicolon.trim_start();
+        }
+    }
+}
+
+fn is_hex_color_char(ch: char) -> bool {
+    ch.is_ascii_hexdigit()
+}
+
+fn normalize_splash_hex_colors(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '#' {
+            out.push(ch);
+            continue;
+        }
+
+        if chars
+            .peek()
+            .is_some_and(|next| *next == 'x' || *next == 'X')
+        {
+            out.push(ch);
+            continue;
+        }
+
+        let mut color = String::new();
+        while let Some(next) = chars.peek().copied() {
+            if is_hex_color_char(next) {
+                color.push(next);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        if matches!(color.len(), 3 | 4 | 6 | 8) {
+            out.push_str("#x");
+            out.push_str(&color);
+        } else {
+            out.push('#');
+            out.push_str(&color);
+        }
+    }
+
+    out
+}
+
+fn normalize_splash_body(body: &str) -> String {
+    normalize_splash_hex_colors(strip_leading_widget_prelude_imports(body))
 }
 
 fn splash_contains_untrusted_shader(body: &str) -> bool {
@@ -117,6 +181,7 @@ impl Splash {
         if raw_body.is_empty() {
             return;
         }
+        let normalized_body;
         let guarded_body;
         let body = if splash_contains_untrusted_shader(raw_body) {
             log!(
@@ -126,7 +191,8 @@ impl Splash {
             guarded_body = splash_shader_guard_body();
             guarded_body
         } else {
-            raw_body
+            normalized_body = normalize_splash_body(raw_body);
+            normalized_body.as_str()
         };
 
         // Stop any previous tick timer
@@ -245,12 +311,13 @@ impl Splash {
             return;
         }
 
-        let prefix = if is_full_script(&current) {
+        let normalized = normalize_splash_body(&current);
+        let prefix = if is_full_script(&normalized) {
             SPLASH_PREFIX_SCRIPT
         } else {
             SPLASH_PREFIX_VIEW
         };
-        let code = format!("{}{}", prefix, current);
+        let code = format!("{}{}", prefix, normalized);
 
         // Use a fixed line ID (based on self_id + current generation)
         // so eval_with_append_source finds the existing body and
@@ -280,7 +347,9 @@ impl Splash {
 
 #[cfg(test)]
 mod tests {
-    use super::splash_contains_untrusted_shader;
+    use super::{
+        normalize_splash_body, normalize_splash_hex_colors, splash_contains_untrusted_shader,
+    };
 
     #[test]
     fn splash_shader_guard_allows_plain_widget_styling() {
@@ -304,6 +373,22 @@ mod tests {
         assert!(splash_contains_untrusted_shader(
             "View{draw_bg +: { let sdf = Sdf2d.viewport(self.pos) }}"
         ));
+    }
+
+    #[test]
+    fn splash_normalize_strips_redundant_widget_prelude_import() {
+        let body = "use mod.prelude.widgets.*\n\nRoundedView{}";
+        assert_eq!(normalize_splash_body(body), "RoundedView{}");
+    }
+
+    #[test]
+    fn splash_normalize_converts_plain_hex_colors_to_escaped_form() {
+        let body = "View{draw_bg.color: #1e1e3a draw_text.color: #fff other: #x22c55e}";
+        let normalized = normalize_splash_hex_colors(body);
+        assert!(normalized.contains("#x1e1e3a"));
+        assert!(normalized.contains("#xfff"));
+        assert!(normalized.contains("#x22c55e"));
+        assert!(!normalized.contains("#1e1e3a"));
     }
 }
 

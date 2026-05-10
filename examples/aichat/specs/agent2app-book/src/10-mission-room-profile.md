@@ -1,8 +1,18 @@
-# Mission Room Profile
+# Mission Room 应用场景
 
-Mission Room 是 Robrix2 中第一个高价值 room-scoped Agent2View app。
+Mission Room 是 Robrix2 场景下的第一个高价值 room-scoped Agent2View AppType。
 
 它把 Matrix room 变成由人类监督的多 Agent mission control surface。
+
+## AppType 场景配置
+
+Mission Room 使用通用内核对象：
+
+- AppType：`mission_room`
+- Scope：`room`
+- 默认 AppInstance：`mission.main`
+- Binding：Remote/Event Binding
+- Shared action transport：`org.octos.action_response`
 
 ## App Envelope
 
@@ -28,9 +38,9 @@ mission.main
 
 除非一个 room 明确承载多个 mission，否则 producer 应使用该默认 id。
 
-## Mission State V1
+## Mission Data V1
 
-Mission state v1 应保持显式且小：
+Mission data v1 应保持显式且小。当前 Matrix envelope 中的 `initial_state` 是 legacy 字段名，语义上承载 Mission DataSnapshot 的 `data`。
 
 ```json
 {
@@ -42,7 +52,7 @@ Mission state v1 应保持显式且小：
   "tasks": [
     {
       "id": "task-1",
-      "title": "Define AgentViewSession state model",
+      "title": "Define AgentViewSession data/state model",
       "status": "planning",
       "owner_agent": "planner",
       "priority": "high",
@@ -154,7 +164,7 @@ request_review
 approve_result
 ```
 
-这些 action 改变 mission truth，必须通过 `org.octos.action_response`，由 Agent 产生新的 mission snapshot event。
+这些 action 改变 mission truth，必须通过 `org.octos.action_response`，由 Agent 产生新的 mission DataSnapshot event。
 
 ```mermaid
 sequenceDiagram
@@ -167,7 +177,7 @@ sequenceDiagram
     R->>M: org.octos.action_response
     A->>M: read response
     A->>A: validate + apply policy
-    A->>M: new mission_room snapshot
+    A->>M: new mission_room DataSnapshot
     R->>M: read new event
     R->>R: update room-scoped session
 ```

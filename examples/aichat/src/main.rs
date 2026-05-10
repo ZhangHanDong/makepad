@@ -2123,10 +2123,9 @@ fn guard_native_splash_opaque_roots(markdown: &str, enabled: bool) -> String {
             if let Some((ticks, info)) = markdown_fence_open(line) {
                 in_fence = true;
                 fence_ticks = ticks;
-                in_splash = info
-                    .split_whitespace()
-                    .next()
-                    .is_some_and(|lang| lang.eq_ignore_ascii_case("splash"));
+                in_splash = info.split_whitespace().next().is_some_and(|lang| {
+                    lang.eq_ignore_ascii_case("splash") || lang.eq_ignore_ascii_case("runsplash")
+                });
                 out.push_str(line);
                 if in_splash {
                     splash_body.clear();
@@ -2164,6 +2163,47 @@ fn guard_native_splash_opaque_roots(markdown: &str, enabled: bool) -> String {
             log_splash_opaque_root(view);
         }
         out.push_str(&guarded);
+    }
+
+    out
+}
+
+fn strip_appplan_fences_for_ui(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    let mut fence_ticks = 0usize;
+    let mut dropping_appplan = false;
+
+    for line in markdown.split_inclusive('\n') {
+        if !in_fence {
+            if let Some((ticks, info)) = markdown_fence_open(line) {
+                in_fence = true;
+                fence_ticks = ticks;
+                dropping_appplan = info
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|lang| lang.eq_ignore_ascii_case("appplan"));
+                if !dropping_appplan {
+                    out.push_str(line);
+                }
+            } else {
+                out.push_str(line);
+            }
+            continue;
+        }
+
+        if markdown_fence_close(line, fence_ticks) {
+            if !dropping_appplan {
+                out.push_str(line);
+            }
+            in_fence = false;
+            dropping_appplan = false;
+            continue;
+        }
+
+        if !dropping_appplan {
+            out.push_str(line);
+        }
     }
 
     out
@@ -3903,6 +3943,7 @@ pub struct ChatList {
 impl Widget for ChatList {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         let data = active_chat_data().read().unwrap();
+        let workspace = *ACTIVE_WORKSPACE.read().unwrap();
 
         while let Some(item) = self.view.draw_walk(cx, scope, walk).step() {
             if let Some(mut list) = item.as_portal_list().borrow_mut() {
@@ -3946,6 +3987,13 @@ impl Widget for ChatList {
                         // first tokens, so we'd otherwise render a growing
                         // code block for the whole stream.
                         let unwrapped = unwrap_outer_markdown_fence(text);
+                        let appgen_visible_text;
+                        let unwrapped = if workspace == ActiveWorkspace::AppGen {
+                            appgen_visible_text = strip_appplan_fences_for_ui(unwrapped);
+                            appgen_visible_text.as_str()
+                        } else {
+                            unwrapped
+                        };
                         let guarded_text;
                         let markdown_text = if AICHAT_NATIVE_GLASS_ACTIVE
                             .load(std::sync::atomic::Ordering::Relaxed)
@@ -3976,6 +4024,15 @@ impl Widget for ChatList {
                         // wrap_bare_latex wraps `\cmd{…}` with `$…$` so
                         // MathView can render them.
                         let unwrapped = unwrap_outer_markdown_fence(&msg.text);
+                        let appgen_visible_text;
+                        let unwrapped = if msg.role == ChatRole::Assistant
+                            && workspace == ActiveWorkspace::AppGen
+                        {
+                            appgen_visible_text = strip_appplan_fences_for_ui(unwrapped);
+                            appgen_visible_text.as_str()
+                        } else {
+                            unwrapped
+                        };
                         let state_rendered;
                         let display_text = if msg.role == ChatRole::Assistant {
                             let state = APP_DEMO_STATE.read().unwrap();
@@ -4892,6 +4949,13 @@ impl App {
                 continue;
             };
             let unwrapped = unwrap_outer_markdown_fence(&text);
+            let appgen_visible_text;
+            let unwrapped = if self.active_workspace == ActiveWorkspace::AppGen {
+                appgen_visible_text = strip_appplan_fences_for_ui(unwrapped);
+                appgen_visible_text.as_str()
+            } else {
+                unwrapped
+            };
             let state_rendered = render_state_templates_for_ui(unwrapped, &state);
             let rendered = wrap_bare_latex(&state_rendered);
             let guarded_text;
@@ -6522,10 +6586,11 @@ mod tests {
         native_substrate_resolved_appearance, native_transient_probe_enabled_from_value,
         parse_glass_backend, render_state_templates, render_state_templates_for_ui,
         resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
-        should_start_window_drag, Agent, App, AppCapability, AppDemoState, BackendType,
-        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
-        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
-        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        should_start_window_drag, strip_appplan_fences_for_ui, Agent, App, AppCapability,
+        AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
+        ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
+        GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
+        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -6670,6 +6735,38 @@ mod tests {
         let markdown = concat!("```rust\n", "let color = \"#x0c0c18\";\n", "```\n",);
 
         assert_eq!(guard_native_splash_opaque_roots(markdown, true), markdown);
+    }
+
+    #[test]
+    fn aichat_native_splash_guard_handles_runsplash_blocks() {
+        let markdown = concat!(
+            "```runsplash\n",
+            "RoundedView{width: Fill height: Fill draw_bg.color: #x0c0c18}\n",
+            "```\n",
+        );
+
+        let guarded = guard_native_splash_opaque_roots(markdown, true);
+
+        assert!(guarded.contains("#x0c0c1880"));
+    }
+
+    #[test]
+    fn appgen_display_strips_appplan_fence_and_keeps_runsplash() {
+        let markdown = concat!(
+            "```appplan json\n",
+            "{\"app_type\":\"generic\"}\n",
+            "```\n\n",
+            "```runsplash\n",
+            "RoundedView{}\n",
+            "```\n",
+        );
+
+        let visible = strip_appplan_fences_for_ui(markdown);
+
+        assert!(!visible.contains("appplan"));
+        assert!(!visible.contains("app_type"));
+        assert!(visible.contains("```runsplash"));
+        assert!(visible.contains("RoundedView{}"));
     }
 
     #[test]

@@ -1,10 +1,32 @@
 # Rendering and Templates
 
-Agent2View has two rendering paths: dynamic `runsplash` in aichat, and static Splash templates in Robrix2.
+The protocol kernel only defines Template semantics: Template projects Snapshot/HostState into UI and exposes whitelisted Actions.
+
+The Template source is decided by the profile.
+
+The Template encoding is also decided by the profile. Current encodings include Makepad `runsplash` and A2UI component trees. The former targets the current aichat implementation; the latter targets cross-renderer declarative UI.
+
+## Core Rendering Contract
+
+```mermaid
+flowchart LR
+    VS[ViewSpec] --> P[Template preflight]
+    P --> B[Bind state]
+    B --> UI[Rendered view]
+    UI --> A[Whitelisted action]
+```
+
+Rules:
+
+- Template must be preflightable by the Host.
+- Template can reference only state paths declared by the AppType.
+- Template can trigger only actions declared by the AppType.
+- Template must not set host-owned attribution fields.
+- On failure, rendering must fall back to the safe representation defined by the profile.
 
 ## aichat Rendering
 
-aichat supports LLM-generated UI:
+The aichat profile allows LLM-generated UI:
 
 ````markdown
 ```runsplash
@@ -31,8 +53,11 @@ Rules:
 - Replace `{{state.path}}` at display time.
 - After state mutation, redraw only visible assistant messages.
 - When an offscreen message re-enters the viewport, `PortalList` renders it from raw message plus current state.
+- LLM-generated templates must be constrained by the capability manifest.
 
-## Volatile Input
+If aichat uses A2UI view encoding, the rendering flow becomes: validate the `appplan` outer semantics, validate the A2UI message bundle, map the A2UI component tree to Makepad widgets, and map A2UI actions back to the Agent2App action dispatcher.
+
+## Stable Template and Volatile Input
 
 Draft state in an input field must not rewrite the `runsplash` source on every character.
 
@@ -49,7 +74,7 @@ HostState still stores draft text. Actions such as adding an item can read that 
 
 ## Robrix2 Rendering
 
-Robrix2 v1 uses local static `.splash` templates.
+Robrix2 v1 profile uses local static `.splash` templates.
 
 ```mermaid
 flowchart TD

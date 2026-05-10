@@ -1,72 +1,85 @@
-# Two Runtime Modes
+# Transport Binding
 
-Agent2View has two modes that are either implemented or planned.
+Transport binding maps the shared protocol kernel to concrete message carriers. It does not change protocol semantics. It only changes how data is transmitted, who can observe it, and how failure degrades.
 
-## Local Runtime
+## Kernel-to-Binding Mapping
 
-Local Runtime is used by aichat.
+| Core Concept | Local Binding | Remote/Event Binding |
+|---|---|---|
+| AgentEndpoint | current LLM session / local tool Agent | Matrix room Agent / server-side producer |
+| ViewSpec | `appplan json` + `runsplash` | `org.octos.app` envelope + template id |
+| Snapshot | HostState / APP_DEMO_STATE | Matrix event content |
+| Template | LLM-generated runsplash or local template | locally registered static template |
+| Action | `agent.notify(event_id, payload)` | `org.octos.action_response` |
+| ActionResult | Host local reducer result | new snapshot event produced by Agent |
+| Failure | log/ignore or show error view | fall back to `body` |
+
+## Local Binding
+
+Local binding is used by local AppGen scenarios such as aichat.
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant L as LLM
+    participant A as Local AgentEndpoint
+    participant H as Host
     participant M as Markdown/Splash
-    participant H as aichat Host
-    participant S as APP_DEMO_STATE
+    participant S as HostState
 
     U->>H: prompt
-    H->>L: prompt + current app state
-    L-->>H: appplan + runsplash
-    H->>M: render runsplash
+    H->>A: prompt + current snapshot/capability
+    A-->>H: ViewSpec(appplan + runsplash)
+    H->>M: render template with HostState
     U->>M: click / type
-    M->>H: agent.notify(event_id, payload)
-    H->>S: validate + mutate
-    H->>M: re-render visible views from raw message + state
+    M->>H: Action via agent.notify
+    H->>S: validate + reduce
+    H->>M: re-render visible views
 ```
 
 Characteristics:
 
-- Agent and Host are in the same local interaction loop.
-- Host owns the current LLM session.
-- Host owns local state.
-- Host can handle button events immediately and update UI.
-- `agent.notify` is an acceptable local reverse channel.
+- The Agent and Host are in the same local interaction loop.
+- The Host owns the current Agent session.
+- The Host can directly maintain HostState.
+- The Host can immediately handle local actions and update UI.
+- `agent.notify` is the reverse channel of the local binding, not the shared protocol kernel itself.
 
-## Matrix Event-Sourced
+## Remote/Event Binding
 
-Matrix Event-Sourced mode is used by Robrix2.
+Remote/Event binding is used by remote, auditable, event-sourced scenarios such as Robrix2.
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent / Producer
-    participant MX as Matrix Timeline
-    participant R as Robrix2
-    participant AR as AppRegistry
-    participant SH as SplashHost
+    participant A as Remote AgentEndpoint / Producer
+    participant E as Event Log
+    participant H as Host
+    participant R as AppRegistry
+    participant V as View Runtime
 
-    A->>MX: event with org.octos.app
-    R->>MX: read original event content
-    R->>AR: lookup type + validate version/state
-    AR->>SH: render static template with state
-    SH-->>R: Splash card
-    R-->>R: display in RoomScreen
+    A->>E: snapshot event with ViewSpec
+    H->>E: read original event content
+    H->>R: lookup AppType + validate version/state
+    R->>V: render registered template with snapshot
+    V-->>H: app card
+    H-->>H: display view
 ```
 
 Characteristics:
 
-- The Matrix timeline is the shared audit log.
+- The shared event log is the audit source.
 - The Agent/producer is the source of shared truth.
-- Robrix2 is an event consumer, not the Agent's private RPC peer.
-- Shared changes must flow through Matrix/OctOS action responses, after which the Agent sends a new snapshot event.
-- Robrix2 v1 does not accept LLM-generated runtime Splash templates.
+- The Host is an event consumer, not the Agent's private RPC peer.
+- Shared changes must go through action response, then the Agent sends a new Snapshot.
+- The Host may perform optimistic local view updates, but must not treat optimistic state as shared truth.
 
-## Mode Differences
+## Binding Is Not an Application Scenario
 
-| Dimension | aichat Local Runtime | Robrix2 Matrix Event-Sourced |
-|---|---|---|
-| View source | `runsplash` in LLM response | `org.octos.app` in Matrix event |
-| Template source | LLM-generated | Local static template |
-| State authority | Local HostState | Agent-produced Matrix event |
-| Action loop | `agent.notify` | `org.octos.action_response` |
-| Failure strategy | log/ignore or show error | fallback to `body` |
-| Best fit | local demos, fast interactive prototypes | auditable and replayable app cards inside IM |
+Local binding and Remote/Event binding are transport bindings, not business scenarios. aichat uses Local binding; Robrix2 uses Remote/Event binding; future Hosts can use the same kernel with HTTP, WebSocket, or file synchronization.
+
+## Application Scenario Matrix
+
+| Scenario | Kernel | Binding | Profile Focus |
+|---|---|---|---|
+| aichat AppGen | Agent2View Core | Local Binding | LLM-generated UI, local HostState, fast interaction |
+| Robrix2 IM Card | Agent2View Core | Remote/Event Binding | Matrix timeline, static templates, plain text fallback |
+| Mission Room | Agent2View Core | Remote/Event Binding | room-scoped state, shared actions, human supervision |

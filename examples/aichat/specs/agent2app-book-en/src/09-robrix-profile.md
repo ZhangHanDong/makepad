@@ -1,6 +1,19 @@
-# Robrix2 Profile
+# Robrix2 Application Scenario
 
-Robrix2 is the Matrix Event-Sourced profile. It renders Matrix event history and does not own a private RPC session with the producing Agent.
+Robrix2 is the Matrix IM app-card scenario on top of the Agent2App Core Kernel. It uses Remote/Event Binding to render Matrix event history and does not own a private RPC session with the producing Agent.
+
+## Scenario Positioning
+
+```mermaid
+flowchart LR
+    Core[Agent2View Core]
+    Core --> Binding[Remote/Event Binding]
+    Binding --> Env[org.octos.app]
+    Env --> Registry[AppRegistry]
+    Registry --> Card[Native IM app card]
+```
+
+Robrix2's responsibility is to consume events, validate AppType, project Snapshot, render local templates, and write user shared actions back into the event system.
 
 ## V1 Display Cards
 
@@ -14,7 +27,7 @@ These apps do not need LLM-generated templates or local reducers.
 
 ## AgentViewSession
 
-The Robrix2 interactive runtime should use a structure similar to:
+Robrix2 interactive runtime should use a structure similar to:
 
 ```rust
 struct AgentViewSession {
@@ -28,7 +41,7 @@ struct AgentViewSession {
 }
 ```
 
-The session map preserves state while a room is open.
+The session map stores state while a room is open.
 
 ```mermaid
 flowchart LR
@@ -41,7 +54,7 @@ flowchart LR
 
 ## Local Reducer Loop
 
-The first local reducers should stay narrow:
+Robrix2 may support local view reducers, but the first reducers should remain narrow:
 
 ```text
 counter.inc
@@ -63,17 +76,17 @@ button action
 
 `message` scope redraws only one card.
 
-`room` scope redraws all visible cards pointing to the same `room_id + app_id`.
+`room` scope redraws all visible cards that point to the same `room_id + app_id`.
 
 ## Relationship to aichat
 
-Robrix2 can borrow aichat's narrow live wire, but it must not directly copy `agent.notify` as the production shared action protocol.
+Robrix2 can borrow the narrow live wire from aichat, but it must not copy `agent.notify` as the production shared action protocol.
 
-The aichat loop works because aichat owns:
+The aichat loop works because it owns all of the following:
 
-- LLM session;
-- local state;
-- Splash VM;
+- LLM session.
+- local state.
+- Splash VM.
 - immediate event loop.
 
-Robrix2 must keep shared truth in the Matrix timeline.
+Robrix2 shared truth must remain in the Matrix timeline. The extra constraints for the Robrix2 scenario are: do not accept event-supplied templates, do not read `m.replace` edits to change app state, and do not silently modify shared truth with local reducers.

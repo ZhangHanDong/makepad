@@ -1,6 +1,19 @@
-# Robrix2 Profile
+# Robrix2 应用场景
 
-Robrix2 是 Matrix Event-Sourced profile。它渲染 Matrix event 历史，不拥有生产 Agent 的私有 RPC 会话。
+Robrix2 是 Agent2App Core Kernel 上的 Matrix IM app-card 场景。它使用 Remote/Event Binding 渲染 Matrix event 历史，不拥有生产 Agent 的私有 RPC 会话。
+
+## 场景定位
+
+```mermaid
+flowchart LR
+    Core[Agent2View Core]
+    Core --> Binding[Remote/Event Binding]
+    Binding --> Env[org.octos.app]
+    Env --> Registry[AppRegistry]
+    Registry --> Card[Native IM app card]
+```
+
+Robrix2 的职责是消费事件、校验 AppType、投影 DataSnapshot、渲染本地模板，并把用户 shared action 写回事件系统。
 
 ## V1 Display Cards
 
@@ -23,12 +36,13 @@ struct AgentViewSession {
     app_type: String,
     version: u32,
     template_id: String,
+    data: serde_json::Value,
     state: serde_json::Value,
     dirty: bool,
 }
 ```
 
-Session map 负责在 room open 期间保存状态。
+`data` 保存从 Matrix event 投影出的业务事实，`state` 保存本地 interaction state。Session map 负责在 room open 期间保存运行状态。
 
 ```mermaid
 flowchart LR
@@ -41,7 +55,7 @@ flowchart LR
 
 ## Local Reducer Loop
 
-第一批 local reducer 应保持窄：
+Robrix2 可以支持 local view reducer，但第一批 reducer 应保持窄：
 
 ```text
 counter.inc
@@ -65,15 +79,15 @@ button action
 
 `room` scope 重绘所有指向同一 `room_id + app_id` 的可见 card。
 
-## Relationship to aichat
+## 与 aichat 的关系
 
 Robrix2 可以借鉴 aichat 的窄 live wire，但不能直接复制 `agent.notify` 作为生产共享 action 协议。
 
 aichat 的闭环成立，是因为它同时拥有：
 
 - LLM session。
-- local state。
+- local data/state。
 - Splash VM。
 - immediate event loop。
 
-Robrix2 的共享事实必须留在 Matrix timeline 中。
+Robrix2 的共享事实必须留在 Matrix timeline 中。Robrix2 场景的额外约束是：不接受 event-supplied template，不读取 `m.replace` edit 改变 app data，不用本地 reducer 静默修改 shared truth。

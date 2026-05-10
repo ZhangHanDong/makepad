@@ -1,8 +1,8 @@
 # Safety Model
 
-The Agent2View v0.1 safety model should stay short and executable.
+The Agent2View v0.1 safety model should stay short and executable. Safety rules are split into protocol-kernel rules, binding rules, and profile rules.
 
-## General Principles
+## Shared Principles
 
 ```mermaid
 flowchart TD
@@ -19,36 +19,57 @@ flowchart TD
 
 Principles:
 
-1. Render rich UI only for registered AppTypes.
+1. Rich UI renders only for registered AppTypes.
 2. Each AppType validates its own state.
-3. Robrix2 v1 templates must be local and static.
+3. Template must pass profile-defined preflight.
 4. Template preflight must reject unknown widgets, unknown helpers, and undeclared state paths.
-5. Any failure falls back to plain text.
-6. Actions must dispatch through an AppType plus action id whitelist.
+5. Any failure falls back to the safe representation specified by the profile.
+6. Action dispatch must use an AppType + action id whitelist.
 7. Widget state must not become shared truth.
 
-## aichat Safety Boundary
+## Local Binding Safety Boundary
 
-aichat is a local demo/runtime:
+Local binding may accept LLM-generated templates, but it must:
 
-- It may accept LLM-generated `runsplash`.
-- It may use `agent.notify`.
-- It must restrict the host action manifest.
-- It must validate payloads.
-- It should not elevate arbitrary Agent output to system privileges.
+- restrict the host action manifest;
+- validate payload;
+- limit callable APIs from the template;
+- reject or degrade dangerous shaders, unknown widgets, and unknown helpers;
+- never promote arbitrary Agent output to system authority.
 
-## Robrix2 Safety Boundary
+aichat belongs to this boundary.
 
-Robrix2 is a Matrix client:
+## Remote Binding Safety Boundary
 
-- It does not accept event-supplied Splash templates.
-- It does not accept runtime-generated templates as the v1 production path.
-- It does not use `agent.notify` to express shared actions.
-- It does not silently modify mission truth through local reducers.
-- It does not read `m.replace` edits to change app state or action sets.
+Remote/event binding must be more conservative:
 
-## Failure Means Downgrade
+- do not trust runtime templates carried by events;
+- render only locally registered AppTypes;
+- use only locally registered templates;
+- shared state must come from original event content or producer snapshot;
+- shared actions must go through action response and be validated by the producer.
 
-Rich rendering in Robrix2 is an enhancement, not the only readable form of a message.
+Robrix2 belongs to this boundary.
 
-Any validation failure must downgrade to `body`. This keeps the Matrix timeline readable and prevents a second, unvalidated rich-render bypass.
+## Application Scenario Constraints
+
+aichat profile:
+
+- may accept LLM-generated `runsplash`;
+- may use `agent.notify`;
+- must restrict the host action manifest;
+- must validate payload.
+
+Robrix2 profile:
+
+- does not accept event-supplied Splash templates;
+- does not accept runtime-generated templates as the v1 production path;
+- does not use `agent.notify` to express shared actions;
+- does not silently modify mission truth through local reducers;
+- does not read `m.replace` edits to change app state or action set.
+
+## Fail Closed to Safe Rendering
+
+Rich rendering is an enhancement, not the only readable form of a message.
+
+Any validation failure must fall back to the safe representation defined by the profile. In Robrix2, that safe representation is `body`. In aichat, it can be an error view, log + ignore, or keeping the last usable view.

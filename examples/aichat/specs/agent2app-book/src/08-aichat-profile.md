@@ -1,40 +1,57 @@
-# aichat Profile
+# aichat 应用场景
 
-aichat 是 Local Runtime profile。它证明了从 LLM 生成 UI 到 host state mutation 的最小 live wire。
+aichat 是 Agent2App Core Kernel 上的 Local AppGen 场景。它不是一套独立协议，而是通用内核使用 Local Binding 的一个宿主 profile。
+
+## 场景定位
+
+aichat 证明了从 LLM 生成 UI 到 HostState mutation 的最小 live wire。
+
+```mermaid
+flowchart LR
+    Core[Agent2View Core]
+    Core --> Binding[Local Binding]
+    Binding --> Plan[appplan json]
+    Binding --> Splash[runsplash]
+    Splash --> Host[aichat Host]
+```
 
 ## Response Contract
 
 aichat AppGen response 应包含一个 `appplan json` block 和一个 `runsplash` block。
 
-`appplan` 是生成 UI 的计划与能力声明，不是独立项目 artifact。
+`appplan` 是 ViewSpec 的本地编码。它描述生成 UI 的计划、AppType、可用 data path、可用 state path、可用 action 与 required controls。
 
-```mermaid
-flowchart LR
-    Prompt[User prompt] --> Plan[appplan json]
-    Plan --> Splash[runsplash]
-    Splash --> Host[aichat host]
-```
+`runsplash` 是 Template 的本地编码。它可以由 LLM 生成，但必须受 capability manifest 限制。
 
-## Host State
+后续兼容 A2UI 时，`appplan` 可以包含 `view.format = "a2ui"` 和 A2UI message bundle。此时 `runsplash` 是 aichat 的 legacy/local renderer binding，不再是通用协议必需项。
 
-当前 aichat HostState 包含：
+## Data 与 Host State
+
+当前 aichat demo 中，Host 同时维护 local data 和 Host state。
+
+Local data 包含：
 
 - `count`
 - `timer`
 - `calculator`
 - `collections`
+
+Host state 包含：
+
 - `inputs`
 
-示例 state path：
+示例 data/state path：
 
 ```text
-{{state.count}}
-{{state.timer.display}}
-{{state.calculator.display}}
-{{state.collection.items.rows}}
-{{state.collection.items.count}}
+{{data.count}}
+{{data.timer.display}}
+{{data.calculator.display}}
+{{data.collection.items.rows}}
+{{data.collection.items.count}}
 {{state.input.new_item.value}}
 ```
+
+这些 path 是通用内核 Data Binding 和 State Binding 在 aichat profile 中的具体表达。当前 legacy runsplash 可以继续支持 `{{state.count}}` 这类旧别名，但协议文档应优先使用 data/state 分离后的路径。
 
 ## Actions
 
@@ -90,13 +107,57 @@ AI callback：
 ask_ai
 ```
 
+## Notify Live Wire
+
+generated `runsplash` 不能直接修改 aichat 内部结构。它只能通过 `agent.notify(event_id, payload)` 发送用户意图，Host 再根据 action whitelist 和 payload schema 决定如何处理。
+
+```splash
+Button {
+    text: "+1"
+    on_click: || agent.notify("inc", {})
+}
+
+TextInput {
+    text: "{{state.input.new_item.value}}"
+    on_change: |text| agent.notify("app.input.set", {key: "new_item", text: text})
+}
+```
+
+aichat 的处理流程：
+
+```mermaid
+sequenceDiagram
+    participant R as runsplash callback
+    participant W as widgets::Splash
+    participant A as aichat App
+    participant D as Local data/state
+    participant UI as Visible UI
+
+    R->>W: agent.notify(event_id, payload)
+    W->>A: SplashAction::Notify {event_id, payload_json}
+    A->>A: match whitelisted action
+    A->>D: mutate data/state or send agent prompt
+    A->>UI: refresh data/state templates
+```
+
+当前 aichat 支持的典型 dispatch：
+
+- `inc`、`dec`、`reset` 更新 counter。
+- `timer.*` 更新 timer。
+- `calculator.*` 更新 calculator。
+- `app.input.set` 更新 HostState 中的 input draft。
+- `app.collection.*` 更新本地 collection data。
+- `ask_ai` 把当前交互包装成 prompt 发送给所选 backend。
+
+`agent.notify` 的关键设计点是：Template 发出 intent，Host 拥有 state mutation。它使 LLM 生成的 UI 可以交互，但不会把任意脚本提升为宿主权限。
+
 ## Collection Flow
 
 ```mermaid
 sequenceDiagram
     participant TI as TextInput
     participant H as Host
-    participant S as GenericInputsState
+    participant S as HostState inputs
     participant C as GenericCollectionsState
     participant UI as Visible runsplash UI
 
@@ -105,14 +166,19 @@ sequenceDiagram
     Note over H,UI: no UI source rewrite on each keypress
     UI->>H: app.collection.add_from_input {collection, input}
     H->>S: take_text(input)
-    H->>C: add_item(collection, text)
-    H->>UI: refresh state templates
+    H->>C: add_item(collection, text) as local data
+    H->>UI: refresh data/state templates
 ```
 
-## Boundary
+## 场景边界
 
-aichat 可以接收 LLM-generated `runsplash`，但必须使用 host capability manifest 限制 action 与 state path。
+aichat 可以接收 LLM-generated `runsplash`，但必须：
 
-未知 action 必须 log + ignore。
+- 使用 host capability manifest 限制 action、data path 与 state path。
+- 校验 event id。
+- 校验 payload。
+- 对未知 action log + ignore。
+- 对非法 payload log + ignore。
+- 不把任意 Agent 输出提升为系统权限。
 
-非法 payload 必须 log + ignore。
+这些约束属于 aichat 应用场景。通用内核只要求 Template 可预检、Action 可校验、State 可投影。

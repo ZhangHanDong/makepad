@@ -1,8 +1,45 @@
 # Versioning, Compatibility, and Validation
 
-## AppType Version
+Agent2App versioning has three layers: core version, binding version, and AppType/profile version.
 
-`version` is the protocol version at the AppType level.
+## Core Version
+
+`core_version` describes the protocol kernel version.
+
+It controls:
+
+- object model;
+- ScopeKey semantics;
+- Snapshot semantics;
+- Action / ActionResult semantics;
+- CapabilityManifest semantics;
+- shared validation order.
+
+Local Agents and remote Agents must use consistent core version semantics.
+
+## Binding Version
+
+`binding_version` describes the transport mapping version.
+
+For example:
+
+- how aichat local binding encodes `appplan json`, `runsplash`, and `agent.notify`;
+- how Robrix2 Matrix binding encodes `org.octos.app` and `org.octos.action_response`.
+
+Binding version changes should not change core semantics. They should only change carrier format or transport-specific metadata.
+
+When a binding carries A2UI, it should also declare a view encoding version, for example `view.format = "a2ui"` and `view.version = "v0.9"`. A2UI version changes affect only view encoding and should not change Agent2App Scope, Snapshot, or ActionResult semantics.
+
+## AppType / Scenario Version
+
+`version` is the AppType or profile-level protocol version.
+
+It controls:
+
+- concrete state schema;
+- concrete template id;
+- concrete action set;
+- concrete profile policy.
 
 The Host may support multiple versions.
 
@@ -12,7 +49,13 @@ Unsupported versions must fall back.
 
 When adding optional fields, older Hosts may ignore them.
 
-When changing the semantics of an existing field, the version must be bumped.
+When changing the semantics of an existing field, the relevant version must be bumped.
+
+Version bump rules:
+
+- Change shared object semantics: bump core version.
+- Change transport encoding: bump binding version.
+- Change a specific AppType state/action/template semantic: bump AppType/profile version.
 
 ## State Compatibility
 

@@ -4,25 +4,55 @@ Agent2App 的核心目标是定义 Agent 如何把结构化应用视图交给宿
 
 本规范当前只覆盖 `agent2view`。
 
-## 目标
+## 核心目标
 
-`agent2view` 需要解决四个问题：
+`agent2view` 需要解决六个问题：
 
 1. Agent 如何声明要渲染的 app view。
-2. Host 如何校验 app type、state、template 与 action。
-3. Host 如何保存状态，避免 widget 销毁后丢失权威状态。
-4. 用户 action 如何回到 Host 或 Agent，并保持共享事实边界清晰。
+2. Host 如何区分业务 data、运行 state 和渲染 view。
+3. Host 如何校验 app type、data、state path、template 与 action。
+4. Host 如何保存运行状态，避免 widget 销毁后丢失本地交互上下文。
+5. 用户 action 如何回到 Host 或 Agent，并保持共享事实边界清晰。
+6. 同一套协议语义如何同时适配本地 Agent 和远程 Agent。
 
-## 两条轨道
+## 分层边界
 
 ```mermaid
 flowchart TB
-    U[User request or Matrix event] --> A{Agent2App track}
+    Core[Protocol Core Kernel]
+    Core --> Obj[Object model]
+    Core --> Data[Data model]
+    Core --> State[State model]
+    Core --> View[View model]
+    Core --> Act[Action model]
+    Core --> Val[Validation model]
+
+    Core --> Bind[Transport Binding]
+    Bind --> Local[Local response / in-process callback]
+    Bind --> Remote[Remote event / action response]
+
+    Core --> Profile[Application Profile]
+    Profile --> A[aichat]
+    Profile --> R[Robrix2]
+    Profile --> M[Mission Room]
+```
+
+协议内核不关心 Agent 是本地还是远程，也不关心 transport 是 LLM response、Matrix event、HTTP、WebSocket 还是未来的其它事件系统。内核只定义稳定语义：AppType、AppInstance、Scope、DataSnapshot、Host State、ViewSpec、Template、Action、ActionResult、Capability 与 Validation。
+
+Transport binding 负责把这些语义映射到具体承载格式。例如 aichat 把 view 放在 assistant message 的 `runsplash` block 中；Robrix2 把 view 放在 Matrix event 的 `org.octos.app` envelope 中。
+
+Application profile 负责定义具体宿主的能力、限制和 UX 策略。aichat 和 Robrix2 是 profile，不是两套互斥协议。
+
+## 两条产品轨道
+
+```mermaid
+flowchart TB
+    U[User request or external event] --> A{Agent2App track}
     A -->|inline view| V[agent2view]
     A -->|generated project| P[agent2project]
 
     V --> VH[Host renders app view]
-    V --> VS[Host owns state/action boundary]
+    V --> VS[Host owns data/state/action boundary]
 
     P --> PF[File tree]
     P --> PC[Cargo.toml / src/main.rs]

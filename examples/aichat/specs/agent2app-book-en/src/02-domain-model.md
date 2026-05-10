@@ -1,47 +1,80 @@
-# Domain Model
+# Shared Protocol Kernel
 
-The core objects in the Agent2View protocol are shown below.
+The Agent2App Core Kernel is the protocol kernel shared by local Agents and remote Agents. It defines the object model, state model, action semantics, and validation order, but does not bind to a specific transport.
 
 ```mermaid
 classDiagram
+    class AgentEndpoint {
+      +agent_id
+      +kind
+      +trust_level
+    }
+
     class AppType {
       +type
-      +supported_versions
+      +core_versions
+      +profile_versions
       +state_schema
       +templates
       +actions
     }
 
     class AppInstance {
-      +scope
-      +app_id_or_event_id
+      +scope_key
+      +app_id
+      +app_type
+      +version
       +state
       +dirty
     }
 
-    class View {
-      +source_event_or_message
+    class ViewSpec {
+      +view_id
       +template_id
-      +rendered_widget_tree
+      +state_binding
+      +capability_manifest
+    }
+
+    class Snapshot {
+      +state
+      +version
+      +producer
+      +created_at
     }
 
     class Action {
       +action_id
+      +kind
       +payload
       +scope_key
     }
 
-    class HostState {
-      +shared_snapshot
-      +local_session_state
-      +volatile_ui_state
+    class ActionResult {
+      +status
+      +state_delta_or_snapshot
+      +message
     }
 
+    AgentEndpoint --> Snapshot
     AppType "1" --> "*" AppInstance
-    AppInstance "1" --> "*" View
-    View --> Action
-    AppInstance --> HostState
+    AppInstance "1" --> "*" ViewSpec
+    AppInstance --> Snapshot
+    ViewSpec --> Action
+    Action --> ActionResult
 ```
+
+## AgentEndpoint
+
+AgentEndpoint represents the Agent endpoint that produces an app view or handles a shared action.
+
+It can be:
+
+- a local LLM session;
+- a local tool Agent;
+- a remote Agent in a Matrix room;
+- a server-side producer.
+
+The location of the AgentEndpoint does not change the protocol object model. Remote Agents and local Agents both produce the same semantic `ViewSpec`, `Snapshot`, and `Action`.
 
 ## AppType
 
@@ -58,51 +91,80 @@ AppType is the global definition of an application type, for example:
 
 AppType determines:
 
-- supported protocol versions;
-- schema for `initial_state`;
+- supported core protocol versions;
+- supported profile versions;
+- the schema of `initial_state` or snapshot;
 - available templates;
 - available actions;
 - routing rules for local reducers or shared action responses.
 
 ## AppInstance
 
-AppInstance is a concrete runtime entity of an AppType under a scope.
+AppInstance is a concrete running entity of an AppType under a specific scope.
 
-It is not the same as a single message. A `room` scoped app may be rendered by multiple messages while pointing to the same instance.
+It is not the same as a single message. A `room` scoped app can be rendered by multiple messages and point to the same instance.
 
-## View
+## ScopeKey
 
-View is one visible rendering of an AppInstance.
+ScopeKey is the stable identity of an AppInstance.
 
-In aichat, a `runsplash` block inside an assistant message is a view.
+```mermaid
+flowchart TB
+    S{scope}
+    S --> M[message]
+    S --> R[room]
+    S --> A[account]
 
-In Robrix2, a Splash card rendered from a Matrix timeline item is a view.
+    M --> MK["room_id + event_id"]
+    R --> RK["room_id + app_id"]
+    A --> AK["account_id + app_id"]
+```
 
-## HostState
+A local scenario can map `room_id` to a local workspace or session id; a remote scenario can directly use Matrix room/account/event ids. The mapping differs, but ScopeKey semantics do not.
 
-HostState is state owned by the Host.
+## ViewSpec
 
-It can be:
+ViewSpec is the view description the Agent wants the Host to render.
 
-- aichat's `APP_DEMO_STATE`;
-- Robrix2's `AgentViewSession.state`;
-- session state projected from a Matrix event snapshot.
+ViewSpec contains at least:
 
-Widget-internal state is not HostState and must not be treated as a source of shared truth.
+- AppType;
+- ScopeKey;
+- Template or template id;
+- State binding;
+- Capability manifest;
+- list of triggerable actions.
+
+aichat can encode ViewSpec as `appplan json` + `runsplash`. Robrix2 can encode ViewSpec as an `org.octos.app` envelope + local template id.
+
+## Snapshot
+
+Snapshot is the authoritative state snapshot of an AppInstance.
+
+In a local Agent scenario, Snapshot can be maintained by HostState and projected into the view on every render.
+
+In a remote Agent scenario, Snapshot is usually written by a remote producer into a shared event log such as a Matrix timeline.
+
+Regardless of source, Snapshot must satisfy the AppType state schema.
 
 ## Template
 
-Template describes how state is rendered into UI.
+Template is the description that renders state into UI.
 
-aichat supports LLM-generated `runsplash`.
+The protocol kernel only requires Template to be preflightable by the Host and bindable to state. It does not require Template to be generated by an LLM or to be locally static.
 
-Robrix2 v1 allows only local static `.splash` templates. Matrix events and LLMs must not directly provide runtime templates.
+The concrete profile decides the Template source:
+
+- the aichat profile allows LLM-generated `runsplash`, but it must be constrained by a capability manifest;
+- the Robrix2 v1 profile allows only local static `.splash` templates and does not allow Matrix events or LLMs to directly provide runtime templates.
 
 ## Action
 
-Action is an intent emitted by a user or view.
+Action is the intent emitted by the user or view.
 
-There are two action classes:
+There are two Action categories:
 
 - Local View Action: affects only the current local view/session.
-- Shared Fact Action: changes shared truth and must be validated by the Agent/producer before a new snapshot is produced.
+- Shared Fact Action: changes shared facts and must be validated by an Agent/producer before producing a new Snapshot.
+
+The Action type is determined by the AppType action schema and profile policy, not by the transport. `agent.notify` can carry local actions; `org.octos.action_response` can carry shared actions; future transports should carry the same Action semantics.

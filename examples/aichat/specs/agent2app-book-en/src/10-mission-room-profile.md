@@ -1,8 +1,18 @@
-# Mission Room Profile
+# Mission Room Application Scenario
 
-Mission Room is the first high-value room-scoped Agent2View app in Robrix2.
+Mission Room is the first high-value room-scoped Agent2View AppType in the Robrix2 scenario.
 
 It turns a Matrix room into a human-supervised multi-Agent mission control surface.
+
+## AppType Scenario Configuration
+
+Mission Room uses the shared kernel objects:
+
+- AppType: `mission_room`
+- Scope: `room`
+- Default AppInstance: `mission.main`
+- Binding: Remote/Event Binding
+- Shared action transport: `org.octos.action_response`
 
 ## App Envelope
 
@@ -26,11 +36,11 @@ Default mission app id:
 mission.main
 ```
 
-Unless a room explicitly hosts multiple missions, the producer should use this default id.
+Unless a room explicitly carries multiple missions, the producer should use this default id.
 
 ## Mission State V1
 
-Mission state v1 should stay explicit and small:
+Mission state v1 should remain explicit and small:
 
 ```json
 {
@@ -135,7 +145,7 @@ manual | supervised | autonomous | paused
 
 ## Shared Actions
 
-The first shared actions:
+First shared actions:
 
 ```text
 approve_plan
@@ -144,7 +154,7 @@ pause_mission
 resume_mission
 ```
 
-Later task-level actions:
+Future task-level actions:
 
 ```text
 reassign_task
@@ -154,7 +164,7 @@ request_review
 approve_result
 ```
 
-These actions change mission truth. They must flow through `org.octos.action_response`, after which the Agent produces a new mission snapshot event.
+These actions change mission truth. They must go through `org.octos.action_response`, and the Agent must produce a new mission snapshot event.
 
 ```mermaid
 sequenceDiagram
@@ -174,11 +184,11 @@ sequenceDiagram
 
 ## Local View Actions
 
-A mission card may support local actions:
+The mission card may support local actions:
 
 - expand task details;
 - select an agent;
-- switch board/decision/blocker view;
+- switch board/decision/blocker views;
 - filter lanes.
 
 These actions should not produce Matrix shared facts.
