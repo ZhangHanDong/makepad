@@ -79,6 +79,12 @@ Makepad render split: the primary surface still paints the full aichat UI and
 interior readability layers above native glass instead of acting as a
 transparent foreground-only surface.
 
+Step 173 adds the next manual gate:
+`makepad-example-aichat-macos-native-clear-interleave-transparent-overlay`.
+That runnable combines the lower-scene pass, native clear glass, the primary
+Metal surface, and transparent `GlassPanel` overlays. It is a diagnostic
+foreground-split probe, not a production backend.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
