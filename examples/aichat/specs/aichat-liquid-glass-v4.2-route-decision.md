@@ -97,6 +97,12 @@ to a foreground-only upper Makepad surface at the framebuffer level. The
 remaining gate is manual/system validation of whether AppKit native glass is
 visibly sampling the lower Makepad surface through that foreground.
 
+Step 176 records that local `screencapture` automation returned a black frame,
+so the current native-material visibility gate cannot be closed by Studio or by
+the available system screenshot path. A user manual verdict or usable
+system-composition screenshot is required before promoting or rejecting this
+interleave probe visually.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
