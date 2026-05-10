@@ -4,14 +4,14 @@ use {
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
         draw_pass::CxDrawPassParent,
         event::{
+            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
             video_playback::{
                 CameraPreviewMode, VideoBufferedRangesEvent, VideoDecodingErrorEvent,
                 VideoPlaybackPreparedEvent, VideoPlaybackResourcesReleasedEvent,
                 VideoSeekableRangesEvent, VideoSource, VideoTextureUpdatedEvent,
                 VideoYuvTexturesReady,
             },
-            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
-            Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
+            Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent, VirtualKeyboardEvent,
         },
         makepad_live_id::*,
         makepad_objc_sys::objc_block,
@@ -451,21 +451,27 @@ impl Cx {
             }
         }
 
-        let timestamp_ns = self
-            .os
-            .start_time
-            .map(|start| Instant::now().duration_since(start).as_nanos() as u64)
-            .unwrap_or(0);
-        for index in 0..MAX_VIDEO_DEVICE_INDEX {
-            if let Err(err) = self.video_encoder_capture_texture_frame(index, timestamp_ns) {
-                if err != crate::video::VideoEncodeError::UnsupportedSource
-                    && err != crate::video::VideoEncodeError::EncoderNotStarted
-                {
-                    crate::error!(
-                        "ios video texture capture failed on slot {}: {:?}",
-                        index,
-                        err
-                    );
+        // Only sweep encoder slots if an encoder's actually been set up.
+        // Otherwise we'd burn 32 mutex locks per frame on every iOS app,
+        // and the very first call would lazy-init AvCaptureAccess and
+        // trigger the camera permission prompt for apps that never use it.
+        if self.os.media.av_capture.is_some() {
+            let timestamp_ns = self
+                .os
+                .start_time
+                .map(|start| Instant::now().duration_since(start).as_nanos() as u64)
+                .unwrap_or(0);
+            for index in 0..MAX_VIDEO_DEVICE_INDEX {
+                if let Err(err) = self.video_encoder_capture_texture_frame(index, timestamp_ns) {
+                    if err != crate::video::VideoEncodeError::UnsupportedSource
+                        && err != crate::video::VideoEncodeError::EncoderNotStarted
+                    {
+                        crate::error!(
+                            "ios video texture capture failed on slot {}: {:?}",
+                            index,
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -493,6 +499,25 @@ impl Cx {
                 if te.timer_id == 0 {
                     let vk = with_ios_app(|app| app.virtual_keyboard_event.take());
                     if let Some(vk) = vk {
+                        // When the keyboard is going away (user pressed iOS's
+                        // "hide keyboard" button, an external keyboard was
+                        // attached, an inputAccessoryView triggered hide,
+                        // etc.), mark the IME as dismissed so the focused
+                        // TextInput's next `show_text_ime_with_config` call
+                        // is a no-op. Without this, the input still has key
+                        // focus, redraws on the same frame, calls
+                        // `show_text_ime`, and the keyboard pops back up
+                        // (sometimes flipping to whatever language was
+                        // selected last). The flag is cleared automatically
+                        // the next time the user taps a field - see
+                        // `CxKeyboard::set_key_focus`.
+                        if matches!(
+                            vk,
+                            VirtualKeyboardEvent::WillHide { .. }
+                                | VirtualKeyboardEvent::DidHide { .. }
+                        ) {
+                            self.keyboard.set_text_ime_dismissed();
+                        }
                         self.call_event_handler(&Event::VirtualKeyboard(vk));
                     }
                     // Drain iOS text events as one batch to avoid re-entrancy from UITextInput callbacks.
@@ -563,7 +588,26 @@ impl Cx {
                 self.display_context.safe_area_insets = geom.safe_area_insets;
                 self.update_safe_inset_script_values(geom.safe_area_insets);
                 self.call_event_handler(&Event::Startup);
+                self.call_event_handler(&Event::Foreground);
                 self.redraw_all();
+            }
+            IosEvent::Foreground => {
+                self.call_event_handler(&Event::Foreground);
+                self.redraw_all();
+            }
+            IosEvent::Background => {
+                self.call_event_handler(&Event::Background);
+            }
+            IosEvent::Pause => {
+                self.call_event_handler(&Event::Pause);
+            }
+            IosEvent::Resume => {
+                self.call_event_handler(&Event::Resume);
+                self.redraw_all();
+            }
+            IosEvent::Shutdown => {
+                self.call_event_handler(&Event::Shutdown);
+                return EventFlow::Exit;
             }
             IosEvent::WindowGotFocus(window_id) => {
                 // repaint all window passes. Metal sometimes doesnt flip buffers when hidden/no focus
@@ -746,9 +790,11 @@ impl Cx {
 
                 // Synthesize internal drag-and-drop events from touch gestures.
                 if self.os.internal_drag_items.is_some() {
-                    if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Stop
-                    }) {
+                    if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Stop)
+                    {
                         if let Some(items) = self.os.internal_drag_items.take() {
                             self.call_event_handler(&Event::Drop(DropEvent {
                                 modifiers: e.modifiers.clone(),
@@ -760,9 +806,11 @@ impl Cx {
                             self.call_event_handler(&Event::DragEnd);
                             self.drag_drop.cycle_drag();
                         }
-                    } else if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Move
-                    }) {
+                    } else if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Move)
+                    {
                         if let Some(items) = self.os.internal_drag_items.as_ref() {
                             self.call_event_handler(&Event::Drag(DragEvent {
                                 modifiers: e.modifiers.clone(),
@@ -1008,9 +1056,7 @@ impl Cx {
                     if let Some(mtk_view) = mtk_view {
                         let host_view: ObjcId = unsafe { msg_send![mtk_view, superview] };
                         if host_view != nil {
-                            if let Some(browser) =
-                                self.os.system_browsers.get_mut(&browser_id)
-                            {
+                            if let Some(browser) = self.os.system_browsers.get_mut(&browser_id) {
                                 browser.update(host_view, rect, visible);
                             }
                         }

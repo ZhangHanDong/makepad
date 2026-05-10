@@ -275,10 +275,19 @@ impl Widget for StackNavigationView {
             // In full screen mode, position at the offset.
             // Use the larger of the safe area inset or the parent's y position
             // so the view respects both mobile safe areas and desktop title bars.
+            //
+            // KeyboardView pans its contents by moving the parent turtle up. If
+            // we clamp directly against `safe_top`, that upward pan is lost
+            // whenever the parent y becomes negative, so fullscreen stack views
+            // stay pinned while the rest of the app moves. Reconstruct the
+            // natural parent y, choose the normal fullscreen anchor, then apply
+            // the keyboard pan back to that anchor.
             let safe_top = cx.display_context.safe_area_insets.top;
+            let keyboard_shift = cx.keyboard_shift.max(0.0);
+            let parent_y_without_keyboard = parent_rect.pos.y + keyboard_shift;
             Vec2d {
                 x: self.offset,
-                y: safe_top.max(parent_rect.pos.y),
+                y: safe_top.max(parent_y_without_keyboard) - keyboard_shift,
             }
         } else {
             // Non-fullscreen: ignore offset, position at parent.
@@ -503,10 +512,21 @@ impl ScriptHook for StackNavigation {
         if apply.is_new() {
             self.navigation_stack = NavigationStack::default();
         } else if apply.is_reload() {
-            // Make sure current stack view is visible when code reloads
-            if let Some(current_entry) = self.navigation_stack.current() {
-                let stack_view_ref =
-                    self.stack_navigation_view(_vm.cx_mut(), &[current_entry.view_id]);
+            // Reload re-applies every DSL value across the whole tree, which
+            // resets `visible: false` and `offset: 4000.0` (the StackNavigationView
+            // defaults) on every stack view we've previously pushed — not just
+            // the topmost. Restore visibility/offset for every entry in the
+            // history so popping back to a view underneath the current one
+            // reveals it instead of the parent's bare background.
+            //
+            // This matters on rotation specifically: a safe-area-inset change
+            // calls `cx.request_live_edit()` (see window.rs), which fires this
+            // reload pass. Before this loop existed, rotating with several
+            // rooms pushed and then tapping back showed a blank screen because
+            // the previous room view was still `visible = false`.
+            let view_ids = self.navigation_stack.view_ids();
+            for view_id in view_ids {
+                let stack_view_ref = self.stack_navigation_view(_vm.cx_mut(), &[view_id]);
                 if let Some(mut inner) = stack_view_ref.borrow_mut() {
                     inner.view.visible = true;
                     inner.offset = 0.0;
@@ -578,8 +598,15 @@ impl WidgetMatchEvent for StackNavigation {
         for action in actions {
             if let WindowAction::WindowGeomChange(ce) = action.as_widget_action().cast() {
                 self.screen_width = ce.new_geom.inner_size.x * ce.new_geom.dpi_factor;
-                if let Some(current_entry) = self.navigation_stack.current() {
-                    let stack_view_ref = self.stack_navigation_view(cx, &[current_entry.view_id]);
+                // Refresh `offset_to_hide` on every stack view we know about,
+                // not just the current one. Previously-pushed views hold the
+                // screen width that was current when they were pushed, so
+                // after a rotation the slide-out animation on those views
+                // would terminate at the old (e.g. portrait) edge instead of
+                // sliding fully off the new (e.g. landscape) edge.
+                let view_ids = self.navigation_stack.view_ids();
+                for view_id in view_ids {
+                    let stack_view_ref = self.stack_navigation_view(cx, &[view_id]);
                     stack_view_ref.set_offset_to_hide(self.screen_width);
                 }
             }
@@ -770,9 +797,13 @@ impl StackNavigationRef {
     /// * `view_id` - The LiveId of the view whose title to set
     /// * `title` - The new title text
     pub fn set_title(&self, cx: &mut Cx, view_id: LiveId, title: &str) {
-        let Some(inner) = self.borrow_mut() else { return; };
+        let Some(inner) = self.borrow_mut() else {
+            return;
+        };
         let stack_view_ref = inner.stack_navigation_view(cx, &[view_id]);
-        let Some(mut stack_view) = stack_view_ref.borrow_mut() else { return; };
+        let Some(mut stack_view) = stack_view_ref.borrow_mut() else {
+            return;
+        };
         stack_view.set_runtime_title(cx, title);
     }
 
