@@ -49,12 +49,24 @@ impl GlassNativeShape {
 }
 
 #[derive(Clone, Debug)]
+struct PendingNativeGlassPanelDescriptor {
+    area: Area,
+    descriptor: NativeGlassPanelDescriptor,
+}
+
+#[derive(Clone, Debug)]
+struct PendingNativeGlassControlDescriptor {
+    area: Area,
+    descriptor: NativeGlassControlDescriptor,
+}
+
+#[derive(Clone, Debug)]
 struct NativeGlassCollection {
     id: LiveId,
     rect: Rect,
     spacing: f64,
-    panels: Vec<NativeGlassPanelDescriptor>,
-    controls: Vec<NativeGlassControlDescriptor>,
+    panels: Vec<PendingNativeGlassPanelDescriptor>,
+    controls: Vec<PendingNativeGlassControlDescriptor>,
 }
 
 #[derive(Default)]
@@ -73,16 +85,36 @@ impl NativeGlassCollector {
         });
     }
 
-    fn push_panel(&mut self, panel: NativeGlassPanelDescriptor) {
+    fn push_panel(&mut self, area: Area, panel: NativeGlassPanelDescriptor) {
         if let Some(collection) = self.stack.last_mut() {
-            collection.panels.push(panel);
+            collection.panels.push(PendingNativeGlassPanelDescriptor {
+                area,
+                descriptor: panel,
+            });
         }
     }
 
     #[allow(dead_code)]
-    fn push_control(&mut self, control: NativeGlassControlDescriptor) {
+    fn push_control(&mut self, area: Area, control: NativeGlassControlDescriptor) {
+        if native_glass_descriptor_log_enabled() {
+            log!(
+                "[liquid-glass] backend=apple-native-controls event=descriptor-capture control={:?} kind={:?} label={:?} rect=({:.1},{:.1},{:.1},{:.1})",
+                control.id,
+                control.kind,
+                control.label,
+                control.rect.pos.x,
+                control.rect.pos.y,
+                control.rect.size.x,
+                control.rect.size.y
+            );
+        }
         if let Some(collection) = self.stack.last_mut() {
-            collection.controls.push(control);
+            collection
+                .controls
+                .push(PendingNativeGlassControlDescriptor {
+                    area,
+                    descriptor: control,
+                });
         }
     }
 
@@ -95,9 +127,17 @@ impl NativeGlassCollector {
 
 pub(crate) fn push_native_glass_control_descriptor(
     cx: &mut Cx2d,
+    area: Area,
     descriptor: NativeGlassControlDescriptor,
 ) {
-    cx.global::<NativeGlassCollector>().push_control(descriptor);
+    cx.global::<NativeGlassCollector>()
+        .push_control(area, descriptor);
+}
+
+fn native_glass_descriptor_log_enabled() -> bool {
+    std::env::var_os("MAKEPAD_NATIVE_GLASS_DESCRIPTOR_LOG").is_some()
+        || std::env::var_os("MAKEPAD_NATIVE_GLASS_CONTROL_DESCRIPTOR_LOG").is_some()
+        || std::env::var_os("AICHAT_NATIVE_CONTROL_PROBE").is_some()
 }
 
 script_mod! {
@@ -615,16 +655,48 @@ impl Widget for GlassContainer {
                 if let Some(window_id) = cx.get_current_window_id() {
                     let collection = cx.global::<NativeGlassCollector>().finish(rect);
                     if let Some(collection) = collection {
-                        let controls = collection.controls;
+                        let panels = collection
+                            .panels
+                            .into_iter()
+                            .map(|pending| {
+                                let mut descriptor = pending.descriptor;
+                                descriptor.rect = pending.area.rect(cx);
+                                descriptor
+                            })
+                            .collect();
+                        let controls = collection
+                            .controls
+                            .into_iter()
+                            .map(|pending| {
+                                let mut descriptor = pending.descriptor;
+                                descriptor.rect = pending.area.rect(cx);
+                                descriptor
+                            })
+                            .collect();
                         let batch = NativeGlassBatch {
                             window_id,
                             containers: vec![NativeGlassContainerDescriptor {
                                 id: collection.id,
                                 rect: collection.rect,
                                 spacing: collection.spacing,
-                                panels: collection.panels,
+                                panels,
                             }],
                         };
+                        if native_glass_descriptor_log_enabled() {
+                            for container in &batch.containers {
+                                for panel in &container.panels {
+                                    log!(
+                                        "[liquid-glass] backend=apple-native-underlay event=descriptor-batch panel={:?} rect=({:.1},{:.1},{:.1},{:.1}) z_order={}",
+                                        panel.id,
+                                        panel.rect.pos.x,
+                                        panel.rect.pos.y,
+                                        panel.rect.size.x,
+                                        panel.rect.size.y,
+                                        panel.z_order
+                                    );
+                                }
+                            }
+                        }
                         if self.last_native_batch.as_ref() != Some(&batch) {
                             cx.push_unique_platform_op(CxOsOp::SetNativeGlassBatch(batch.clone()));
                             self.last_native_batch = Some(batch);
@@ -633,6 +705,20 @@ impl Widget for GlassContainer {
                             window_id,
                             controls,
                         };
+                        if native_glass_descriptor_log_enabled() {
+                            for control in &control_batch.controls {
+                                log!(
+                                    "[liquid-glass] backend=apple-native-controls event=descriptor-batch control={:?} kind={:?} label={:?} rect=({:.1},{:.1},{:.1},{:.1})",
+                                    control.id,
+                                    control.kind,
+                                    control.label,
+                                    control.rect.pos.x,
+                                    control.rect.pos.y,
+                                    control.rect.size.x,
+                                    control.rect.size.y
+                                );
+                            }
+                        }
                         if !control_batch.controls.is_empty()
                             || self.last_native_control_batch.is_some()
                         {
@@ -809,7 +895,8 @@ impl Widget for GlassPanel {
 
             if self.native {
                 let descriptor = self.native_descriptor(cx);
-                cx.global::<NativeGlassCollector>().push_panel(descriptor);
+                cx.global::<NativeGlassCollector>()
+                    .push_panel(self.view.area(), descriptor);
             }
 
             self.draw_state.end();
@@ -831,16 +918,19 @@ mod native_glass_tests {
     fn native_glass_collector_returns_container_with_pushed_panels() {
         let mut collector = NativeGlassCollector::default();
         collector.begin(LiveId(1), 20.0);
-        collector.push_panel(NativeGlassPanelDescriptor {
-            id: LiveId(2),
-            rect: Rect::default(),
-            shape: NativeGlassShape::RoundedRect { radius: 12.0 },
-            style: NativeGlassStyle::Regular,
-            tint: None,
-            hit_test: NativeGlassHitTest::Passthrough,
-            z_order: 0,
-            visible: true,
-        });
+        collector.push_panel(
+            Area::Empty,
+            NativeGlassPanelDescriptor {
+                id: LiveId(2),
+                rect: Rect::default(),
+                shape: NativeGlassShape::RoundedRect { radius: 12.0 },
+                style: NativeGlassStyle::Regular,
+                tint: None,
+                hit_test: NativeGlassHitTest::Passthrough,
+                z_order: 0,
+                visible: true,
+            },
+        );
 
         let collection = collector.finish(Rect {
             pos: dvec2(10.0, 20.0),
@@ -858,22 +948,25 @@ mod native_glass_tests {
     fn native_glass_collector_returns_container_with_pushed_controls() {
         let mut collector = NativeGlassCollector::default();
         collector.begin(LiveId(1), 20.0);
-        collector.push_control(NativeGlassControlDescriptor {
-            id: LiveId(3),
-            rect: Rect {
-                pos: dvec2(12.0, 16.0),
-                size: dvec2(80.0, 32.0),
+        collector.push_control(
+            Area::Empty,
+            NativeGlassControlDescriptor {
+                id: LiveId(3),
+                rect: Rect {
+                    pos: dvec2(12.0, 16.0),
+                    size: dvec2(80.0, 32.0),
+                },
+                kind: NativeGlassControlKind::Button {
+                    role: NativeGlassButtonRole::Primary,
+                },
+                label: "Send".to_string(),
+                style: NativeGlassStyle::Clear,
+                tint: None,
+                z_order: 1,
+                enabled: true,
+                visible: true,
             },
-            kind: NativeGlassControlKind::Button {
-                role: NativeGlassButtonRole::Primary,
-            },
-            label: "Send".to_string(),
-            style: NativeGlassStyle::Clear,
-            tint: None,
-            z_order: 1,
-            enabled: true,
-            visible: true,
-        });
+        );
 
         let collection = collector.finish(Rect {
             pos: dvec2(10.0, 20.0),
@@ -882,14 +975,14 @@ mod native_glass_tests {
 
         let collection = collection.expect("collection should finish");
         assert_eq!(collection.controls.len(), 1);
-        assert_eq!(collection.controls[0].id, LiveId(3));
+        assert_eq!(collection.controls[0].descriptor.id, LiveId(3));
         assert_eq!(
-            collection.controls[0].kind,
+            collection.controls[0].descriptor.kind,
             NativeGlassControlKind::Button {
                 role: NativeGlassButtonRole::Primary,
             }
         );
-        assert_eq!(collection.controls[0].label, "Send");
+        assert_eq!(collection.controls[0].descriptor.label, "Send");
         assert_eq!(collector.stack.len(), 0);
     }
 

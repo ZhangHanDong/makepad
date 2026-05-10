@@ -645,6 +645,14 @@ impl Widget for Window {
                         cx.request_live_edit();
                     }
 
+                    if ev.old_geom.dpi_factor != ev.new_geom.dpi_factor
+                        || ev.old_geom.inner_size != ev.new_geom.inner_size
+                    {
+                        self.view.redraw(cx);
+                        cx.redraw_pass_and_child_passes(self.pass.handle.draw_pass_id());
+                        cx.repaint_pass_and_child_passes(self.pass.handle.draw_pass_id());
+                    }
+
                     cx.widget_action(uid, WindowAction::WindowGeomChange(ev.clone()));
                     return;
                 }

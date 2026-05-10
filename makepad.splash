@@ -150,6 +150,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-fullscreen-probe", backend: "macos-native-clear", fullscreen_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-geometry-probe", backend: "macos-native-clear", geometry_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-probe", backend: "macos-native-clear", native_control_probe: "buttons"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-geometry-probe", backend: "macos-native-clear", geometry_probe: "1", native_control_probe: "buttons"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-action-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_action_probe: "Clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-accessibility-press-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_accessibility_press_probe: "Clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-control-mouse-probe", backend: "macos-native-clear", native_control_probe: "buttons", native_control_mouse_probe: "Clear"}

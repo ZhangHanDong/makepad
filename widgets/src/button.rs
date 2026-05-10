@@ -659,6 +659,7 @@ impl Widget for Button {
         if self.native_control {
             push_native_glass_control_descriptor(
                 cx,
+                self.draw_bg.area(),
                 NativeGlassControlDescriptor {
                     id: Self::native_control_id_for_widget_uid(self.widget_uid()),
                     rect: self.draw_bg.area().rect(cx),
