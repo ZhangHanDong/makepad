@@ -128,10 +128,10 @@ pub struct MacosWindow {
     pub(crate) native_glass_control_views: Vec<ObjcId>,
     pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
-    pub(crate) native_glass_perform_click_probe_fired_controls: Vec<LiveId>,
-    pub(crate) native_glass_accessibility_press_probe_fired_controls: Vec<LiveId>,
-    pub(crate) native_glass_mouse_event_probe_fired_controls: Vec<LiveId>,
-    pub(crate) native_glass_cg_event_probe_fired_controls: Vec<LiveId>,
+    pub(crate) native_glass_perform_click_probe_fired_controls: Vec<(LiveId, Rect)>,
+    pub(crate) native_glass_accessibility_press_probe_fired_controls: Vec<(LiveId, Rect)>,
+    pub(crate) native_glass_mouse_event_probe_fired_controls: Vec<(LiveId, Rect)>,
+    pub(crate) native_glass_cg_event_probe_fired_controls: Vec<(LiveId, Rect)>,
     pub(crate) proof_substrate_view: ObjcId,
     pub(crate) above_metal_glass_probe_view: ObjcId,
     pub(crate) last_mouse_pos: Vec2d,
@@ -989,6 +989,17 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_probe_key(control: &NativeGlassControlDescriptor) -> (LiveId, Rect) {
+        (control.id, control.rect)
+    }
+
+    fn native_glass_control_probe_already_fired(
+        fired_controls: &[(LiveId, Rect)],
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        fired_controls.contains(&Self::native_glass_control_probe_key(control))
+    }
+
     fn native_glass_control_cg_event_probe_mode_value(
         value: Option<&str>,
         control: &NativeGlassControlDescriptor,
@@ -1066,14 +1077,15 @@ impl MacosWindow {
         control_frame: NSRect,
     ) {
         if !Self::native_glass_control_mouse_event_probe_matches(control)
-            || self
-                .native_glass_mouse_event_probe_fired_controls
-                .contains(&control.id)
+            || Self::native_glass_control_probe_already_fired(
+                &self.native_glass_mouse_event_probe_fired_controls,
+                control,
+            )
         {
             return;
         }
         self.native_glass_mouse_event_probe_fired_controls
-            .push(control.id);
+            .push(Self::native_glass_control_probe_key(control));
         let point = NSPoint {
             x: control_frame.origin.x + control_frame.size.width * 0.5,
             y: control_frame.origin.y + control_frame.size.height * 0.5,
@@ -1123,14 +1135,14 @@ impl MacosWindow {
         let Some(mode) = Self::native_glass_control_cg_event_probe_mode(control) else {
             return;
         };
-        if self
-            .native_glass_cg_event_probe_fired_controls
-            .contains(&control.id)
-        {
+        if Self::native_glass_control_probe_already_fired(
+            &self.native_glass_cg_event_probe_fired_controls,
+            control,
+        ) {
             return;
         }
         self.native_glass_cg_event_probe_fired_controls
-            .push(control.id);
+            .push(Self::native_glass_control_probe_key(control));
         let local_point = NSPoint {
             x: control_frame.origin.x + control_frame.size.width * 0.5,
             y: control_frame.origin.y + control_frame.size.height * 0.5,
@@ -1247,12 +1259,13 @@ impl MacosWindow {
         self.run_native_glass_control_cg_event_probe(control, button_frame);
         self.run_native_glass_control_mouse_event_probe(control, button_frame);
         if Self::native_glass_control_accessibility_press_probe_matches(control)
-            && !self
-                .native_glass_accessibility_press_probe_fired_controls
-                .contains(&control.id)
+            && !Self::native_glass_control_probe_already_fired(
+                &self.native_glass_accessibility_press_probe_fired_controls,
+                control,
+            )
         {
             self.native_glass_accessibility_press_probe_fired_controls
-                .push(control.id);
+                .push(Self::native_glass_control_probe_key(control));
             let accessibility_press_sel = sel!(accessibilityPerformPress);
             let can_accessibility_press: BOOL =
                 msg_send![button, respondsToSelector: accessibility_press_sel];
@@ -1278,12 +1291,13 @@ impl MacosWindow {
             }
         }
         if Self::native_glass_control_perform_click_probe_matches(control)
-            && !self
-                .native_glass_perform_click_probe_fired_controls
-                .contains(&control.id)
+            && !Self::native_glass_control_probe_already_fired(
+                &self.native_glass_perform_click_probe_fired_controls,
+                control,
+            )
         {
             self.native_glass_perform_click_probe_fired_controls
-                .push(control.id);
+                .push(Self::native_glass_control_probe_key(control));
             crate::log!(
                 "[liquid-glass] backend=apple-native-controls event=perform-click-probe control={:?} label={:?}",
                 control.id,
@@ -2837,6 +2851,37 @@ mod tests {
         assert!(
             !MacosWindow::native_glass_control_perform_click_probe_matches_value(None, &control)
         );
+    }
+
+    #[test]
+    fn native_glass_control_probe_key_includes_rect() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(10),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Default,
+            },
+            label: "Clear".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+        let mut moved_control = control.clone();
+        moved_control.rect.pos.x += 12.0;
+        let fired = vec![MacosWindow::native_glass_control_probe_key(&control)];
+
+        assert!(MacosWindow::native_glass_control_probe_already_fired(
+            &fired, &control
+        ));
+        assert!(!MacosWindow::native_glass_control_probe_already_fired(
+            &fired,
+            &moved_control
+        ));
     }
 
     #[test]
