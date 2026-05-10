@@ -354,7 +354,18 @@ behavior, or full native interior Liquid Glass.
   `button-action`, or `makepad-click` logs. Step 163 fixes the identified
   geometry-sync root cause by forcing native-control AppKit frame refresh on
   macOS window geometry changes, and build `[5]` revalidated native-control
-  installation. A post-fix physical click is still unproven.
+  installation. Step 164 adds
+  `makepad-example-aichat-macos-native-clear-control-geometry-mouse-probe` and
+  changes native-control probe de-duplication from `control_id` to
+  `(control_id, rect)`, so the same logical control can be re-tested after
+  layout moves it. Studio release build `[17]` reached State 4, installed four
+  native panels and two visible glass buttons, produced the synthetic `Clear`
+  mouse path `window-send-event hit=NativeGlassButton -> button-action ->
+  native-control-probe=makepad-click`, and continued to log
+  `frame-refresh reason=geometry-change` plus `appkit-hit-test-probe ...
+  matches_control=true` after geometry changes. This closes the automatic
+  post-geometry probe coverage gap. A post-fix physical click is still
+  unproven.
   UIKit controls now have a compiled UIKit installer skeleton from Step 148,
   and Step 152 makes the `touchUpInside` action mask explicit in code/tests,
   and Step 153 maps native enabled state with a selector preflight, but no iOS
@@ -419,8 +430,8 @@ behavior, or full native interior Liquid Glass.
    with recognizable native transparency/refraction/liquid distortion before it
    can replace the current route.
 3. Close the macOS native-control physical-click gate by clicking the visible
-   `Clear` button in build `[5]` or a fresh `macos-native-clear-control-probe`
-   run after Step 163 and proving the diagnostic chain:
+   `Clear` button in a fresh `macos-native-clear-control-probe` run after Steps
+   163-164 and proving the diagnostic chain:
    `window-send-event -> button-mouse-down -> target-action -> button-action -> native-control-probe=makepad-click`.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
