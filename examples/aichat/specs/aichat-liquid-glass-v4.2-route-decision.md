@@ -72,6 +72,13 @@ that prototype: the user saw only a gray/grid lower scene, with no transparency
 and no recognizable blur/refraction/liquid distortion. That verdict keeps
 `AppleNativeInterleave` as a prototype, not a production route.
 
+Step 172 narrows the failure. The probe hierarchy can be installed as a lower
+Makepad Metal sibling, then `NSGlassEffectContainerView`, then the primary
+Makepad Metal view. The remaining native-interleave blocker is therefore the
+Makepad render split: the primary surface still paints the full aichat UI and
+interior readability layers above native glass instead of acting as a
+transparent foreground-only surface.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

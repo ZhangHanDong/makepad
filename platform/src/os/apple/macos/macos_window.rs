@@ -47,6 +47,14 @@ enum NativeGlassCgEventProbeMode {
     Process,
 }
 
+fn native_interleave_hierarchy_probe_enabled() -> bool {
+    std::env::var("AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
 impl MacosNativeGlassStyle {
     fn default_ns_style_raw(self) -> i64 {
         match self {
@@ -855,6 +863,51 @@ impl MacosWindow {
         }
     }
 
+    unsafe fn log_native_glass_interleave_hierarchy(&self, reason: &'static str) {
+        let subviews: ObjcId = msg_send![self.container_view, subviews];
+        let count: usize = msg_send![subviews, count];
+        crate::log!(
+            "[liquid-glass] native-interleave-hierarchy reason={} subviews={}",
+            reason,
+            count
+        );
+        for index in 0..count {
+            let view: ObjcId = msg_send![subviews, objectAtIndex: index];
+            let frame: NSRect = msg_send![view, frame];
+            let hidden: BOOL = msg_send![view, isHidden];
+            let layer: ObjcId = msg_send![view, layer];
+            let view_class = Self::native_glass_objc_class_name(view);
+            let layer_class = Self::native_glass_objc_class_name(layer);
+            let role = if view == self.view {
+                "primary-metal-view"
+            } else if view == self.native_glass_container_view {
+                "native-glass-container"
+            } else if self
+                .native_glass_control_views
+                .iter()
+                .any(|control| *control == view)
+            {
+                "native-control"
+            } else if layer_class == "CAMetalLayer" {
+                "metal-sibling"
+            } else {
+                "other"
+            };
+            crate::log!(
+                "[liquid-glass] native-interleave-hierarchy index={} role={} view_class={} layer_class={} frame=({:.1},{:.1},{:.1},{:.1}) hidden={}",
+                index,
+                role,
+                view_class,
+                layer_class,
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+                hidden
+            );
+        }
+    }
+
     fn native_glass_button_class() -> ObjcId {
         get_macos_class_global().native_glass_button as ObjcId
     }
@@ -1618,6 +1671,9 @@ impl MacosWindow {
                 relativeTo: self.view
             ];
             self.native_glass_container_view = native_container;
+            if native_interleave_hierarchy_probe_enabled() {
+                self.log_native_glass_interleave_hierarchy("native-container-installed");
+            }
 
             let installed_panels = panel_results
                 .iter()
