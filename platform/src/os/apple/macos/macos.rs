@@ -707,6 +707,23 @@ impl Cx {
         }
     }
 
+    fn draw_non_primary_window_pass_without_screenshot(
+        &mut self,
+        draw_pass_id: DrawPassId,
+        metal_cx: &mut MetalCx,
+        mode: DrawPassMode,
+    ) {
+        let pending_screenshot_requests = std::mem::take(&mut self.screenshot_requests);
+        self.draw_pass(draw_pass_id, metal_cx, mode);
+        if self.screenshot_requests.is_empty() {
+            self.screenshot_requests = pending_screenshot_requests;
+        } else {
+            let mut restored_requests = pending_screenshot_requests;
+            restored_requests.append(&mut self.screenshot_requests);
+            self.screenshot_requests = restored_requests;
+        }
+    }
+
     pub fn event_loop(cx: Rc<RefCell<Cx>>) {
         cx.borrow_mut().self_ref = Some(cx.clone());
         cx.borrow_mut().os_type = OsType::Macos;
@@ -776,7 +793,7 @@ impl Cx {
                                     metal_window.next_lower_scene_role_drawable()
                                 {
                                     self.passes[*draw_pass_id].set_time(time_now);
-                                    self.draw_pass(
+                                    self.draw_non_primary_window_pass_without_screenshot(
                                         *draw_pass_id,
                                         metal_cx,
                                         DrawPassMode::Drawable(lower_scene_drawable),
@@ -789,7 +806,7 @@ impl Cx {
                                     metal_window.next_lower_scene_mirror_drawable()
                                 {
                                     self.passes[*draw_pass_id].set_time(time_now);
-                                    self.draw_pass(
+                                    self.draw_non_primary_window_pass_without_screenshot(
                                         *draw_pass_id,
                                         metal_cx,
                                         DrawPassMode::Drawable(lower_scene_drawable),

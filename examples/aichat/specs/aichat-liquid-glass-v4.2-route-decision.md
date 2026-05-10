@@ -85,6 +85,12 @@ That runnable combines the lower-scene pass, native clear glass, the primary
 Metal surface, and transparent `GlassPanel` overlays. It is a diagnostic
 foreground-split probe, not a production backend.
 
+Step 174 fixes Studio screenshot routing for the interleave probes. Lower-scene
+diagnostic drawables no longer consume default Studio screenshot requests before
+the primary pass. This keeps Studio screenshots useful for the Makepad
+foreground surface, while native AppKit material visibility still requires
+manual/system visual validation.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
