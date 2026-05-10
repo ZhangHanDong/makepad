@@ -103,6 +103,12 @@ the available system screenshot path. A user manual verdict or usable
 system-composition screenshot is required before promoting or rejecting this
 interleave probe visually.
 
+Step 177 adds
+`makepad-example-aichat-macos-native-clear-interleave-diagnostic-overlay`, which
+uses the same interleave/transparent-overlay stack but switches the lower scene
+to the stronger `Refraction` profile. Use this target for the next manual
+native-material verdict.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

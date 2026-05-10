@@ -1941,6 +1941,22 @@ fn native_lower_scene_pass_probe_enabled() -> bool {
         == Some("lower-scene-pass")
 }
 
+fn native_interleave_scene_profile_from_value(value: Option<&str>) -> ShaderBackdropProof {
+    match value.map(str::trim) {
+        Some("diagnostic" | "refraction" | "strong") => ShaderBackdropProof::Refraction,
+        Some("interior-no-chroma" | "no-chroma") => ShaderBackdropProof::InteriorNoChroma,
+        _ => ShaderBackdropProof::Interior,
+    }
+}
+
+fn native_interleave_scene_profile() -> ShaderBackdropProof {
+    native_interleave_scene_profile_from_value(
+        std::env::var("AICHAT_NATIVE_INTERLEAVE_SCENE_PROFILE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 fn metal_probe_pattern_enabled() -> bool {
     metal_probe_pattern_enabled_from_value(
         std::env::var("AICHAT_METAL_PROBE_PATTERN").ok().as_deref(),
@@ -5431,7 +5447,8 @@ impl App {
         cx.passes[self.shader_backdrop_scene_pass.draw_pass_id()].parent =
             CxDrawPassParent::Window(window_id);
 
-        let profile = shader_backdrop_visual_profile(ShaderBackdropProof::Interior);
+        let scene_profile = native_interleave_scene_profile();
+        let profile = shader_backdrop_visual_profile(scene_profile);
         self.draw_shader_backdrop_scene.draw_vars.set_uniform(
             cx,
             live_id!(scene_grid_strength),
@@ -5457,7 +5474,10 @@ impl App {
 
         if !self.native_lower_scene_pass_probe_logged {
             self.native_lower_scene_pass_probe_logged = true;
-            log!("[liquid-glass] native-lower-scene-pass=draw");
+            log!(
+                "[liquid-glass] native-lower-scene-pass=draw profile={:?}",
+                scene_profile
+            );
         }
     }
 
@@ -6581,9 +6601,10 @@ mod tests {
         native_fullscreen_probe_enabled_from_value, native_fullscreen_probe_should_continue_wait,
         native_fullscreen_probe_should_start, native_geometry_probe_enabled_from_value,
         native_geometry_probe_should_start, native_inactive_probe_enabled_from_value,
-        native_inactive_probe_log_line, native_spacing_probe_enabled_from_value,
-        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
-        native_substrate_resolved_appearance, native_transient_probe_enabled_from_value,
+        native_inactive_probe_log_line, native_interleave_scene_profile_from_value,
+        native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
+        native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
+        native_transient_probe_enabled_from_value,
         parse_glass_backend, render_state_templates, render_state_templates_for_ui,
         resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
         should_start_window_drag, strip_appplan_fences_for_ui, Agent, App, AppCapability,
@@ -7505,6 +7526,26 @@ mod tests {
         assert!(interior.liquid_warp_strength < refraction.liquid_warp_strength);
         assert!(interior.scene_grid_strength < 0.03);
         assert_eq!(shader.liquid_warp_strength, 0.0);
+    }
+
+    #[test]
+    fn aichat_native_interleave_scene_profile_accepts_diagnostic_values() {
+        assert_eq!(
+            native_interleave_scene_profile_from_value(None),
+            ShaderBackdropProof::Interior
+        );
+        assert_eq!(
+            native_interleave_scene_profile_from_value(Some("diagnostic")),
+            ShaderBackdropProof::Refraction
+        );
+        assert_eq!(
+            native_interleave_scene_profile_from_value(Some("strong")),
+            ShaderBackdropProof::Refraction
+        );
+        assert_eq!(
+            native_interleave_scene_profile_from_value(Some("interior-no-chroma")),
+            ShaderBackdropProof::InteriorNoChroma
+        );
     }
 
     #[test]
