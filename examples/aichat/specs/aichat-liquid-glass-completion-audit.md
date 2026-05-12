@@ -448,6 +448,11 @@ behavior, or full native interior Liquid Glass.
 - Full native glass inside fullscreen remains a known limitation.
 - Stage Manager and multi-display behavior remain known limitations.
 - Popup/modal native glass remains a separate implementation phase.
+- Step 180 performs an objective-level completion audit. The objective is still
+  not complete: Step 179 production preview needs manual system-composited
+  visual validation, iOS 26 runtime validation remains locally blocked, and the
+  advanced behavior gates are still known limitations rather than completed
+  native Liquid Glass support.
 
 ## Next Gates
 
