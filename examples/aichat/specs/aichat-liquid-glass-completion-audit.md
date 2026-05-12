@@ -403,9 +403,13 @@ behavior, or full native interior Liquid Glass.
   framebuffer-only proof. Step 176 records that local system screenshot
   automation returned a black frame. Step 177 adds a stronger diagnostic overlay
   target, and Step 178 records a user-provided system screenshot that passes the
-  diagnostic interleave visual hypothesis. The remaining gap is productionizing
-  the split: replacing the diagnostic lower scene with real aichat lower content
-  while keeping foreground UI/input on the upper surface.
+  diagnostic interleave visual hypothesis. Step 179 adds the first
+  production-oriented preview target,
+  `makepad-example-aichat-macos-native-clear-interleave-production-preview`,
+  which keeps the proven interleave layer order but removes the diagnostic grid
+  with `grid_strength=0.000`. The remaining gap is manual/system visual
+  validation that the non-diagnostic lower scene still produces recognizable
+  native glass material, refraction, and liquid distortion.
 - Phase H is not implemented.
 - Step 134 closes the v4.1 fullscreen fallback/restore probe. Full native glass
   inside fullscreen is still not implemented.
@@ -466,10 +470,11 @@ behavior, or full native interior Liquid Glass.
    as the next manual visual gate for that hypothesis. Step 174 restores Studio
    screenshot evidence for the primary foreground surface during that gate.
    Step 175 confirms the primary foreground image is mostly transparent.
-3. Convert the Step 178 diagnostic interleave pass into a production-oriented
-   aichat split: real lower scene/background content below native glass,
-   foreground text/controls/input above native glass, and no diagnostic grid in
-   the default user-facing route.
+3. Manually validate the Step 179 production preview in a system-composited
+   window: it should no longer show the diagnostic grid, but should still show
+   recognizable native clear glass across the interior rather than only edge
+   halos. If the production lower scene is too subtle, tune the lower-scene
+   content before promoting the route.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
    concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.

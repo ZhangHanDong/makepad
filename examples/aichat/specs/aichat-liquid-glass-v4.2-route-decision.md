@@ -116,6 +116,15 @@ above the stack. The next route is no longer more proof of layer ordering; it is
 turning the diagnostic split into a real aichat lower-scene / upper-foreground
 implementation.
 
+Step 179 adds
+`makepad-example-aichat-macos-native-clear-interleave-production-preview`. It
+uses the same proven interleave stack but selects a production lower-scene
+profile with `grid_strength=0.000`, keeping the diagnostic grid out of the
+preview while preserving State 4 native clear glass and a mostly transparent
+primary foreground. This is still a guarded preview, not a default backend,
+until a manual system-composited visual pass confirms that the non-diagnostic
+lower scene produces enough recognizable native glass material.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

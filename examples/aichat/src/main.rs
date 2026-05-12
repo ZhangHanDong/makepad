@@ -1425,6 +1425,13 @@ fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropV
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NativeInterleaveSceneProfile {
+    proof: ShaderBackdropProof,
+    scene_grid_strength: f32,
+    name: &'static str,
+}
+
 impl GlassAppearance {
     fn panel_preset(self) -> GlassPanelPreset {
         match self.substrate {
@@ -1941,15 +1948,41 @@ fn native_lower_scene_pass_probe_enabled() -> bool {
         == Some("lower-scene-pass")
 }
 
-fn native_interleave_scene_profile_from_value(value: Option<&str>) -> ShaderBackdropProof {
+fn native_interleave_scene_profile_from_value(value: Option<&str>) -> NativeInterleaveSceneProfile {
     match value.map(str::trim) {
-        Some("diagnostic" | "refraction" | "strong") => ShaderBackdropProof::Refraction,
-        Some("interior-no-chroma" | "no-chroma") => ShaderBackdropProof::InteriorNoChroma,
-        _ => ShaderBackdropProof::Interior,
+        Some("diagnostic" | "refraction" | "strong") => {
+            let proof = ShaderBackdropProof::Refraction;
+            NativeInterleaveSceneProfile {
+                proof,
+                scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                name: "diagnostic",
+            }
+        }
+        Some("production" | "real" | "ambient") => NativeInterleaveSceneProfile {
+            proof: ShaderBackdropProof::InteriorNoChroma,
+            scene_grid_strength: 0.0,
+            name: "production",
+        },
+        Some("interior-no-chroma" | "no-chroma") => {
+            let proof = ShaderBackdropProof::InteriorNoChroma;
+            NativeInterleaveSceneProfile {
+                proof,
+                scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                name: "interior-no-chroma",
+            }
+        }
+        _ => {
+            let proof = ShaderBackdropProof::Interior;
+            NativeInterleaveSceneProfile {
+                proof,
+                scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                name: "interior",
+            }
+        }
     }
 }
 
-fn native_interleave_scene_profile() -> ShaderBackdropProof {
+fn native_interleave_scene_profile() -> NativeInterleaveSceneProfile {
     native_interleave_scene_profile_from_value(
         std::env::var("AICHAT_NATIVE_INTERLEAVE_SCENE_PROFILE")
             .ok()
@@ -5448,11 +5481,10 @@ impl App {
             CxDrawPassParent::Window(window_id);
 
         let scene_profile = native_interleave_scene_profile();
-        let profile = shader_backdrop_visual_profile(scene_profile);
         self.draw_shader_backdrop_scene.draw_vars.set_uniform(
             cx,
             live_id!(scene_grid_strength),
-            &[profile.scene_grid_strength],
+            &[scene_profile.scene_grid_strength],
         );
 
         cx.begin_pass(&self.shader_backdrop_scene_pass, None);
@@ -5475,8 +5507,10 @@ impl App {
         if !self.native_lower_scene_pass_probe_logged {
             self.native_lower_scene_pass_probe_logged = true;
             log!(
-                "[liquid-glass] native-lower-scene-pass=draw profile={:?}",
-                scene_profile
+                "[liquid-glass] native-lower-scene-pass=draw profile={} proof={:?} grid_strength={:.3}",
+                scene_profile.name,
+                scene_profile.proof,
+                scene_profile.scene_grid_strength
             );
         }
     }
@@ -7531,21 +7565,32 @@ mod tests {
     #[test]
     fn aichat_native_interleave_scene_profile_accepts_diagnostic_values() {
         assert_eq!(
-            native_interleave_scene_profile_from_value(None),
+            native_interleave_scene_profile_from_value(None).proof,
             ShaderBackdropProof::Interior
         );
         assert_eq!(
-            native_interleave_scene_profile_from_value(Some("diagnostic")),
+            native_interleave_scene_profile_from_value(Some("diagnostic")).proof,
             ShaderBackdropProof::Refraction
         );
         assert_eq!(
-            native_interleave_scene_profile_from_value(Some("strong")),
+            native_interleave_scene_profile_from_value(Some("strong")).proof,
             ShaderBackdropProof::Refraction
         );
         assert_eq!(
-            native_interleave_scene_profile_from_value(Some("interior-no-chroma")),
+            native_interleave_scene_profile_from_value(Some("interior-no-chroma")).proof,
             ShaderBackdropProof::InteriorNoChroma
         );
+    }
+
+    #[test]
+    fn aichat_native_interleave_production_profile_removes_diagnostic_grid() {
+        let production = native_interleave_scene_profile_from_value(Some("production"));
+        let diagnostic = native_interleave_scene_profile_from_value(Some("diagnostic"));
+
+        assert_eq!(production.proof, ShaderBackdropProof::InteriorNoChroma);
+        assert_eq!(production.scene_grid_strength, 0.0);
+        assert_eq!(production.name, "production");
+        assert!(diagnostic.scene_grid_strength > production.scene_grid_strength);
     }
 
     #[test]
