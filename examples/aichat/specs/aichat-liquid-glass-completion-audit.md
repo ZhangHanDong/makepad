@@ -453,6 +453,11 @@ behavior, or full native interior Liquid Glass.
   visual validation, iOS 26 runtime validation remains locally blocked, and the
   advanced behavior gates are still known limitations rather than completed
   native Liquid Glass support.
+- Step 181 strengthens the production interleave lower scene without restoring
+  the diagnostic grid: build `[33]` logs `grid_strength=0.000` and
+  `detail_strength=0.220`, while the foreground alpha histogram remains mostly
+  transparent. The remaining gate is still manual system-composited visual
+  validation of native material quality.
 
 ## Next Gates
 
@@ -475,11 +480,11 @@ behavior, or full native interior Liquid Glass.
    as the next manual visual gate for that hypothesis. Step 174 restores Studio
    screenshot evidence for the primary foreground surface during that gate.
    Step 175 confirms the primary foreground image is mostly transparent.
-3. Manually validate the Step 179 production preview in a system-composited
+3. Manually validate the Step 181 production preview in a system-composited
    window: it should no longer show the diagnostic grid, but should still show
    recognizable native clear glass across the interior rather than only edge
-   halos. If the production lower scene is too subtle, tune the lower-scene
-   content before promoting the route.
+   halos. If the production lower scene is still too subtle, tune the
+   lower-scene content before promoting the route.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
    concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.

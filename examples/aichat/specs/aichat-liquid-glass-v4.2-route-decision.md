@@ -125,6 +125,11 @@ primary foreground. This is still a guarded preview, not a default backend,
 until a manual system-composited visual pass confirms that the non-diagnostic
 lower scene produces enough recognizable native glass material.
 
+Step 181 strengthens that production lower scene without reintroducing the
+diagnostic grid. The production profile now logs `grid_strength=0.000` and
+`detail_strength=0.220`, giving native glass more background detail to sample
+while keeping the route guarded behind the production-preview runnable.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

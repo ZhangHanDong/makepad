@@ -30,6 +30,7 @@ script_mod! {
         ..mod.draw.DrawQuad
         scene_mode: 0.0
         scene_grid_strength: uniform(0.18)
+        scene_detail_strength: uniform(0.16)
 
         pixel: fn() {
             let p = self.pos
@@ -49,6 +50,10 @@ script_mod! {
             let grid_x = pow(0.5 + 0.5 * sin(px.x * 0.070), 18.0)
             let grid_y = pow(0.5 + 0.5 * sin(px.y * 0.070), 18.0)
             let grid = max(grid_x, grid_y) * self.scene_grid_strength
+            let ripple = 0.5 + 0.5 * sin(length(px - self.rect_size * vec2(0.28, 0.34)) * 0.040 - t * 0.34)
+            let grain = sin(px.x * 0.043 + sin(px.y * 0.021 + t * 0.18) * 2.0)
+                * sin(px.y * 0.037 + sin(px.x * 0.017 - t * 0.21) * 2.0)
+            let detail = (ripple * 0.55 + grain * 0.45) * self.scene_detail_strength
             let scene = base
                 + cyan * c1
                 + gold * c2
@@ -56,6 +61,7 @@ script_mod! {
                 + mint * c4
                 + vec3(0.06, 0.08, 0.10) * line_a
                 + vec3(0.08, 0.06, 0.09) * line_b
+                + vec3(0.22, 0.30, 0.34) * detail
                 + vec3(0.75, 0.95, 0.95) * grid
             return Pal.premul(vec4(scene, 1.0))
         }
@@ -1429,6 +1435,7 @@ fn shader_backdrop_visual_profile(proof: ShaderBackdropProof) -> ShaderBackdropV
 struct NativeInterleaveSceneProfile {
     proof: ShaderBackdropProof,
     scene_grid_strength: f32,
+    scene_detail_strength: f32,
     name: &'static str,
 }
 
@@ -1955,12 +1962,14 @@ fn native_interleave_scene_profile_from_value(value: Option<&str>) -> NativeInte
             NativeInterleaveSceneProfile {
                 proof,
                 scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                scene_detail_strength: 0.26,
                 name: "diagnostic",
             }
         }
         Some("production" | "real" | "ambient") => NativeInterleaveSceneProfile {
             proof: ShaderBackdropProof::InteriorNoChroma,
             scene_grid_strength: 0.0,
+            scene_detail_strength: 0.22,
             name: "production",
         },
         Some("interior-no-chroma" | "no-chroma") => {
@@ -1968,6 +1977,7 @@ fn native_interleave_scene_profile_from_value(value: Option<&str>) -> NativeInte
             NativeInterleaveSceneProfile {
                 proof,
                 scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                scene_detail_strength: 0.16,
                 name: "interior-no-chroma",
             }
         }
@@ -1976,6 +1986,7 @@ fn native_interleave_scene_profile_from_value(value: Option<&str>) -> NativeInte
             NativeInterleaveSceneProfile {
                 proof,
                 scene_grid_strength: shader_backdrop_visual_profile(proof).scene_grid_strength,
+                scene_detail_strength: 0.18,
                 name: "interior",
             }
         }
@@ -2031,6 +2042,8 @@ pub struct DrawAichatBackdropScene {
     scene_mode: f32,
     #[rust(0.18)]
     scene_grid_strength: f32,
+    #[rust(0.16)]
+    scene_detail_strength: f32,
 }
 
 #[derive(Script, ScriptHook)]
@@ -5486,6 +5499,11 @@ impl App {
             live_id!(scene_grid_strength),
             &[scene_profile.scene_grid_strength],
         );
+        self.draw_shader_backdrop_scene.draw_vars.set_uniform(
+            cx,
+            live_id!(scene_detail_strength),
+            &[scene_profile.scene_detail_strength],
+        );
 
         cx.begin_pass(&self.shader_backdrop_scene_pass, None);
         self.shader_backdrop_scene_draw_list.begin_always(cx);
@@ -5507,10 +5525,11 @@ impl App {
         if !self.native_lower_scene_pass_probe_logged {
             self.native_lower_scene_pass_probe_logged = true;
             log!(
-                "[liquid-glass] native-lower-scene-pass=draw profile={} proof={:?} grid_strength={:.3}",
+                "[liquid-glass] native-lower-scene-pass=draw profile={} proof={:?} grid_strength={:.3} detail_strength={:.3}",
                 scene_profile.name,
                 scene_profile.proof,
-                scene_profile.scene_grid_strength
+                scene_profile.scene_grid_strength,
+                scene_profile.scene_detail_strength
             );
         }
     }
@@ -7589,8 +7608,10 @@ mod tests {
 
         assert_eq!(production.proof, ShaderBackdropProof::InteriorNoChroma);
         assert_eq!(production.scene_grid_strength, 0.0);
+        assert!(production.scene_detail_strength > 0.0);
         assert_eq!(production.name, "production");
         assert!(diagnostic.scene_grid_strength > production.scene_grid_strength);
+        assert!(diagnostic.scene_detail_strength > production.scene_detail_strength);
     }
 
     #[test]
