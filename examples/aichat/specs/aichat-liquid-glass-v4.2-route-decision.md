@@ -137,6 +137,11 @@ preview and reaches State 4. Without that guard, the backend still follows the
 original fallback path. This keeps the naming honest while making the route
 directly runnable for manual visual validation.
 
+Step 183 fixes the app-facing success log for that guarded route:
+`app-substrate=apple-native-interleave` now appears when the interleave guard and
+lower-scene pass are both active. Platform/widget logs may still mention
+`apple-native-underlay` because they describe the shared native panel installer.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

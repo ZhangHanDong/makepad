@@ -1917,6 +1917,22 @@ fn inactive_glass_multiplier_for_appearance(appearance: GlassAppearance, active:
     }
 }
 
+fn app_native_substrate_log_name(
+    appearance: GlassAppearance,
+    interleave_guard_enabled: bool,
+    lower_scene_pass_enabled: bool,
+) -> Option<&'static str> {
+    if !appearance.substrate.is_native() {
+        return None;
+    }
+
+    if interleave_guard_enabled && lower_scene_pass_enabled {
+        Some("apple-native-interleave")
+    } else {
+        Some("apple-native-underlay")
+    }
+}
+
 fn native_inactive_probe_log_line(
     appearance: GlassAppearance,
     active: bool,
@@ -6194,15 +6210,20 @@ impl App {
             self.start_native_transient_probe(cx);
         }
 
-        match self.glass_appearance.substrate {
-            GlassSubstrate::MacosNative { .. } | GlassSubstrate::IosNative { .. } => {
+        match app_native_substrate_log_name(
+            self.glass_appearance,
+            apple_native_interleave_guard_enabled(),
+            native_lower_scene_pass_probe_enabled(),
+        ) {
+            Some(substrate) => {
                 log!(
-                    "[liquid-glass] app-substrate=apple-native-underlay state={:?} reason={}",
+                    "[liquid-glass] app-substrate={} state={:?} reason={}",
+                    substrate,
                     event.state,
                     event.reason
                 );
             }
-            GlassSubstrate::ShaderOnly => {
+            None => {
                 log!(
                     "[liquid-glass] app-substrate=shader state={:?} reason={}",
                     event.state,
@@ -6704,8 +6725,8 @@ mod tests {
     use super::{
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        apple_native_interleave_guard_enabled_from_value, chat_scroll_edge_alpha,
-        chat_scroll_edge_visibility, glass_opacity_values,
+        app_native_substrate_log_name, apple_native_interleave_guard_enabled_from_value,
+        chat_scroll_edge_alpha, chat_scroll_edge_visibility, glass_opacity_values,
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
@@ -7068,6 +7089,33 @@ mod tests {
         assert!(apple_native_interleave_guard_enabled_from_value(Some("production-preview")));
         assert!(!apple_native_interleave_guard_enabled_from_value(None));
         assert!(!apple_native_interleave_guard_enabled_from_value(Some("0")));
+    }
+
+    #[test]
+    fn aichat_native_app_substrate_log_names_interleave_guard() {
+        let native = GlassAppearance {
+            substrate: GlassSubstrate::MacosNative {
+                style: MacosGlassStyle::Clear,
+            },
+            backdrop: None,
+        };
+
+        assert_eq!(
+            app_native_substrate_log_name(native, true, true),
+            Some("apple-native-interleave")
+        );
+        assert_eq!(
+            app_native_substrate_log_name(native, true, false),
+            Some("apple-native-underlay")
+        );
+        assert_eq!(
+            app_native_substrate_log_name(native, false, true),
+            Some("apple-native-underlay")
+        );
+        assert_eq!(
+            app_native_substrate_log_name(GlassAppearance::default(), true, true),
+            None
+        );
     }
 
     #[test]
