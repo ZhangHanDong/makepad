@@ -130,6 +130,13 @@ diagnostic grid. The production profile now logs `grid_strength=0.000` and
 `detail_strength=0.220`, giving native glass more background detail to sample
 while keeping the route guarded behind the production-preview runnable.
 
+Step 182 adds an explicit opt-in guard for the reserved backend name. With
+`AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview`,
+`AICHAT_GLASS_BACKEND=apple-native-interleave` now runs the guarded production
+preview and reaches State 4. Without that guard, the backend still follows the
+original fallback path. This keeps the naming honest while making the route
+directly runnable for manual visual validation.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a

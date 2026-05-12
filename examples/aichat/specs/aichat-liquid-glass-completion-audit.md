@@ -458,6 +458,12 @@ behavior, or full native interior Liquid Glass.
   `detail_strength=0.220`, while the foreground alpha histogram remains mostly
   transparent. The remaining gate is still manual system-composited visual
   validation of native material quality.
+- Step 182 promotes `AppleNativeInterleave` from a parser-reserved fallback to
+  an explicitly guarded production-preview backend. Build `[36]` runs
+  `makepad-example-aichat-apple-native-interleave-production-preview`, logs the
+  opt-in warning, installs the lower scene/native glass/primary foreground
+  hierarchy, reaches State 4, and keeps the foreground alpha histogram mostly
+  transparent. It is still not a default backend or completed production route.
 
 ## Next Gates
 
@@ -480,7 +486,8 @@ behavior, or full native interior Liquid Glass.
    as the next manual visual gate for that hypothesis. Step 174 restores Studio
    screenshot evidence for the primary foreground surface during that gate.
    Step 175 confirms the primary foreground image is mostly transparent.
-3. Manually validate the Step 181 production preview in a system-composited
+3. Manually validate the Step 182 guarded `AppleNativeInterleave` production
+   preview in a system-composited
    window: it should no longer show the diagnostic grid, but should still show
    recognizable native clear glass across the interior rather than only edge
    halos. If the production lower scene is still too subtle, tune the

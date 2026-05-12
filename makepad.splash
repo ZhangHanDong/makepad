@@ -65,6 +65,7 @@ let RunAichatMacosGlass = RunItem{
     geometry_probe: ""
     interleave_layer_probe: ""
     interleave_scene_profile: ""
+    interleave_backend_guard: ""
     native_control_probe: ""
     native_control_action_probe: ""
     native_control_accessibility_press_probe: ""
@@ -88,6 +89,7 @@ let RunAichatMacosGlass = RunItem{
                 "MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT": self.geometry_probe
                 "AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE": self.interleave_layer_probe
                 "AICHAT_NATIVE_INTERLEAVE_SCENE_PROFILE": self.interleave_scene_profile
+                "AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE": self.interleave_backend_guard
                 "AICHAT_NATIVE_CONTROL_PROBE": self.native_control_probe
                 "MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE": self.native_control_action_probe
                 "MAKEPAD_NATIVE_GLASS_CONTROL_ACCESSIBILITY_PRESS_PROBE": self.native_control_accessibility_press_probe
@@ -169,6 +171,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-transparent-overlay", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-pass", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-diagnostic-overlay", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "diagnostic", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-interleave-production-preview", backend: "macos-native-clear", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-production-preview", backend: "apple-native-interleave", interleave_backend_guard: "production-preview", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-proof-stripes", backend: "macos-native-clear", proof: "stripes", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-above-metal-probe", backend: "shader", above_metal_probe: "clear", metal_probe_pattern: "moving-pattern"}
     RunStudio{name: "makepad-studio"} 

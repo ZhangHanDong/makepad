@@ -1521,6 +1521,19 @@ fn parse_glass_backend(value: Option<&str>) -> (GlassBackendRequest, Option<&'st
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> GlassConfigResolution {
+    resolve_glass_appearance_with_interleave_guard(
+        value,
+        native_available,
+        apple_native_interleave_guard_enabled(),
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn resolve_glass_appearance_with_interleave_guard(
+    value: Option<&str>,
+    native_available: bool,
+    interleave_enabled: bool,
+) -> GlassConfigResolution {
     let (request, parse_warning) = parse_glass_backend(value);
     if let Some(warning) = parse_warning {
         return GlassConfigResolution {
@@ -1624,6 +1637,23 @@ fn resolve_glass_appearance(value: Option<&str>, native_available: bool) -> Glas
             },
             warning: None,
         },
+        GlassBackendRequest::AppleNativeInterleave if interleave_enabled && native_available => {
+            GlassConfigResolution {
+                appearance: GlassAppearance {
+                    substrate: GlassSubstrate::MacosNative {
+                        style: MacosGlassStyle::Clear,
+                    },
+                    backdrop: None,
+                },
+                warning: Some(
+                    "AppleNativeInterleave guarded production preview enabled; manual visual validation still required",
+                ),
+            }
+        }
+        GlassBackendRequest::AppleNativeInterleave if interleave_enabled => GlassConfigResolution {
+            appearance: GlassAppearance::default(),
+            warning: None,
+        },
         GlassBackendRequest::AppleNativeInterleave => GlassConfigResolution {
             appearance: GlassAppearance {
                 substrate: GlassSubstrate::ShaderOnly,
@@ -1672,12 +1702,40 @@ fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolutio
     }
 
     match request {
+        GlassBackendRequest::AppleNativeInterleave if apple_native_interleave_guard_enabled() => {
+            GlassConfigResolution {
+                appearance: GlassAppearance {
+                    substrate: GlassSubstrate::MacosNative {
+                        style: MacosGlassStyle::Clear,
+                    },
+                    backdrop: None,
+                },
+                warning: Some(
+                    "AppleNativeInterleave guarded production preview enabled; manual visual validation still required",
+                ),
+            }
+        }
         GlassBackendRequest::Auto | GlassBackendRequest::MacosNative(_) => GlassConfigResolution {
             appearance: GlassAppearance::default(),
             warning: None,
         },
         _ => resolve_glass_appearance(value, false),
     }
+}
+
+fn apple_native_interleave_guard_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim),
+        Some("1" | "true" | "yes" | "production" | "production-preview")
+    )
+}
+
+fn apple_native_interleave_guard_enabled() -> bool {
+    apple_native_interleave_guard_enabled_from_value(
+        std::env::var("AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE")
+            .ok()
+            .as_deref(),
+    )
 }
 
 fn initial_glass_opacity() -> f64 {
@@ -6646,7 +6704,8 @@ mod tests {
     use super::{
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        chat_scroll_edge_alpha, chat_scroll_edge_visibility, glass_opacity_values,
+        apple_native_interleave_guard_enabled_from_value, chat_scroll_edge_alpha,
+        chat_scroll_edge_visibility, glass_opacity_values,
         glass_opacity_with_native_compositing_proof, guard_native_splash_opaque_roots,
         inactive_glass_multiplier_for_appearance, metal_probe_pattern_enabled_from_value,
         native_compositing_proof_transparent_overlay_from_value,
@@ -6659,7 +6718,8 @@ mod tests {
         native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
         native_transient_probe_enabled_from_value,
         parse_glass_backend, render_state_templates, render_state_templates_for_ui,
-        resolve_glass_appearance, resolve_startup_glass_appearance, shader_backdrop_visual_profile,
+        resolve_glass_appearance, resolve_glass_appearance_with_interleave_guard,
+        resolve_startup_glass_appearance, shader_backdrop_visual_profile,
         should_start_window_drag, strip_appplan_fences_for_ui, Agent, App, AppCapability,
         AppDemoState, BackendType, CalculatorDemoState, ChatScrollEdgeVisibility,
         ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState, GlassAppearance,
@@ -6956,7 +7016,8 @@ mod tests {
 
     #[test]
     fn aichat_apple_native_interleave_resolution_requires_renderer_split() {
-        let resolved = resolve_glass_appearance(Some("apple-native-interleave"), true);
+        let resolved =
+            resolve_glass_appearance_with_interleave_guard(Some("apple-native-interleave"), true, false);
         assert_eq!(
             resolved.appearance,
             GlassAppearance {
@@ -6972,6 +7033,41 @@ mod tests {
                 "AppleNativeInterleave failed Step 98 visual verdict; falling back to ShaderBackdropInterior"
             )
         );
+    }
+
+    #[test]
+    fn aichat_apple_native_interleave_guard_enables_native_clear_preview() {
+        let pending =
+            resolve_glass_appearance_with_interleave_guard(Some("apple-native-interleave"), false, true);
+        assert_eq!(pending.appearance, GlassAppearance::default());
+        assert!(pending.warning.is_none());
+
+        let resolved =
+            resolve_glass_appearance_with_interleave_guard(Some("apple-native-interleave"), true, true);
+        assert_eq!(
+            resolved.appearance,
+            GlassAppearance {
+                substrate: GlassSubstrate::MacosNative {
+                    style: MacosGlassStyle::Clear,
+                },
+                backdrop: None,
+            }
+        );
+        assert_eq!(
+            resolved.warning,
+            Some(
+                "AppleNativeInterleave guarded production preview enabled; manual visual validation still required"
+            )
+        );
+    }
+
+    #[test]
+    fn aichat_apple_native_interleave_guard_env_accepts_truthy_values() {
+        assert!(apple_native_interleave_guard_enabled_from_value(Some("1")));
+        assert!(apple_native_interleave_guard_enabled_from_value(Some("true")));
+        assert!(apple_native_interleave_guard_enabled_from_value(Some("production-preview")));
+        assert!(!apple_native_interleave_guard_enabled_from_value(None));
+        assert!(!apple_native_interleave_guard_enabled_from_value(Some("0")));
     }
 
     #[test]
