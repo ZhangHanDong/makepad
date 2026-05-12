@@ -159,18 +159,22 @@ names should distinguish:
   Metal layer.
 - `ShaderBackdropInterior`: future Makepad-rendered full interior blur,
   refraction, and readability treatment.
-- `AppleNativeInterleave`: reserved for a later renderer split if Makepad gains
-  separate lower and upper Metal surfaces.
+- `AppleNativeInterleave`: guarded native interleave preview using a lower
+  Makepad scene, middle native AppKit glass container, and transparent upper
+  Makepad foreground. It is not the default backend until manual visual
+  validation passes.
 
 Guarded backend value:
 
-- `AICHAT_GLASS_BACKEND=apple-native-interleave` is a known but unsupported
-  value. Step 99 keeps the name reserved and falls back to
-  `ShaderBackdropInterior` with the warning
+- `AICHAT_GLASS_BACKEND=apple-native-interleave` without
+  `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview` keeps the Step 99
+  fallback to `ShaderBackdropInterior` with the warning
   `AppleNativeInterleave failed Step 98 visual verdict; falling back to
-  ShaderBackdropInterior`. This prevents the reserved name from being mistaken
-  for a working full-native backend while routing users to the current complete
-  interior fallback.
+  ShaderBackdropInterior`.
+- With `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview`, the same
+  backend name runs the guarded production preview. Build `[37]` reached State 4
+  and logged `app-substrate=apple-native-interleave`, but this route still needs
+  a manual system-composited visual verdict before promotion.
 
 ## Next Implementation Slice
 

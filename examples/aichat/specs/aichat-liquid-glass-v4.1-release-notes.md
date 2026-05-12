@@ -111,9 +111,24 @@ Later native interleave probes reached a more specific conclusion. Step 96
 proved a dedicated aichat lower scene pass can be rendered and routed to the
 macOS lower scene surface. Step 98 recorded the manual visual verdict: the user
 saw only a gray/grid lower scene, with no transparency and no recognizable
-blur/refraction/liquid distortion. Step 99 therefore keeps
+blur/refraction/liquid distortion. Step 99 therefore kept
 `AICHAT_GLASS_BACKEND=apple-native-interleave` as a guarded prototype value and
-falls back to `ShaderBackdropInterior` with a fail-verdict warning.
+fell back to `ShaderBackdropInterior` with a fail-verdict warning.
+
+Subsequent guarded-preview work moved the route forward without promoting it to
+default production. Step 178 passed the diagnostic interleave visual gate with a
+user-provided system screenshot. Steps 179-181 replaced the diagnostic grid with
+a production lower scene plus non-grid detail. Step 182 added an explicit opt-in
+guard:
+
+```text
+AICHAT_GLASS_BACKEND=apple-native-interleave
+AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview
+```
+
+Step 183 fixed app-facing logs so successful guarded runs report
+`app-substrate=apple-native-interleave`. The route remains a manual-validation
+preview, not a complete/default backend.
 
 ## Known v4.1 Limitations
 
@@ -129,7 +144,7 @@ v4.1 intentionally does not handle:
 - native popup/modal windows
 - iOS/iPadOS native backend
 - native + shader backdrop mixing in one window
-- production AppleNativeInterleave
+- default/validated production AppleNativeInterleave
 - complete interior Liquid Glass treatment in the current under-Metal
   compositing model
 

@@ -136,5 +136,13 @@ The following do not prove `AppleNativeInterleave`:
 
 ## Current Decision
 
-`AppleNativeInterleave` remains reserved and guarded. It should not become a
-user-facing backend until all gates above have concrete prototype evidence.
+`AppleNativeInterleave` now has a guarded production-preview backend behind:
+
+```text
+AICHAT_GLASS_BACKEND=apple-native-interleave
+AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview
+```
+
+The preview has concrete layer-order evidence and reaches State 4, but it
+should not become the default or a validated production backend until the
+manual system-composited visual gate passes with the production lower scene.
