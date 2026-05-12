@@ -109,6 +109,13 @@ uses the same interleave/transparent-overlay stack but switches the lower scene
 to the stronger `Refraction` profile. Use this target for the next manual
 native-material verdict.
 
+Step 178 records that the diagnostic interleave visual gate passed with a
+user-provided system screenshot. The lower diagnostic scene is visible broadly
+through the native glass interior, not just at edges, while foreground UI remains
+above the stack. The next route is no longer more proof of layer ordering; it is
+turning the diagnostic split into a real aichat lower-scene / upper-foreground
+implementation.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
