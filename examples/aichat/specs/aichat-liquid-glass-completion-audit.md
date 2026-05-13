@@ -541,6 +541,12 @@ behavior, or full native interior Liquid Glass.
   `transient-window=popup state=Installed substrate=macos-native style=clear`
   instead of the misleading early `backend-not-native` rejection, while the
   popup-local native batch still installs one panel.
+- Step 192 refreshes the iOS static compile gate after the latest macOS
+  interleave/transient changes. Both
+  `cargo check -p makepad-platform --target aarch64-apple-ios --release` and
+  `cargo check -p makepad-example-aichat --target aarch64-apple-ios --release`
+  pass on the current machine. This does not close the iOS runtime gate because
+  the local SDK/runtime is still iOS 18.x, not iOS 26.
 
 ## Next Gates
 
