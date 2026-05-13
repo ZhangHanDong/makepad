@@ -125,7 +125,10 @@ Step 189 repeats the macOS transient probes while the
 `AppleNativeInterleave` experimental backend is active in the main window.
 Studio release build `[50]` logged the main interleave stack, popup-local
 widget-tree export, and a popup-local native batch with one installed panel.
-Studio release build `[51]` logged the FocusLost dismiss route:
+Studio release build `[51]` logged the FocusLost dismiss route. At the time,
+the popup create-path resolver did not yet recognize `apple-native-interleave`,
+so it emitted an early rejected line before the popup-local widget descriptors
+installed:
 
 ```text
 [liquid-glass] transient-window-probe=request-open parent=WindowId(0, 0) popup=WindowId(1, 0)
@@ -136,9 +139,17 @@ Studio release build `[51]` logged the FocusLost dismiss route:
 [liquid-glass] transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost
 ```
 
-The early `backend-not-native` line occurs before popup-local descriptors are
-drawn/installed or before immediate dismissal; it is the current ordering of
-the probe path, not the final popup-local native batch result.
+Step 191 fixes that create-path resolver for `apple-native-interleave`. Studio
+release build `[59]` now logs:
+
+```text
+[liquid-glass] transient-window=popup state=Installed substrate=macos-native style=clear reason=installed-on-proofed-hierarchy
+[liquid-glass] transient-window-probe=widget-tree popup_size=(240.0,160.0) panels=1
+[liquid-glass] backend=apple-native-underlay state=Installed containers=1 panels_installed=1 panels_failed=0
+```
+
+The popup create path and popup-local descriptor batch now both report
+installed native glass while the interleave backend is active.
 
 ## UIKit Implementation Plan
 
