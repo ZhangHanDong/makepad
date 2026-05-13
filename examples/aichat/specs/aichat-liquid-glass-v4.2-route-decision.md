@@ -148,6 +148,11 @@ user-provided system screenshot
 glass without diagnostic grid artifacts while foreground UI remains readable.
 This unblocks promotion from guarded preview to a macOS experimental backend.
 
+Step 185 promotes macOS `AppleNativeInterleave` to that explicit experimental
+backend. `AICHAT_GLASS_BACKEND=apple-native-interleave` now selects the route
+directly; the extra `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE` guard is no longer
+required.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
@@ -165,23 +170,16 @@ names should distinguish:
   Metal layer.
 - `ShaderBackdropInterior`: future Makepad-rendered full interior blur,
   refraction, and readability treatment.
-- `AppleNativeInterleave`: guarded native interleave preview using a lower
+- `AppleNativeInterleave`: explicit macOS experimental backend using a lower
   Makepad scene, middle native AppKit glass container, and transparent upper
-  Makepad foreground. It is not the default backend until manual visual
-  validation passes.
+  Makepad foreground. It is not the default backend and does not claim iOS or
+  advanced behavior completion.
 
 Guarded backend value:
 
-- `AICHAT_GLASS_BACKEND=apple-native-interleave` without
-  `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview` keeps the Step 99
-  fallback to `ShaderBackdropInterior` with the warning
-  `AppleNativeInterleave failed Step 98 visual verdict; falling back to
-  ShaderBackdropInterior`.
-- With `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview`, the same
-  backend name runs the guarded production preview. Build `[37]` reached State 4
-  and logged `app-substrate=apple-native-interleave`. Step 184 records the first
-  manual system-composited visual pass, so the next slice may promote this route
-  to a macOS experimental backend.
+- `AICHAT_GLASS_BACKEND=apple-native-interleave` runs the macOS experimental
+  route. Build `[39]` reached State 4 and logged
+  `app-substrate=apple-native-interleave`.
 
 ## Next Implementation Slice
 

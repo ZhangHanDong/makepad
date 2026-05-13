@@ -136,13 +136,13 @@ The following do not prove `AppleNativeInterleave`:
 
 ## Current Decision
 
-`AppleNativeInterleave` now has a guarded production-preview backend behind:
+`AppleNativeInterleave` now has an explicit macOS experimental backend behind:
 
 ```text
 AICHAT_GLASS_BACKEND=apple-native-interleave
-AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview
 ```
 
-The preview has concrete layer-order evidence and reaches State 4, but it
-should not become the default or a validated production backend until the
-manual system-composited visual gate passes with the production lower scene.
+The route has concrete layer-order evidence, reaches State 4, and passed one
+manual system-composited visual gate with the production lower scene. It should
+not become the default or a fully validated production backend until iOS and
+advanced behavior gates are complete.

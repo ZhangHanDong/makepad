@@ -115,11 +115,10 @@ blur/refraction/liquid distortion. Step 99 therefore kept
 `AICHAT_GLASS_BACKEND=apple-native-interleave` as a guarded prototype value and
 fell back to `ShaderBackdropInterior` with a fail-verdict warning.
 
-Subsequent guarded-preview work moved the route forward without promoting it to
-default production. Step 178 passed the diagnostic interleave visual gate with a
-user-provided system screenshot. Steps 179-181 replaced the diagnostic grid with
-a production lower scene plus non-grid detail. Step 182 added an explicit opt-in
-guard:
+Subsequent guarded-preview work moved the route forward. Step 178 passed the
+diagnostic interleave visual gate with a user-provided system screenshot. Steps
+179-181 replaced the diagnostic grid with a production lower scene plus non-grid
+detail. Step 182 added an explicit opt-in guard:
 
 ```text
 AICHAT_GLASS_BACKEND=apple-native-interleave
@@ -127,8 +126,15 @@ AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview
 ```
 
 Step 183 fixed app-facing logs so successful guarded runs report
-`app-substrate=apple-native-interleave`. The route remains a manual-validation
-preview, not a complete/default backend.
+`app-substrate=apple-native-interleave`. Step 184 recorded the first production
+visual pass for that route. Step 185 then promoted macOS
+`AppleNativeInterleave` to an explicit experimental backend:
+
+```text
+AICHAT_GLASS_BACKEND=apple-native-interleave
+```
+
+The route remains opt-in and experimental, not a complete/default backend.
 
 ## Known v4.1 Limitations
 
@@ -144,7 +150,8 @@ v4.1 intentionally does not handle:
 - native popup/modal windows
 - iOS/iPadOS native backend
 - native + shader backdrop mixing in one window
-- default/validated production AppleNativeInterleave
+- default AppleNativeInterleave
+- iOS/advanced-behavior validation for AppleNativeInterleave
 - complete interior Liquid Glass treatment in the current under-Metal
   compositing model
 
