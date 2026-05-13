@@ -29,11 +29,11 @@ The current production path remains:
 
 | Feature | Current evidence | Current status | Implementation gate |
 |---|---|---|---|
-| Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; Step 56 logs `native-container-spacing` and tests spacing changes invalidate native batches | Static mapping plus probe only; animated morph transitions remain unproven | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
+| Animated spacing / morph transitions | `GlassContainer.spacing` maps to the descriptor model; Step 56 logs `native-container-spacing` and tests spacing changes invalidate native batches; Step 169 validates the underlay spacing probe; Step 187 repeats install-stability coverage for `AppleNativeInterleave` build `[45]` | Runtime update path and install stability are proven for underlay and interleave; final visual morph quality remains unproven | Prove animated spacing can update native container spacing without frame drift, stale panels, or input regressions. |
 | Scroll edge glass | `APPLE-NATIVE-SCROLL-EDGE-GLASS-POLICY.md` defines the route; `GlassScrollEdge` / `GlassScrollEdgeBottom` provide Makepad-rendered semantic hooks; Steps 60-62 wire edge visibility and strength to `PortalList` state | Makepad semantic scroll edges are wired; native scroll edge behavior remains future work | Define whether future native scroll edge glass is a native panel region or platform-specific control behavior. |
-| Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit; Step 65 adds `makepad-example-aichat-macos-native-clear-fullscreen-probe`; Step 134 records Studio build `[155]` with fullscreen enter, shader fallback, requested exit, native restore, and observed exit | Explicit fullscreen fallback validated; full native fullscreen glass remains out of scope | Keep the fallback/restore behavior stable; full native glass inside fullscreen is a later phase. |
+| Fullscreen | `WindowGeom.is_fullscreen` exists; Step 53 suppresses the current native underlay while fullscreen and restores it on exit; Step 65 adds `makepad-example-aichat-macos-native-clear-fullscreen-probe`; Step 134 records Studio build `[155]` with fullscreen enter, shader fallback, requested exit, native restore, and observed exit; Step 186 repeats the gate for `AppleNativeInterleave` build `[42]` | Explicit fullscreen fallback validated for underlay and interleave; full native fullscreen glass remains out of scope | Keep the fallback/restore behavior stable; full native glass inside fullscreen is a later phase. |
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active; Step 66 logs `native-display-frame-snapshot` / `native-panel-frame` from the cached native batch | Probe plus frame snapshot only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
-| Stage Manager / split view | Step 67 adds `makepad-example-aichat-macos-native-clear-geometry-probe` with `MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT=1` so same-screen position/size changes can log native frame snapshots | Probe only; Stage Manager and split-view behavior remain unproven | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
+| Stage Manager / split view | Step 67 adds `makepad-example-aichat-macos-native-clear-geometry-probe` with `MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT=1` so same-screen position/size changes can log native frame snapshots; Step 187 repeats same-display resize/reposition frame snapshots for `AppleNativeInterleave` build `[44]` | Same-display geometry probe coverage exists for underlay and interleave; real Stage Manager and split-view behavior remain unproven | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | Step 55 keeps shader inactive dimming at `0.70` and uses `NATIVE_INACTIVE_GLASS_MULTIPLIER` for a weaker native inactive app-side dim | Readability policy only; native inactive-window support remains unproven | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
 | Popup/modal native glass | `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md` defines separate transient-window ownership, z-order, focus, dismissal, hit-test, descriptor limits, and macOS/UIKit implementation gates | Policy only; not implemented | Add a transient-window native glass probe and prove popup dismissal/main-window panels do not regress. |
 
@@ -53,6 +53,13 @@ The current production path remains:
   probe. It ran frame `0 -> 120`, spacing `12 -> 36 -> 12`, and repeatedly
   logged `native-container-spacing` while the native batch remained Installed.
   This proves the runtime update path but not the final morphing visual quality.
+- Step 187 repeats the spacing probe against `AppleNativeInterleave`. Studio
+  release build `[45]` ran frame `0 -> 120`, logged spacing updates including
+  `12.400`, `14.000`, and final `12.000`, and repeatedly kept
+  `backend=apple-native-underlay state=Installed containers=1
+  panels_installed=4 panels_failed=0` plus
+  `app-substrate=apple-native-interleave`. This proves interleave install
+  stability for animated spacing, not final morphing visual quality.
 
 ### Scroll edge glass
 
@@ -92,6 +99,15 @@ The current production path remains:
   `native-fullscreen-probe=request-exit`,
   `fullscreen-native-restore=apple-native-underlay reason=fullscreen-exit`, and
   `native-fullscreen-probe=observed-exit`.
+- Step 186 extends the fullscreen probe to the macOS
+  `AppleNativeInterleave` experimental backend. Build `[41]` exposed an
+  early-exit race (`native-fullscreen-op=exit ... new_fullscreen=true`) when the
+  probe requested exit immediately after the first enter geometry event. The
+  probe now delays exit until the AppKit fullscreen transition has settled.
+  Studio release build `[42]` logged enter, shader fallback, delayed
+  `request-exit`, `native-fullscreen-op=exit old_fullscreen=true
+  new_fullscreen=false`, restore, and `native-fullscreen-probe=observed-exit`.
+  A post-exit Studio screenshot returned to `900x700`.
 
 ### Multi-display
 
@@ -134,6 +150,11 @@ The current production path remains:
   `native-geometry-op=reposition changed=true`, and two
   `native-display-frame-snapshot reason=geometry-change` entries followed by
   four `native-panel-frame` entries each.
+- Step 187 repeats the same-display geometry probe against
+  `AppleNativeInterleave`. Studio release build `[44]` logged the experimental
+  interleave backend, State 4, self-driven resize/reposition requests, two
+  `native-display-frame-snapshot reason=geometry-change` entries, and four
+  visible `native-panel-frame` entries per snapshot.
 
 ### Inactive window
 

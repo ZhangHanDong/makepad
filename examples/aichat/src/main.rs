@@ -1836,6 +1836,10 @@ fn native_fullscreen_probe_should_continue_wait(frame: u32) -> bool {
     frame < 180
 }
 
+fn native_fullscreen_probe_should_delay_exit(frame: u32) -> bool {
+    frame < 90
+}
+
 fn native_substrate_resolved_appearance(
     state: WindowNativeSubstrateState,
     style: Option<WindowNativeSubstrateStyle>,
@@ -4505,6 +4509,8 @@ pub struct App {
     #[rust]
     native_fullscreen_probe_exit_pending: bool,
     #[rust]
+    native_fullscreen_probe_waiting_exit: bool,
+    #[rust]
     native_fullscreen_probe_next_frame: NextFrame,
     #[rust]
     native_geometry_probe_started: bool,
@@ -5837,9 +5843,11 @@ impl App {
             log!("[liquid-glass] native-fullscreen-probe=observed-enter");
             self.native_fullscreen_probe_waiting_enter = false;
             self.native_fullscreen_probe_exit_pending = true;
+            self.native_fullscreen_probe_wait_frame = 0;
             self.native_fullscreen_probe_next_frame = cx.new_next_frame();
         } else if !event.new_geom.is_fullscreen && event.old_geom.is_fullscreen {
             log!("[liquid-glass] native-fullscreen-probe=observed-exit");
+            self.native_fullscreen_probe_waiting_exit = false;
             self.native_fullscreen_probe_exit_pending = false;
         }
     }
@@ -6481,9 +6489,18 @@ impl MatchEvent for App {
         if self.native_fullscreen_probe_exit_pending
             && event.set.contains(&self.native_fullscreen_probe_next_frame)
         {
-            self.native_fullscreen_probe_exit_pending = false;
-            log!("[liquid-glass] native-fullscreen-probe=request-exit");
-            self.ui.window(cx, ids!(main_window)).disable_fullscreen(cx);
+            self.native_fullscreen_probe_wait_frame =
+                self.native_fullscreen_probe_wait_frame.wrapping_add(1);
+            if native_fullscreen_probe_should_delay_exit(self.native_fullscreen_probe_wait_frame) {
+                self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+            } else {
+                self.native_fullscreen_probe_exit_pending = false;
+                self.native_fullscreen_probe_waiting_exit = true;
+                self.native_fullscreen_probe_wait_frame = 0;
+                log!("[liquid-glass] native-fullscreen-probe=request-exit");
+                self.ui.window(cx, ids!(main_window)).disable_fullscreen(cx);
+                self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+            }
         } else if self.native_fullscreen_probe_waiting_enter
             && event.set.contains(&self.native_fullscreen_probe_next_frame)
         {
@@ -6495,6 +6512,18 @@ impl MatchEvent for App {
             } else {
                 self.native_fullscreen_probe_waiting_enter = false;
                 log!("[liquid-glass] native-fullscreen-probe=timeout phase=enter");
+            }
+        } else if self.native_fullscreen_probe_waiting_exit
+            && event.set.contains(&self.native_fullscreen_probe_next_frame)
+        {
+            self.native_fullscreen_probe_wait_frame =
+                self.native_fullscreen_probe_wait_frame.wrapping_add(1);
+            if native_fullscreen_probe_should_continue_wait(self.native_fullscreen_probe_wait_frame)
+            {
+                self.native_fullscreen_probe_next_frame = cx.new_next_frame();
+            } else {
+                self.native_fullscreen_probe_waiting_exit = false;
+                log!("[liquid-glass] native-fullscreen-probe=timeout phase=exit");
             }
         }
 
@@ -6718,19 +6747,19 @@ mod tests {
         native_compositing_proof_transparent_overlay_from_value,
         native_control_probe_enabled_from_value, native_display_backing_scale_changed,
         native_fullscreen_probe_enabled_from_value, native_fullscreen_probe_should_continue_wait,
-        native_fullscreen_probe_should_start, native_geometry_probe_enabled_from_value,
-        native_geometry_probe_should_start, native_inactive_probe_enabled_from_value,
-        native_inactive_probe_log_line, native_interleave_scene_profile_from_value,
-        native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
-        native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
-        native_transient_probe_enabled_from_value, parse_glass_backend, render_state_templates,
-        render_state_templates_for_ui, resolve_glass_appearance,
-        resolve_glass_appearance_for_backend, resolve_startup_glass_appearance,
-        shader_backdrop_visual_profile, should_start_window_drag, strip_appplan_fences_for_ui,
-        Agent, App, AppCapability, AppDemoState, BackendType, CalculatorDemoState,
-        ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState, GenericInputsState,
-        GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate, MacosGlassStyle,
-        ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
+        native_fullscreen_probe_should_delay_exit, native_fullscreen_probe_should_start,
+        native_geometry_probe_enabled_from_value, native_geometry_probe_should_start,
+        native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
+        native_interleave_scene_profile_from_value, native_spacing_probe_enabled_from_value,
+        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
+        native_substrate_resolved_appearance, native_transient_probe_enabled_from_value,
+        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
+        resolve_glass_appearance, resolve_glass_appearance_for_backend,
+        resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
+        strip_appplan_fences_for_ui, Agent, App, AppCapability, AppDemoState, BackendType,
+        CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
+        GenericInputsState, GlassAppearance, GlassBackendRequest, GlassPanelPreset, GlassSubstrate,
+        MacosGlassStyle, ShaderBackdropConfig, ShaderBackdropProof, DEFAULT_GLASS_OPACITY,
         GLASS_SCROLL_EDGE_FADE_DISTANCE, GLASS_SCROLL_EDGE_MAX_ALPHA, INACTIVE_GLASS_MULTIPLIER,
         MAX_GLASS_OPACITY, MIN_GLASS_OPACITY, NATIVE_INACTIVE_GLASS_MULTIPLIER,
     };
@@ -7193,6 +7222,13 @@ mod tests {
         assert!(native_fullscreen_probe_should_continue_wait(0));
         assert!(native_fullscreen_probe_should_continue_wait(179));
         assert!(!native_fullscreen_probe_should_continue_wait(180));
+    }
+
+    #[test]
+    fn aichat_native_fullscreen_probe_delays_exit_after_enter() {
+        assert!(native_fullscreen_probe_should_delay_exit(0));
+        assert!(native_fullscreen_probe_should_delay_exit(89));
+        assert!(!native_fullscreen_probe_should_delay_exit(90));
     }
 
     #[test]
