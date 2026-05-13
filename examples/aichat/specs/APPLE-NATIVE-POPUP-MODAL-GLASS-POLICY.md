@@ -121,6 +121,25 @@ Step 137 changes the same transient probe to draw a real popup-local
 The main native batch remained installed with four panels in the same run.
 This proves popup widget-tree descriptor export for the macOS probe path.
 
+Step 189 repeats the macOS transient probes while the
+`AppleNativeInterleave` experimental backend is active in the main window.
+Studio release build `[50]` logged the main interleave stack, popup-local
+widget-tree export, and a popup-local native batch with one installed panel.
+Studio release build `[51]` logged the FocusLost dismiss route:
+
+```text
+[liquid-glass] transient-window-probe=request-open parent=WindowId(0, 0) popup=WindowId(1, 0)
+[liquid-glass] transient-window=popup state=Rejected reason=backend-not-native
+[liquid-glass] transient-window-probe=widget-tree popup_size=(240.0,160.0) panels=1
+[liquid-glass] backend=apple-native-underlay state=Installed containers=1 panels_installed=1 panels_failed=0
+[liquid-glass] transient-window=popup-dismiss-probe request=parent-make-key
+[liquid-glass] transient-window-probe=dismissed popup=WindowId(1, 0) reason=FocusLost
+```
+
+The early `backend-not-native` line occurs before popup-local descriptors are
+drawn/installed or before immediate dismissal; it is the current ordering of
+the probe path, not the final popup-local native batch result.
+
 ## UIKit Implementation Plan
 
 UIKit popup/modal support must be separate from the current main `UIWindow`

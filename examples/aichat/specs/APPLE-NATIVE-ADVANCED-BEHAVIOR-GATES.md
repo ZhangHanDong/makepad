@@ -35,7 +35,7 @@ The current production path remains:
 | Multi-display | `WindowGeom.position`, `inner_size`, and `dpi_factor` exist; Step 54 logs `native-display-change` when backing-scale changes while native is active; Step 66 logs `native-display-frame-snapshot` / `native-panel-frame` from the cached native batch | Probe plus frame snapshot only; multi-display support remains unproven | Prove moving a native-glass window between displays recomputes frames in logical units and handles backing-scale changes. |
 | Stage Manager / split view | Step 67 adds `makepad-example-aichat-macos-native-clear-geometry-probe` with `MAKEPAD_NATIVE_GLASS_GEOMETRY_SNAPSHOT=1` so same-screen position/size changes can log native frame snapshots; Step 187 repeats same-display resize/reposition frame snapshots for `AppleNativeInterleave` build `[44]` | Same-display geometry probe coverage exists for underlay and interleave; real Stage Manager and split-view behavior remain unproven | Smoke-test window resize/reposition sequences that resemble Stage Manager and record expected artifacts or supported behavior. |
 | Inactive window behavior | Step 55 keeps shader inactive dimming at `0.70` and uses `NATIVE_INACTIVE_GLASS_MULTIPLIER` for a weaker native inactive app-side dim; Step 168 proves underlay active-to-inactive logs; Step 188 repeats active-to-inactive logs for `AppleNativeInterleave` build `[47]` | Runtime active/inactive event and multiplier path is proven for underlay and interleave; bright/dark wallpaper readability remains unproven | Decide whether native glass should rely on system inactive behavior, app-side foreground tokens, or both; validate active/inactive transitions visually. |
-| Popup/modal native glass | `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md` defines separate transient-window ownership, z-order, focus, dismissal, hit-test, descriptor limits, and macOS/UIKit implementation gates | Policy only; not implemented | Add a transient-window native glass probe and prove popup dismissal/main-window panels do not regress. |
+| Popup/modal native glass | `APPLE-NATIVE-POPUP-MODAL-GLASS-POLICY.md` defines separate transient-window ownership, z-order, focus, dismissal, hit-test, descriptor limits, and macOS/UIKit implementation gates; Step 136/137 prove macOS transient install and popup-local widget descriptors for underlay; Step 189 repeats popup install/dismiss probes for `AppleNativeInterleave` builds `[50]` and `[51]` | macOS popup probe paths exist for underlay and interleave; UIKit transient implementation and separate-platform-window modal native glass remain unproven | Add UIKit transient support and separate-platform-window modal support, and prove popup dismissal/main-window panels do not regress. |
 
 ## Required Evidence Before Marking Complete
 
@@ -195,6 +195,12 @@ The current production path remains:
   transient windows own independent native glass containers, main-window
   descriptors are not reused, popup dismissal stays Makepad-owned, and the
   first implementation must be a passthrough macOS popup probe.
+- Step 189 repeats the macOS popup probes with `AppleNativeInterleave` active.
+  Studio release build `[50]` keeps the main interleave stack installed with
+  four panels, exports a popup-local widget tree with one panel, and installs
+  the popup-local native batch with `panels_installed=1 panels_failed=0`.
+  Studio release build `[51]` proves the FocusLost dismiss route while the
+  interleave main-window backend is active.
 
 ## Non-Completion Signals
 
