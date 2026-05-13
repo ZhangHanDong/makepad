@@ -468,6 +468,12 @@ behavior, or full native interior Liquid Glass.
   now logs `app-substrate=apple-native-interleave state=Installed ...` while
   lower platform/widget logs continue to describe the shared native underlay
   installer.
+- Step 184 records the first system-composited visual pass for the guarded
+  macOS `AppleNativeInterleave` production preview. The user-provided screenshot
+  `/Users/zhangalex/Desktop/截屏2026-05-13 18.07.33.png` shows broad interior
+  glass without diagnostic grid artifacts, with readable foreground UI. This
+  unblocks promotion to a macOS experimental backend, but it does not complete
+  iOS 26 runtime validation or advanced behavior gates.
 
 ## Next Gates
 
@@ -479,23 +485,12 @@ behavior, or full native interior Liquid Glass.
    changing defaults. Step 167 confirms the current local machine cannot run
    this gate because it only has iPhoneOS SDK 18.5 and iOS simulator runtime
    18.6.
-2. Keep complete aichat interior glass on ShaderBackdrop or a hybrid route. A
-   later AppleNativeInterleave attempt must first produce a new visual verdict
-   with recognizable native transparency/refraction/liquid distortion before it
-   can replace the current route. Step 172 narrows the native interleave
-   blocker to render-pass ownership: the AppKit layer order is available, but
-   aichat still needs a transparent foreground pass instead of painting the full
-   UI on the primary Metal surface. Step 173 provides
-   `makepad-example-aichat-macos-native-clear-interleave-transparent-overlay`
-   as the next manual visual gate for that hypothesis. Step 174 restores Studio
-   screenshot evidence for the primary foreground surface during that gate.
-   Step 175 confirms the primary foreground image is mostly transparent.
-3. Manually validate the Step 182 guarded `AppleNativeInterleave` production
-   preview in a system-composited
-   window: it should no longer show the diagnostic grid, but should still show
-   recognizable native clear glass across the interior rather than only edge
-   halos. If the production lower scene is still too subtle, tune the
-   lower-scene content before promoting the route.
+2. Promote the Step 184 guarded `AppleNativeInterleave` production preview to a
+   macOS experimental backend, keeping it opt-in and clearly excluding iOS,
+   fullscreen, Stage Manager, multi-display, and popup/modal completion.
+3. Re-run the macOS experimental backend after promotion through Studio release
+   and confirm the logs still include State 4, `app-substrate=apple-native-
+   interleave`, four installed panels, and a mostly transparent foreground.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
    concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.

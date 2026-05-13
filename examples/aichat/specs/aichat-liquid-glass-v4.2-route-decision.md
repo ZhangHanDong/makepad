@@ -142,6 +142,12 @@ Step 183 fixes the app-facing success log for that guarded route:
 lower-scene pass are both active. Platform/widget logs may still mention
 `apple-native-underlay` because they describe the shared native panel installer.
 
+Step 184 records the first production visual pass for the guarded route. The
+user-provided system screenshot
+`/Users/zhangalex/Desktop/截屏2026-05-13 18.07.33.png` shows broad interior
+glass without diagnostic grid artifacts while foreground UI remains readable.
+This unblocks promotion from guarded preview to a macOS experimental backend.
+
 ### Input Evidence
 
 Input must remain Makepad-owned for aichat. The above-Metal glass view is a
@@ -173,8 +179,9 @@ Guarded backend value:
   ShaderBackdropInterior`.
 - With `AICHAT_ENABLE_APPLE_NATIVE_INTERLEAVE=production-preview`, the same
   backend name runs the guarded production preview. Build `[37]` reached State 4
-  and logged `app-substrate=apple-native-interleave`, but this route still needs
-  a manual system-composited visual verdict before promotion.
+  and logged `app-substrate=apple-native-interleave`. Step 184 records the first
+  manual system-composited visual pass, so the next slice may promote this route
+  to a macOS experimental backend.
 
 ## Next Implementation Slice
 
