@@ -536,6 +536,11 @@ behavior, or full native interior Liquid Glass.
   profile=diagnostic proof=Refraction`, giving the manual visual gate a way to
   distinguish production-style subtlety from a native composition visibility
   blocker.
+- Step 191 fixes the macOS transient popup create-path style resolver for
+  `apple-native-interleave`. Build `[59]` now logs
+  `transient-window=popup state=Installed substrate=macos-native style=clear`
+  instead of the misleading early `backend-not-native` rejection, while the
+  popup-local native batch still installs one panel.
 
 ## Next Gates
 

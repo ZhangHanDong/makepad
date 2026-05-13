@@ -50,12 +50,8 @@ use {
     },
 };
 
-fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
-    match std::env::var("AICHAT_GLASS_BACKEND")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-    {
+fn requested_native_glass_style_from_value(value: Option<&str>) -> Option<MacosNativeGlassStyle> {
+    match value.map(str::trim) {
         Some("apple-native-underlay") | Some("macos-native") => {
             Some(MacosNativeGlassStyle::Regular)
         }
@@ -65,6 +61,25 @@ fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
         Some("auto") => Some(MacosNativeGlassStyle::Regular),
         _ => None,
     }
+}
+
+fn requested_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
+    requested_native_glass_style_from_value(std::env::var("AICHAT_GLASS_BACKEND").ok().as_deref())
+}
+
+fn requested_transient_native_glass_style_from_value(
+    value: Option<&str>,
+) -> Option<MacosNativeGlassStyle> {
+    match value.map(str::trim) {
+        Some("apple-native-interleave") => Some(MacosNativeGlassStyle::Clear),
+        _ => requested_native_glass_style_from_value(value),
+    }
+}
+
+fn requested_transient_native_glass_style_from_env() -> Option<MacosNativeGlassStyle> {
+    requested_transient_native_glass_style_from_value(
+        std::env::var("AICHAT_GLASS_BACKEND").ok().as_deref(),
+    )
 }
 
 fn requested_above_metal_glass_probe_style_from_env() -> Option<MacosNativeGlassStyle> {
@@ -1399,7 +1414,7 @@ impl Cx {
                     );
                     metal_window.cocoa_window.set_window_visuals(visuals);
                     if native_glass_transient_probe_enabled() {
-                        if let Some(style) = requested_native_glass_style_from_env() {
+                        if let Some(style) = requested_transient_native_glass_style_from_env() {
                             let event = metal_window
                                 .cocoa_window
                                 .install_native_glass_substrate(style);
@@ -2223,6 +2238,46 @@ mod tests {
                 CxOsOp::SetTopmost(window_id, true),
                 CxOsOp::CreateWindow(window_id)
             ]
+        );
+    }
+
+    #[test]
+    fn native_glass_style_resolver_keeps_interleave_out_of_main_window_create_path() {
+        assert_eq!(
+            requested_native_glass_style_from_value(Some("apple-native-interleave")),
+            None
+        );
+    }
+
+    #[test]
+    fn transient_native_glass_style_resolver_accepts_interleave_backend() {
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(Some("apple-native-interleave")),
+            Some(MacosNativeGlassStyle::Clear)
+        );
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(Some(" apple-native-interleave ")),
+            Some(MacosNativeGlassStyle::Clear)
+        );
+    }
+
+    #[test]
+    fn transient_native_glass_style_resolver_preserves_existing_native_backends() {
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(Some("macos-native")),
+            Some(MacosNativeGlassStyle::Regular)
+        );
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(Some("macos-native-clear")),
+            Some(MacosNativeGlassStyle::Clear)
+        );
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(Some("auto")),
+            Some(MacosNativeGlassStyle::Regular)
+        );
+        assert_eq!(
+            requested_transient_native_glass_style_from_value(None),
+            None
         );
     }
 
