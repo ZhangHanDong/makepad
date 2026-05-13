@@ -529,6 +529,13 @@ behavior, or full native interior Liquid Glass.
   experimental interleave backend.
 - Step 189 proves macOS popup transient install and dismiss probe coverage while
   the experimental interleave backend is active.
+- Step 190 adds an explicit high-contrast diagnostic runnable for the same
+  `apple-native-interleave` backend:
+  `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`. Build
+  `[58]` reaches State 4 and logs `native-lower-scene-pass=draw
+  profile=diagnostic proof=Refraction`, giving the manual visual gate a way to
+  distinguish production-style subtlety from a native composition visibility
+  blocker.
 
 ## Next Gates
 
