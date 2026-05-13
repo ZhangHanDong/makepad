@@ -20,6 +20,11 @@ Optional comparison targets:
 - [ ] shader/default aichat target
 - [ ] unsupported-runtime or non-macOS fallback, if available
 
+Current AppleNativeInterleave targets:
+
+- [ ] `makepad-example-aichat-apple-native-interleave-experimental`
+- [ ] `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`
+
 ## Startup Logs
 
 - [ ] `macos-native` reaches a State 4 compatibility log:
@@ -106,6 +111,30 @@ Optional comparison targets:
 - [ ] Record whether clear style is acceptable.
 - [ ] Record whether any visual tuning changes are required before Phase F.
 
+## AppleNativeInterleave Diagnostic Decision
+
+Use the diagnostic overlay before changing production tuning:
+
+- [ ] Run `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`.
+- [ ] Confirm startup logs include:
+
+```text
+[liquid-glass] native-lower-scene-pass=draw profile=diagnostic proof=Refraction
+[liquid-glass] state=4 substrate=macos-native style=clear style_raw=1
+[liquid-glass] app-substrate=apple-native-interleave state=Installed
+```
+
+- [ ] If diagnostic overlay shows visible grid/refraction/liquid distortion but
+  `makepad-example-aichat-apple-native-interleave-experimental` looks flat,
+  treat the next task as production visual tuning.
+- [ ] If diagnostic overlay also looks black, opaque, or edge-only, treat the
+  next task as a native/macOS composition visibility blocker.
+- [ ] Do not use Studio framebuffer screenshots alone for this decision; they
+  omit the AppKit native glass layer and normally show only the transparent
+  upper Makepad surface.
+- [ ] Capture a system-composited screenshot or record a manual verdict for the
+  diagnostic run before changing production parameters.
+
 ## Validation Update 2026-05-02
 
 Studio release validation reached the native backend on macOS 26 for both
@@ -138,3 +167,15 @@ result appeared as flat colored stripes. This means v4.1 proves native underlay
 visibility, but it does not prove complete Liquid Glass inside the panels. The
 current under-Metal model remains insufficient for full Liquid Glass and should
 feed into the v4.2 compositing design.
+
+## AppleNativeInterleave Update 2026-05-13
+
+`makepad-example-aichat-apple-native-interleave-experimental` is now the macOS
+experimental backend for the full native interleave route. It uses a production
+lower scene and keeps the upper Makepad surface mostly transparent.
+
+`makepad-example-aichat-apple-native-interleave-diagnostic-overlay` is the
+high-contrast manual visual gate. It runs the same `apple-native-interleave`
+backend but switches the lower scene to the diagnostic `Refraction` profile.
+Use it to decide whether a failed visual report is caused by subtle production
+tuning or by native composition visibility.
