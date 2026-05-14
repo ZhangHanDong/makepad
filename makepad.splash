@@ -151,6 +151,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-underlay-clear", backend: "apple-native-underlay-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-transparent-overlay", backend: "macos-native-clear", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-spacing-probe", backend: "macos-native-clear", spacing_probe: "animate"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-inactive-probe", backend: "macos-native-clear", inactive_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-fullscreen-probe", backend: "macos-native-clear", fullscreen_probe: "1"}
