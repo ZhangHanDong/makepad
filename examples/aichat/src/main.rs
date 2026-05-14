@@ -68,10 +68,10 @@ script_mod! {
     let ai_gold_soft = #xF6BE6388
 
     let chat_scene_bg = Gradient{x1: 0 y1: 0 x2: 1 y2: 1
-        Stop{offset: 0 color: #x071018 opacity: 0.56}
-        Stop{offset: 0.44 color: #x121923 opacity: 0.52}
-        Stop{offset: 0.72 color: #x18202B opacity: 0.48}
-        Stop{offset: 1 color: #x201722 opacity: 0.52}
+        Stop{offset: 0 color: #x071018 opacity: 0.78}
+        Stop{offset: 0.44 color: #x121923 opacity: 0.74}
+        Stop{offset: 0.72 color: #x18202B opacity: 0.70}
+        Stop{offset: 1 color: #x201722 opacity: 0.74}
     }
 
     let chat_scene_cyan = RadGradient{cx: 0.14 cy: 0.16 r: 0.44
@@ -103,7 +103,6 @@ script_mod! {
         height: Fill
         viewbox: vec4(0 0 1200 820)
 
-        Rect{x: 0 y: 0 w: 1200 h: 820 fill: chat_scene_bg}
         Circle{cx: 160 cy: 112 r: 350 fill: chat_scene_cyan}
         Circle{cx: 1080 cy: 112 r: 290 fill: chat_scene_gold}
         Circle{cx: 768 cy: 790 r: 390 fill: chat_scene_violet}
@@ -114,9 +113,9 @@ script_mod! {
         Rect{x: 28 y: 32 w: 1144 h: 752 rx: 36 ry: 36 fill: false stroke: #x72E4FF20 stroke_width: 1.0}
         Rect{x: 42 y: 44 w: 1116 h: 724 rx: 32 ry: 32 fill: false stroke: #xFFD18A10 stroke_width: 0.8}
 
-        Path{d: "M -80 190 C 170 72 330 120 520 70 S 905 20 1280 110" fill: false stroke: #x72E4FF22 stroke_width: 2.6 stroke_linecap: "round"}
-        Path{d: "M -60 610 C 160 500 348 548 548 480 S 900 380 1260 475" fill: false stroke: #xDCA5FF1E stroke_width: 2.2 stroke_linecap: "round"}
-        Path{d: "M 1120 -40 C 960 156 900 286 730 374 S 470 528 248 878" fill: false stroke: #xFFD18A1A stroke_width: 2.0 stroke_linecap: "round"}
+        Path{d: "M -80 190 C 170 72 330 120 520 70 S 905 20 1280 110" fill: false stroke: #x72E4FF26 stroke_width: 2.6 stroke_linecap: "round"}
+        Path{d: "M -60 610 C 160 500 348 548 548 480 S 900 380 1260 475" fill: false stroke: #xDCA5FF20 stroke_width: 2.2 stroke_linecap: "round"}
+        Path{d: "M 1120 -40 C 960 156 900 286 730 374 S 470 528 248 878" fill: false stroke: #xFFD18A1C stroke_width: 2.0 stroke_linecap: "round"}
 
         Rect{x: 92 y: 74 w: 320 h: 118 rx: 34 ry: 34 fill: #xFFFFFF05}
         Rect{x: 850 y: 84 w: 244 h: 88 rx: 30 ry: 30 fill: #xFFFFFF06}
@@ -146,6 +145,34 @@ script_mod! {
             highlight_strength: 0.10
             highlight_band_height: 18.0
             noise_strength: 0.003
+        }
+    }
+
+    let ComposerGlass = AppleGlassRoundedView {
+        width: Fill{min: 620 max: 1040}
+        height: Fit
+        new_batch: true
+        flow: Down
+        padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
+        spacing: 10
+        draw_bg +: {
+            blur_level: 5.2
+            lensing_effect: 0.96
+            lensing_strength: 38.0
+            lensing_width: 18.0
+            corner_radius: 24.0
+            tint_color: #xB8B8B8
+            tint_alpha: 0.08
+            surface_alpha: 0.76
+            border_color: #xEAD8B8
+            border_alpha: 0.56
+            border_width: 1.0
+            specular_strength: 0.20
+            fallback_color: #x123A34
+            shadow_color: #x000000CC
+            shadow_radius: 46.0
+            shadow_offset: vec2(0.0, 20.0)
+            diffraction_strength: 5.6
         }
     }
 
@@ -637,11 +664,11 @@ script_mod! {
                         height: Fill
                         new_batch: true
                         flow: Right
-                        padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
+                        padding: Inset{left: 20 top: 20 right: 20 bottom: 20}
                         spacing: 0
                         draw_bg +: {
                             tint_color: #x0D4035
-                            tint_alpha: 0.66
+                            tint_alpha: 0.64
                             border_color: ai_cyan
                             border_alpha: 0.38
                             border_width: 1.0
@@ -664,11 +691,11 @@ script_mod! {
                         spacing: 10
                         draw_bg +: {
                             tint_color: #x0A3A30
-                            tint_alpha: 0.78
+                            tint_alpha: 0.62
                             border_color: #xEAD8B8
                             border_alpha: 0.20
                             border_width: 0.0
-                            corner_radius: 0.0
+                            corner_radius: 22.0
                             halo_strength: 0.0
                             halo_radius: 0.0
                             highlight_strength: 0.16
@@ -870,11 +897,11 @@ script_mod! {
                         spacing: 12
                         draw_bg +: {
                             tint_color: #x0B3B31
-                            tint_alpha: 0.70
+                            tint_alpha: 0.58
                             border_color: #xEAD8B8
                             border_alpha: 0.16
                             border_width: 0.0
-                            corner_radius: 0.0
+                            corner_radius: 22.0
                             halo_strength: 0.0
                             halo_radius: 0.0
                             highlight_strength: 0.16
@@ -896,8 +923,162 @@ script_mod! {
                             }
 
                             View { width: Fill height: 1 }
+                        }
 
-                            ToolbarGlass {
+                        chat_shell := View {
+                            width: Fill
+                            height: Fill
+                            flow: Overlay
+
+                            empty_state := View {
+                                width: Fill
+                                height: Fill
+                                flow: Down
+                                align: Align{x: 0.5 y: 0.46}
+                                spacing: 18
+
+                                empty_title := Label {
+                                    text: "我们该做什么？"
+                                    draw_text.color: #xF3E3C7
+                                    draw_text.text_style.font_size: 27
+                                }
+
+                                empty_subtitle := Label {
+                                    text: "输入自然语言，生成可交互的 Makepad diagram。"
+                                    draw_text.color: #xCDBF9FAA
+                                    draw_text.text_style.font_size: 12
+                                }
+                            }
+
+                            chat_list := ChatList {}
+                        }
+
+                        status_label := Label {
+                            width: Fill
+                            height: Fit
+                            text: "Initializing..."
+                            margin: Inset{left: 92 right: 92 top: 4 bottom: 0}
+                            draw_text.text_style.font_size: 10
+                            draw_text.color: #xE2D2B9CC
+                        }
+
+                        composer_row := View {
+                            width: Fill
+                            height: Fit
+                            align: Align{x: 0.5 y: 0.0}
+
+                            composer := ComposerGlass {
+                                input := TextInput {
+                                    width: Fill
+                                    height: 56
+                                    empty_text: "问任何事。输入 @ 使用插件或提及文件"
+                                    draw_bg +: {
+                                        color: #00000000
+                                        color_hover: #00000000
+                                        color_focus: #00000000
+                                        border_size: 0.0
+                                        border_radius: 0.0
+                                    }
+                                    // Per-instance font override — TextInput bakes
+                                    // `theme.font_regular` at DSL-expansion time, same
+                                    // issue as Markdown/CodeView. Without this the
+                                    // input box shows tofu for CJK and U+2192 arrows.
+                                    draw_text +: {
+                                        color: ai_cream
+                                        color_empty: ai_cream_dim
+                                        text_style: theme.font_regular{
+                                            line_spacing: theme.font_wdgt_line_spacing
+                                            font_size: 13
+                                            font_family: FontFamily{
+                                                latin := FontMember{res: crate_resource("self:resources/NotoSans-Regular.ttf") asc: 0.0 desc: 0.0}
+                                                chinese := FontMember{res: crate_resource("self:resources/LXGWWenKaiMono-Regular.ttf") asc: 0.0 desc: 0.0}
+                                                symbols := FontMember{res: crate_resource("self:resources/NotoSans-Regular.ttf") asc: 0.0 desc: 0.0}
+                                                emoji := FontMember{res: crate_resource("self:resources/NotoColorEmoji.ttf") asc: 0.0 desc: 0.0}
+                                            }
+                                        }
+                                    }
+                                }
+
+                                composer_actions := View {
+                                    width: Fill
+                                    height: Fit
+                                    flow: Right
+                                    align: Align{y: 0.5}
+                                    spacing: 8
+
+                                    attach_button := IconButton { text: "+" }
+                                    mention_button := IconButton { text: "@" }
+                                    tools_button := IconButton { text: "⌘" }
+
+                                    Label {
+                                        text: "默认权限"
+                                        draw_text.color: ai_cream_dim
+                                        draw_text.text_style.font_size: 11
+                                    }
+
+                                    thinking_toggle := ToggleFlat {
+                                        text: "Thinking"
+                                        active: false
+                                        draw_text +: {
+                                            color: ai_cream_dim
+                                            text_style +: { font_size: 11 }
+                                        }
+                                    }
+
+                                    View { width: Fill height: 1 }
+
+                                    cancel_button := ButtonFlat {
+                                        text: "Cancel"
+                                        width: 72
+                                        height: 32
+                                        visible: false
+                                        draw_text +: {
+                                            color: #xF2F4F8
+                                            text_style +: { font_size: 11 }
+                                        }
+                                        draw_bg +: {
+                                            color: #x4B332FCC
+                                            color_hover: #x64413ADD
+                                            border_color: #xEAD8B818
+                                            border_size: 1.0
+                                            border_radius: 10.0
+                                        }
+                                    }
+
+                                    clear_button := PillButton {
+                                        text: "Clear"
+                                        width: 78
+                                        height: 36
+                                        draw_bg +: {
+                                            color: #x08251EC8
+                                            color_hover: #x123B31EE
+                                            border_color: #xEAD8B83A
+                                            border_size: 1.0
+                                            border_radius: 10.0
+                                        }
+                                    }
+
+                                    send_button := SendButton {
+                                        text: "↑"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    }
+
+                    toolbar_overlay := PopupNotification{
+                        align: Align{x: 1.0 y: 0.0}
+                        content +: {
+                            width: Fit
+                            height: 48
+                            margin: Inset{top: 35 right: 34}
+                            flow: Right
+                            spacing: 12
+                            clip_x: false
+                            clip_y: false
+
+                            backend_toolbar := ToolbarGlass {
                                 width: 286
 
                                 ToolbarLabel {
@@ -956,9 +1137,8 @@ script_mod! {
                                 }
                             }
 
-                            ToolbarGlass {
+                            opacity_toolbar := ToolbarGlass {
                                 width: 318
-                                margin: Inset{left: 12}
 
                                 ToolbarLabel {
                                     text: "Glass"
@@ -976,171 +1156,6 @@ script_mod! {
                                 }
                             }
                         }
-
-                        chat_shell := View {
-                            width: Fill
-                            height: Fill
-                            flow: Overlay
-
-                            empty_state := View {
-                                width: Fill
-                                height: Fill
-                                flow: Down
-                                align: Align{x: 0.5 y: 0.46}
-                                spacing: 18
-
-                                empty_title := Label {
-                                    text: "我们该做什么？"
-                                    draw_text.color: #xF3E3C7
-                                    draw_text.text_style.font_size: 27
-                                }
-
-                                empty_subtitle := Label {
-                                    text: "输入自然语言，生成可交互的 Makepad diagram。"
-                                    draw_text.color: #xCDBF9FAA
-                                    draw_text.text_style.font_size: 12
-                                }
-                            }
-
-                            chat_list := ChatList {}
-                        }
-
-                        composer_row := View {
-                            width: Fill
-                            height: Fit
-                            align: Align{x: 0.5 y: 0.0}
-
-                            composer := GlassPanel {
-                                width: Fill{min: 620 max: 1040}
-                                height: Fit
-                                new_batch: true
-                                flow: Down
-                                padding: Inset{left: 18 top: 14 right: 14 bottom: 12}
-                                spacing: 10
-                                draw_bg +: {
-                                    tint_color: #x082E27
-                                    tint_alpha: 0.82
-                                    border_color: #xEAD8B8
-                                    border_alpha: 0.24
-                                    border_width: 0.8
-                                    corner_radius: 24.0
-                                    halo_color: #xA8F0FF
-                                    halo_strength: 0.045
-                                    halo_radius: 5.0
-                                    highlight_strength: 0.24
-                                    highlight_band_height: 34.0
-                                    chroma_strength: 0.0
-                                    noise_strength: 0.003
-                                }
-
-                                input := TextInput {
-                                    width: Fill
-                                    height: 56
-                                    empty_text: "问任何事。输入 @ 使用插件或提及文件"
-                                    draw_bg +: {
-                                        color: #00000000
-                                        color_hover: #00000000
-                                        color_focus: #00000000
-                                        border_size: 0.0
-                                        border_radius: 0.0
-                                    }
-                                    // Per-instance font override — TextInput bakes
-                                    // `theme.font_regular` at DSL-expansion time, same
-                                    // issue as Markdown/CodeView. Without this the
-                                    // input box shows tofu for CJK and U+2192 arrows.
-                                    draw_text +: {
-                                        color: ai_cream
-                                        color_empty: ai_cream_dim
-                                        text_style: theme.font_regular{
-                                            line_spacing: theme.font_wdgt_line_spacing
-                                            font_size: 13
-                                            font_family: FontFamily{
-                                                latin := FontMember{res: crate_resource("self:resources/NotoSans-Regular.ttf") asc: 0.0 desc: 0.0}
-                                                chinese := FontMember{res: crate_resource("self:resources/LXGWWenKaiMono-Regular.ttf") asc: 0.0 desc: 0.0}
-                                                symbols := FontMember{res: crate_resource("self:resources/NotoSans-Regular.ttf") asc: 0.0 desc: 0.0}
-                                                emoji := FontMember{res: crate_resource("self:resources/NotoColorEmoji.ttf") asc: 0.0 desc: 0.0}
-                                            }
-                                        }
-                                    }
-                                }
-
-                                composer_actions := View {
-                                    width: Fill
-                                    height: Fit
-                                    flow: Right
-                                    align: Align{y: 0.5}
-                                    spacing: 8
-
-                                    attach_button := IconButton { text: "+" }
-
-                                    mention_button := IconButton { text: "@" }
-
-                                    tools_button := IconButton { text: "⌘" }
-
-                                    Label {
-                                        text: "默认权限"
-                                        draw_text.color: ai_cream_dim
-                                        draw_text.text_style.font_size: 11
-                                    }
-
-                                    thinking_toggle := ToggleFlat {
-                                        text: "Thinking"
-                                        active: false
-                                        draw_text +: {
-                                            color: ai_cream_dim
-                                            text_style +: { font_size: 11 }
-                                        }
-                                    }
-
-                                    View { width: Fill height: 1 }
-
-                                    cancel_button := ButtonFlat {
-                                        text: "Cancel"
-                                        width: 72
-                                        height: 32
-                                        visible: false
-                                        draw_text +: {
-                                            color: #xF2F4F8
-                                            text_style +: { font_size: 11 }
-                                        }
-                                        draw_bg +: {
-                                            color: #x4B332FCC
-                                            color_hover: #x64413ADD
-                                            border_color: #xEAD8B818
-                                            border_size: 1.0
-                                            border_radius: 10.0
-                                        }
-                                    }
-
-                                    clear_button := PillButton {
-                                        text: "Clear"
-                                        width: 78
-                                        height: 36
-                                        draw_bg +: {
-                                            color: #x08251EC8
-                                            color_hover: #x123B31EE
-                                            border_color: #xEAD8B83A
-                                            border_size: 1.0
-                                            border_radius: 10.0
-                                        }
-                                    }
-
-                                    send_button := SendButton {
-                                        text: "↑"
-                                    }
-                                }
-                            }
-                        }
-
-                        status_label := Label {
-                            width: Fill
-                            height: Fit
-                            text: "Initializing..."
-                            margin: Inset{left: 92 right: 92 top: 0 bottom: 0}
-                            draw_text.text_style.font_size: 10
-                            draw_text.color: #xE2D2B9AA
-                        }
-                    }
                     }
 
                     resize_grip := Vector{
@@ -1200,15 +1215,14 @@ pub static APP_GEN_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(Ch
     is_streaming: false,
 });
 
-pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> =
-    std::sync::RwLock::new(AppDemoState {
-        count: 0,
-        timer: TimerDemoState {
-            duration_seconds: 25 * 60,
-            remaining_seconds: 25 * 60,
-            is_running: false,
-        },
-    });
+pub static APP_DEMO_STATE: std::sync::RwLock<AppDemoState> = std::sync::RwLock::new(AppDemoState {
+    count: 0,
+    timer: TimerDemoState {
+        duration_seconds: 25 * 60,
+        remaining_seconds: 25 * 60,
+        is_running: false,
+    },
+});
 
 // Slider position range (NOT alpha — alpha is derived per-layer).
 const DEFAULT_GLASS_OPACITY: f64 = 0.90;
@@ -1223,18 +1237,18 @@ struct GlassOpacity {
     composer: f32,
 }
 
-// Map slider [0.10..1.00] to actual panel alpha. The earlier mapping only
-// moved alpha slightly, so the "Glass" control felt inert on a transparent
-// window. Keep layer ordering, but make the low/high ends visually obvious.
+// Map slider [0.10..1.00] to layer-specific material strength. Broad shell
+// layers stay light so the overlay AppleGlass surfaces can visibly refract the
+// scene instead of being hidden behind an opaque green wash.
 fn glass_opacity_values(slider: f64) -> GlassOpacity {
     let t = ((slider.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY) - MIN_GLASS_OPACITY)
         / (MAX_GLASS_OPACITY - MIN_GLASS_OPACITY)) as f32;
-    let shell = 0.28 + t * 0.64;
+    let shell = 0.32 + t * 0.26;
     GlassOpacity {
         app: shell,
-        main: (shell + 0.05).min(0.99),
-        sidebar: (shell + 0.08).min(0.99),
-        composer: (shell + 0.11).min(0.99),
+        main: (shell + 0.04).min(0.62),
+        sidebar: (shell + 0.06).min(0.66),
+        composer: 0.035 + t * 0.055,
     }
 }
 
@@ -1587,7 +1601,8 @@ If a required control is listed in the manifest, it must be visible in the UI."#
 }
 
 fn app_generation_session_system_prompt() -> String {
-    let splash_md_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../splash.md");
+    let splash_md_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../splash.md");
     let splash_md = std::fs::read_to_string(&splash_md_path)
         .unwrap_or_else(|_| include_str!("../../../splash.md").to_string());
     format!(
@@ -2069,12 +2084,8 @@ impl MermaidSvgView {
             }
             let world_font_size = (cmd.font_size as f64 * scale * PX_TO_PT).max(1.0);
             self.draw_text.text_style.font_size = world_font_size as f32;
-            self.draw_text.color = vec4(
-                cmd.color.0,
-                cmd.color.1,
-                cmd.color.2,
-                cmd.color.3.max(0.0),
-            );
+            self.draw_text.color =
+                vec4(cmd.color.0, cmd.color.1, cmd.color.2, cmd.color.3.max(0.0));
 
             let lines: Vec<&str> = cmd.text.split('\n').collect();
             let line_step_screen = world_font_size * 1.2;
@@ -2122,8 +2133,7 @@ impl MermaidSvgView {
         let origin_x = rect.pos.x + (rect.size.x - render_w) * 0.5;
         let origin_y = rect.pos.y + (rect.size.y - render_h) * 0.5;
         let dot_size = 10.0_f64;
-        let pulse =
-            0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
+        let pulse = 0.55 + 0.45 * (self.anim_t * std::f32::consts::TAU * 1.5).sin().abs();
 
         for (edge_index, edge) in edges.iter().enumerate() {
             if edge.points.len() < 2 {
@@ -2567,6 +2577,12 @@ pub struct App {
     moonshot_thinking_enabled: bool,
     #[rust]
     app_state_timer: Timer,
+    #[rust]
+    glass_ripple_next_frame: NextFrame,
+    #[rust]
+    glass_ripple_started_at: f64,
+    #[rust]
+    glass_ripple_animating: bool,
 }
 
 impl App {
@@ -2608,10 +2624,7 @@ impl App {
     }
 
     fn initial_moonshot_thinking_enabled() -> bool {
-        std::env::var("MOONSHOT_THINKING")
-            .ok()
-            .as_deref()
-            == Some("enabled")
+        std::env::var("MOONSHOT_THINKING").ok().as_deref() == Some("enabled")
     }
 
     fn read_key_file(path: &str) -> Option<String> {
@@ -3001,7 +3014,9 @@ impl App {
 
     fn refresh_visible_state_templates(&self, cx: &mut Cx) {
         let messages: Vec<(usize, String)> = {
-            let data = chat_data_for_workspace(self.active_workspace).read().unwrap();
+            let data = chat_data_for_workspace(self.active_workspace)
+                .read()
+                .unwrap();
             data.messages
                 .iter()
                 .enumerate()
@@ -3143,6 +3158,43 @@ impl App {
         self.ui.label(cx, ids!(status_label)).set_text(cx, status);
     }
 
+    fn set_glass_press_response(
+        &mut self,
+        cx: &mut Cx,
+        flatten: f32,
+        ripple_start: f32,
+        ripple_strength: f32,
+    ) {
+        if let Some(mut glass) = self
+            .ui
+            .widget(cx, ids!(composer))
+            .borrow_mut::<GaussRoundedView>()
+        {
+            glass.set_press_response(cx, flatten, ripple_start, ripple_strength);
+        }
+        if let Some(mut glass) = self
+            .ui
+            .widget(cx, ids!(backend_toolbar))
+            .borrow_mut::<GaussRoundedView>()
+        {
+            glass.set_press_response(cx, flatten, ripple_start, ripple_strength);
+        }
+        if let Some(mut glass) = self
+            .ui
+            .widget(cx, ids!(opacity_toolbar))
+            .borrow_mut::<GaussRoundedView>()
+        {
+            glass.set_press_response(cx, flatten, ripple_start, ripple_strength);
+        }
+    }
+
+    fn start_glass_ripple(&mut self, cx: &mut Cx) {
+        self.glass_ripple_animating = true;
+        self.glass_ripple_started_at = 0.0;
+        self.set_glass_press_response(cx, 0.0, -1000.0, 0.0);
+        self.glass_ripple_next_frame = cx.new_next_frame();
+    }
+
     fn apply_glass_opacity(&self, cx: &mut Cx, opacity: f64) {
         let opacity = opacity.clamp(MIN_GLASS_OPACITY, MAX_GLASS_OPACITY);
         let glass = glass_opacity_values(opacity);
@@ -3162,7 +3214,7 @@ impl App {
             draw_bg +: { tint_alpha: #(glass.main) }
         });
 
-        let mut composer = self.ui.view(cx, ids!(composer));
+        let mut composer = self.ui.widget(cx, ids!(composer));
         script_apply_eval!(cx, composer, {
             draw_bg +: { tint_alpha: #(glass.composer) }
         });
@@ -3175,6 +3227,31 @@ impl App {
 }
 
 impl MatchEvent for App {
+    fn handle_next_frame(&mut self, cx: &mut Cx, e: &NextFrameEvent) {
+        if !self.glass_ripple_animating || !e.set.contains(&self.glass_ripple_next_frame) {
+            return;
+        }
+
+        if self.glass_ripple_started_at <= 0.0 {
+            self.glass_ripple_started_at = e.time;
+        }
+        let age = (e.time - self.glass_ripple_started_at).max(0.0);
+        let ripple_strength = ((1.0 - age / 1.05).max(0.0) as f32) * 0.82;
+        self.set_glass_press_response(
+            cx,
+            0.0,
+            self.glass_ripple_started_at as f32,
+            ripple_strength,
+        );
+
+        if age < 1.08 {
+            self.glass_ripple_next_frame = cx.new_next_frame();
+        } else {
+            self.glass_ripple_animating = false;
+            self.set_glass_press_response(cx, 0.0, -1000.0, 0.0);
+        }
+    }
+
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         for action in actions {
             if let SplashAction::Notify { event_id, payload } = action.cast() {
@@ -3188,8 +3265,13 @@ impl MatchEvent for App {
             .or_else(|| opacity_slider.end_slide(actions))
         {
             self.apply_glass_opacity(cx, opacity);
+            self.start_glass_ripple(cx);
         }
-        if let Some(enabled) = self.ui.check_box(cx, ids!(thinking_toggle)).changed(actions) {
+        if let Some(enabled) = self
+            .ui
+            .check_box(cx, ids!(thinking_toggle))
+            .changed(actions)
+        {
             self.moonshot_thinking_enabled = enabled;
             if self.active_backend == Some(BackendType::Moonshot) {
                 if self.current_prompt.is_some() {
@@ -3239,12 +3321,15 @@ impl MatchEvent for App {
             }
         }
         if self.ui.button(cx, ids!(send_button)).clicked(actions) {
+            self.start_glass_ripple(cx);
             self.send_message(cx);
         }
         if self.ui.button(cx, ids!(cancel_button)).clicked(actions) {
+            self.start_glass_ripple(cx);
             self.cancel_request(cx);
         }
         if self.ui.button(cx, ids!(clear_button)).clicked(actions) {
+            self.start_glass_ripple(cx);
             self.clear_chat(cx);
         }
         if self.ui.button(cx, ids!(nav_chat)).clicked(actions) {
@@ -3259,6 +3344,7 @@ impl MatchEvent for App {
             .returned(actions)
             .is_some()
         {
+            self.start_glass_ripple(cx);
             self.send_message(cx);
         }
         if self.ui.text_input(cx, ids!(input)).escaped(actions) {
@@ -3271,6 +3357,7 @@ impl MatchEvent for App {
         {
             if let Some(backend) = BackendType::from_index(index) {
                 self.switch_backend(cx, backend);
+                self.start_glass_ripple(cx);
             }
         }
 
@@ -3297,6 +3384,9 @@ impl MatchEvent for App {
         *ACTIVE_WORKSPACE.write().unwrap() = self.active_workspace;
         self.app_state_timer = cx.start_interval(1.0);
         let default_backend = Self::default_backend(&self.available_backends);
+        self.ui
+            .popup_notification(cx, ids!(toolbar_overlay))
+            .open(cx);
         if let Some(backend) = default_backend {
             self.switch_backend(cx, backend);
             self.ui
@@ -3309,10 +3399,13 @@ impl MatchEvent for App {
         self.ui
             .slider(cx, ids!(opacity_slider))
             .set_value(cx, DEFAULT_GLASS_OPACITY);
-        self.ui
-            .check_box(cx, ids!(thinking_toggle))
-            .set_active(cx, self.moonshot_thinking_enabled, Animate::No);
+        self.ui.check_box(cx, ids!(thinking_toggle)).set_active(
+            cx,
+            self.moonshot_thinking_enabled,
+            Animate::No,
+        );
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
+        self.start_glass_ripple(cx);
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
@@ -3475,30 +3568,28 @@ mod tests {
 
     #[test]
     fn aichat_glass_opacity_slider_contract() {
-        // v2: slider is a position value; per-layer alpha is derived.
+        // v3: slider is a position value; shell alpha and Apple Glass tint are
+        // derived separately because they use different material models.
         assert!((DEFAULT_GLASS_OPACITY - 0.90).abs() < f64::EPSILON);
         let values = glass_opacity_values(DEFAULT_GLASS_OPACITY);
-        // Layer stack must read shell < main < sidebar < composer
-        // so the wallpaper shows through more on the outer frame than on
-        // the inner panels.
+        // Shell panels retain the existing layer ordering.
         assert!(values.app < values.main);
         assert!(values.main < values.sidebar);
-        assert!(values.sidebar < values.composer);
-        // Default keeps the wallpaper visible, but is opaque enough for text.
-        assert!((0.82..0.87).contains(&values.app));
+        assert!((0.54..0.57).contains(&values.app));
+        // Composer is an AppleGlassRoundedView overlay, so tint remains low.
+        assert!((0.075..0.09).contains(&values.composer));
     }
 
     #[test]
     fn aichat_liquid_glass_shell_contract() {
-        // v2: layer-stack ordering must hold at every legal slider value,
-        // and no layer reaches alpha 1.0 at any slider <= 1.0.
+        // v3: shell layer ordering is preserved, while composer tint stays in
+        // the low Apple Glass range at every legal slider value.
         let low = glass_opacity_values(0.0);
         let high = glass_opacity_values(2.0);
         // Slider is clamped: low.app uses MIN_GLASS_OPACITY, high.app uses MAX.
         assert!(low.app < high.app);
-        assert!(high.app > 0.90);
-        assert!(high.app <= 1.0);
-        // Ordering preserved across the range.
+        assert!(high.app > 0.57);
+        assert!(high.app <= 0.59);
         for &slider in &[
             MIN_GLASS_OPACITY,
             0.30_f64,
@@ -3509,27 +3600,18 @@ mod tests {
             let v = glass_opacity_values(slider);
             assert!(v.app < v.main, "slider={}", slider);
             assert!(v.main <= v.sidebar, "slider={}", slider);
-            assert!(v.sidebar <= v.composer, "slider={}", slider);
+            assert!((0.035..=0.090).contains(&v.composer), "slider={}", slider);
         }
     }
 
     #[test]
     fn aichat_drag_strip_preserves_resize_edges() {
         let size = DVec2 { x: 900.0, y: 700.0 };
-        assert!(should_start_window_drag(
-            DVec2 { x: 120.0, y: 24.0 },
-            size
-        ));
+        assert!(should_start_window_drag(DVec2 { x: 120.0, y: 24.0 }, size));
         assert!(!should_start_window_drag(DVec2 { x: 4.0, y: 24.0 }, size));
         assert!(!should_start_window_drag(DVec2 { x: 120.0, y: 4.0 }, size));
-        assert!(!should_start_window_drag(
-            DVec2 { x: 880.0, y: 24.0 },
-            size
-        ));
-        assert!(!should_start_window_drag(
-            DVec2 { x: 700.0, y: 24.0 },
-            size
-        ));
+        assert!(!should_start_window_drag(DVec2 { x: 880.0, y: 24.0 }, size));
+        assert!(!should_start_window_drag(DVec2 { x: 700.0, y: 24.0 }, size));
     }
 
     #[test]
