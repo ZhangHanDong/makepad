@@ -575,6 +575,12 @@ behavior, or full native interior Liquid Glass.
   `role=container-created-contentView class=NSView` plus State 4 with four
   installed panels. The old direct container parenting remains available only
   through explicit fallback values.
+- Step 197 performs a fresh completion audit against the full objective. The
+  macOS interleave route is structurally stronger after Step 196, but the full
+  objective remains incomplete because the branch still lacks a fresh
+  system-composited macOS visual verdict after contentView defaulting, iOS 26
+  runtime validation, advanced behavior validation, and a reliable automated
+  screenshot source for the AppKit native layer.
 
 ## Next Gates
 
@@ -608,3 +614,6 @@ behavior, or full native interior Liquid Glass.
    API/material configuration or runtime behavior.
 8. Re-run manual visual validation after Step 196 because production interleave
    now follows the public AppKit container contentView model by default.
+9. Treat Step 197 as the current non-completion audit: do not mark the full
+   Apple native Liquid Glass objective complete until its missing gates are
+   closed with real evidence.
