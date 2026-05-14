@@ -50,6 +50,11 @@ Current AppleNativeInterleave targets:
 
 - [ ] v4.1 native-panel logs exist for shell, sidebar, main area, and composer.
 - [ ] `panels_failed` stays `0` on a supported macOS 26 runtime.
+- [ ] Native container panel parenting uses AppKit contentView by default:
+
+```text
+[liquid-glass] native-container-panel-parent container=... requested=contentView role=container-created-contentView class=NSView
+```
 
 ## Native Visibility
 
@@ -250,3 +255,17 @@ architecture; it is an isolation check. Studio build `[68]` logged:
 If this target is visibly glassy while interleave targets are flat, the blocker
 is the interleave compositing model. If it is also flat, continue investigating
 native API/material configuration.
+
+## Default ContentView Parenting Update 2026-05-15
+
+After Step 196, macOS native batch install follows the public
+`NSGlassEffectContainerView.contentView` model by default. Studio build `[69]`
+ran `makepad-example-aichat-apple-native-interleave-experimental` and logged:
+
+```text
+[liquid-glass] native-container-panel-parent container=0000000000000010 requested=contentView role=container-created-contentView class=NSView
+[liquid-glass] state=4 substrate=macos-native style=clear style_raw=1
+```
+
+Re-run visual validation against the production interleave target before
+deciding whether the remaining blocker is visual tuning or compositing.

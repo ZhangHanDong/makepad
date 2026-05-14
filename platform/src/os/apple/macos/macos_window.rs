@@ -346,10 +346,7 @@ impl MacosWindow {
     pub(crate) fn native_glass_container_content_view_enabled_from_value(
         value: Option<&str>,
     ) -> bool {
-        matches!(
-            value.map(str::trim),
-            Some("1" | "true" | "on" | "content-view")
-        )
+        !matches!(value.map(str::trim), Some("0" | "false" | "off" | "direct"))
     }
 
     pub(crate) fn native_glass_container_content_view_enabled() -> bool {
@@ -3146,7 +3143,9 @@ mod tests {
     }
 
     #[test]
-    fn native_glass_container_content_view_env_accepts_truthy_values() {
+    fn native_glass_container_content_view_env_defaults_to_content_view_parenting() {
+        assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(None));
+        assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("")));
         assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("1")));
         assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("true")));
         assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("on")));
@@ -3155,9 +3154,11 @@ mod tests {
                 "content-view"
             ))
         );
-        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(None));
-        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(Some("")));
         assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(Some("off")));
+        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(Some("0")));
+        assert!(
+            !MacosWindow::native_glass_container_content_view_enabled_from_value(Some("direct"))
+        );
     }
 
     #[test]

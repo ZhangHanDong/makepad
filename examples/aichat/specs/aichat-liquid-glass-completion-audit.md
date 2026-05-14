@@ -567,6 +567,14 @@ behavior, or full native interior Liquid Glass.
   `above-metal-probe state=installed style=regular style_raw=0`. This is not a
   production architecture; it isolates whether `NSGlassEffectView` becomes
   visibly glassy when placed above the Makepad Metal view.
+- Step 196 promotes `NSGlassEffectContainerView.contentView` parenting to the
+  default macOS native batch behavior. Apple documentation describes the
+  container `contentView` as the home for descendant views that are merged by
+  proximity. Build `[69]` runs
+  `makepad-example-aichat-apple-native-interleave-experimental` and logs
+  `role=container-created-contentView class=NSView` plus State 4 with four
+  installed panels. The old direct container parenting remains available only
+  through explicit fallback values.
 
 ## Next Gates
 
@@ -598,3 +606,5 @@ behavior, or full native interior Liquid Glass.
    from interleave compositing. A positive above-Metal result points to a
    compositing-model blocker; a flat above-Metal result points to native
    API/material configuration or runtime behavior.
+8. Re-run manual visual validation after Step 196 because production interleave
+   now follows the public AppKit container contentView model by default.
