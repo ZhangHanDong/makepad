@@ -24,6 +24,7 @@ Current AppleNativeInterleave targets:
 
 - [ ] `makepad-example-aichat-apple-native-interleave-experimental`
 - [ ] `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`
+- [ ] `makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`
 
 ## Startup Logs
 
@@ -116,6 +117,9 @@ Current AppleNativeInterleave targets:
 Use the diagnostic overlay before changing production tuning:
 
 - [ ] Run `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`.
+- [ ] If the clear diagnostic looks flat or opaque, run
+  `makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`
+  before changing production tint/opacity.
 - [ ] Confirm startup logs include:
 
 ```text
@@ -124,11 +128,20 @@ Use the diagnostic overlay before changing production tuning:
 [liquid-glass] app-substrate=apple-native-interleave state=Installed
 ```
 
+- [ ] For the regular diagnostic, confirm startup logs include:
+
+```text
+[liquid-glass] native-lower-scene-pass=draw profile=diagnostic proof=Refraction
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
+[liquid-glass] app-substrate=apple-native-interleave state=Installed
+```
+
 - [ ] If diagnostic overlay shows visible grid/refraction/liquid distortion but
   `makepad-example-aichat-apple-native-interleave-experimental` looks flat,
   treat the next task as production visual tuning.
-- [ ] If diagnostic overlay also looks black, opaque, or edge-only, treat the
-  next task as a native/macOS composition visibility blocker.
+- [ ] If both clear and regular diagnostic overlays look black, opaque,
+  edge-only, or like flat unprocessed lower-scene content, treat the next task
+  as a native/macOS composition visibility blocker.
 - [ ] Do not use Studio framebuffer screenshots alone for this decision; they
   omit the AppKit native glass layer and normally show only the transparent
   upper Makepad surface.
@@ -179,3 +192,17 @@ high-contrast manual visual gate. It runs the same `apple-native-interleave`
 backend but switches the lower scene to the diagnostic `Refraction` profile.
 Use it to decide whether a failed visual report is caused by subtle production
 tuning or by native composition visibility.
+
+## AppleNativeInterleave Regular Diagnostic Update 2026-05-15
+
+`makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`
+adds a style-only A/B check for the same diagnostic lower scene. It sets
+`AICHAT_NATIVE_INTERLEAVE_STYLE=regular` and reached State 4 in Studio build
+`[62]` with:
+
+```text
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
+```
+
+If the regular diagnostic still looks like a flat grid, continue with native
+AppKit/Metal composition investigation instead of production visual tuning.

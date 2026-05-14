@@ -547,6 +547,13 @@ behavior, or full native interior Liquid Glass.
   `cargo check -p makepad-example-aichat --target aarch64-apple-ios --release`
   pass on the current machine. This does not close the iOS runtime gate because
   the local SDK/runtime is still iOS 18.x, not iOS 26.
+- Step 193 adds a style-only diagnostic A/B target:
+  `makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`.
+  Build `[62]` reaches State 4 with `style=regular style_raw=0` while using the
+  same diagnostic lower scene and transparent overlay. This separates "clear is
+  too visually subtle" from "the AppKit/Metal interleave composition is not
+  producing visible native material." A manual system-composited verdict is
+  still required before choosing production tuning versus composition redesign.
 
 ## Next Gates
 
@@ -566,3 +573,7 @@ behavior, or full native interior Liquid Glass.
 4. Scope Phase H and Phase I separately so fullscreen/multi-display/popup
    behavior does not destabilize the landed macOS underlay backend. The
    concrete gates are tracked in `APPLE-NATIVE-ADVANCED-BEHAVIOR-GATES.md`.
+5. Use the clear and regular interleave diagnostic overlays as the manual macOS
+   visual fork: if regular visibly restores material, tune style/opacity; if it
+   still looks like flat lower-scene content, investigate the native composition
+   model instead of tuning shader-like foreground parameters.

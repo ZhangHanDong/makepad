@@ -1636,7 +1636,7 @@ fn resolve_glass_appearance_for_backend(
             GlassConfigResolution {
                 appearance: GlassAppearance {
                     substrate: GlassSubstrate::MacosNative {
-                        style: MacosGlassStyle::Clear,
+                        style: native_interleave_style(),
                     },
                     backdrop: None,
                 },
@@ -1697,7 +1697,7 @@ fn resolve_startup_glass_appearance(value: Option<&str>) -> GlassConfigResolutio
             GlassConfigResolution {
                 appearance: GlassAppearance {
                     substrate: GlassSubstrate::MacosNative {
-                        style: MacosGlassStyle::Clear,
+                        style: native_interleave_style(),
                     },
                     backdrop: None,
                 },
@@ -1921,6 +1921,23 @@ fn apple_native_interleave_backend_enabled() -> bool {
     apple_native_interleave_backend_enabled_from_value(
         std::env::var("AICHAT_GLASS_BACKEND").ok().as_deref(),
     )
+}
+
+fn native_interleave_style_from_value(value: Option<&str>) -> Option<MacosGlassStyle> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("regular") | Some("0") => Some(MacosGlassStyle::Regular),
+        Some("clear") | Some("1") => Some(MacosGlassStyle::Clear),
+        _ => None,
+    }
+}
+
+fn native_interleave_style() -> MacosGlassStyle {
+    native_interleave_style_from_value(
+        std::env::var("AICHAT_NATIVE_INTERLEAVE_STYLE")
+            .ok()
+            .as_deref(),
+    )
+    .unwrap_or(MacosGlassStyle::Clear)
 }
 
 fn native_inactive_probe_log_line(
@@ -6750,11 +6767,11 @@ mod tests {
         native_fullscreen_probe_should_delay_exit, native_fullscreen_probe_should_start,
         native_geometry_probe_enabled_from_value, native_geometry_probe_should_start,
         native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
-        native_interleave_scene_profile_from_value, native_spacing_probe_enabled_from_value,
-        native_spacing_probe_should_continue, native_spacing_probe_spacing_for_frame,
-        native_substrate_resolved_appearance, native_transient_probe_enabled_from_value,
-        parse_glass_backend, render_state_templates, render_state_templates_for_ui,
-        resolve_glass_appearance, resolve_glass_appearance_for_backend,
+        native_interleave_scene_profile_from_value, native_interleave_style_from_value,
+        native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
+        native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
+        native_transient_probe_enabled_from_value, parse_glass_backend, render_state_templates,
+        render_state_templates_for_ui, resolve_glass_appearance, resolve_glass_appearance_for_backend,
         resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
         strip_appplan_fences_for_ui, Agent, App, AppCapability, AppDemoState, BackendType,
         CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
@@ -7088,6 +7105,28 @@ mod tests {
         assert!(!apple_native_interleave_backend_enabled_from_value(Some(
             "macos-native-clear"
         )));
+    }
+
+    #[test]
+    fn aichat_native_interleave_style_override_accepts_regular_and_clear() {
+        assert_eq!(native_interleave_style_from_value(None), None);
+        assert_eq!(
+            native_interleave_style_from_value(Some("regular")),
+            Some(MacosGlassStyle::Regular)
+        );
+        assert_eq!(
+            native_interleave_style_from_value(Some("0")),
+            Some(MacosGlassStyle::Regular)
+        );
+        assert_eq!(
+            native_interleave_style_from_value(Some("clear")),
+            Some(MacosGlassStyle::Clear)
+        );
+        assert_eq!(
+            native_interleave_style_from_value(Some("1")),
+            Some(MacosGlassStyle::Clear)
+        );
+        assert_eq!(native_interleave_style_from_value(Some("unknown")), None);
     }
 
     #[test]
