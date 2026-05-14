@@ -26,6 +26,7 @@ Current AppleNativeInterleave targets:
 - [ ] `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`
 - [ ] `makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`
 - [ ] `makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay`
+- [ ] `makepad-example-aichat-macos-native-above-metal-regular-probe`
 
 ## Startup Logs
 
@@ -153,6 +154,9 @@ Use the diagnostic overlay before changing production tuning:
 - [ ] If clear, regular, and contentView diagnostic overlays all look black,
   opaque, edge-only, or like flat unprocessed lower-scene content, treat the
   next task as a native/macOS composition visibility blocker.
+- [ ] If interleave diagnostics look flat, run
+  `makepad-example-aichat-macos-native-above-metal-regular-probe` to isolate
+  whether native glass becomes visible when placed above the Makepad Metal view.
 - [ ] Do not use Studio framebuffer screenshots alone for this decision; they
   omit the AppKit native glass layer and normally show only the transparent
   upper Makepad surface.
@@ -232,3 +236,17 @@ container. Studio build `[65]` reached State 4 and logged:
 
 If this target still looks like flat diagnostic content, direct-vs-contentView
 parenting is not sufficient to restore visible Liquid Glass material.
+
+## Above-Metal Regular Diagnostic Update 2026-05-15
+
+`makepad-example-aichat-macos-native-above-metal-regular-probe` places one
+`NSGlassEffectView` above the Makepad Metal view. This is not a production
+architecture; it is an isolation check. Studio build `[68]` logged:
+
+```text
+[liquid-glass] above-metal-probe state=installed style=regular style_raw=0 input=diagnostic-overlay
+```
+
+If this target is visibly glassy while interleave targets are flat, the blocker
+is the interleave compositing model. If it is also flat, continue investigating
+native API/material configuration.

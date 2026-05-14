@@ -562,6 +562,11 @@ behavior, or full native interior Liquid Glass.
   and logs `role=container-created-contentView class=NSView` plus State 4 with
   `style=regular style_raw=0`. This tests whether direct container parenting is
   the reason the diagnostic can still look like flat lower-scene content.
+- Step 195 adds an above-Metal regular-style diagnostic. Build `[68]` runs
+  `makepad-example-aichat-macos-native-above-metal-regular-probe` and logs
+  `above-metal-probe state=installed style=regular style_raw=0`. This is not a
+  production architecture; it isolates whether `NSGlassEffectView` becomes
+  visibly glassy when placed above the Makepad Metal view.
 
 ## Next Gates
 
@@ -589,3 +594,7 @@ behavior, or full native interior Liquid Glass.
    materially improves the native effect, evaluate contentView parenting for
    production after input/geometry regression checks. If it does not, continue
    AppKit/Metal composition model investigation.
+7. Use the above-Metal regular probe to split native API/material visibility
+   from interleave compositing. A positive above-Metal result points to a
+   compositing-model blocker; a flat above-Metal result points to native
+   API/material configuration or runtime behavior.
