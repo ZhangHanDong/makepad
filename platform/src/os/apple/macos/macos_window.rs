@@ -343,6 +343,23 @@ impl MacosWindow {
         )
     }
 
+    pub(crate) fn native_glass_container_content_view_enabled_from_value(
+        value: Option<&str>,
+    ) -> bool {
+        matches!(
+            value.map(str::trim),
+            Some("1" | "true" | "on" | "content-view")
+        )
+    }
+
+    pub(crate) fn native_glass_container_content_view_enabled() -> bool {
+        Self::native_glass_container_content_view_enabled_from_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_USE_CONTAINER_CONTENT_VIEW")
+                .ok()
+                .as_deref(),
+        )
+    }
+
     pub(crate) fn native_glass_window_geometry_changed(
         old_geom: &WindowGeom,
         new_geom: &WindowGeom,
@@ -1603,6 +1620,52 @@ impl MacosWindow {
                 );
             }
 
+            let use_container_content_view = Self::native_glass_container_content_view_enabled();
+            let mut panel_parent = native_container;
+            let mut panel_parent_role = "container";
+            if use_container_content_view {
+                let content_view_sel = sel!(contentView);
+                let can_get_content_view: BOOL =
+                    msg_send![native_container, respondsToSelector: content_view_sel];
+                if can_get_content_view == YES {
+                    let mut content_view: ObjcId = msg_send![native_container, contentView];
+                    if content_view == nil {
+                        let set_content_view_sel = sel!(setContentView:);
+                        let can_set_content_view: BOOL =
+                            msg_send![native_container, respondsToSelector: set_content_view_sel];
+                        if can_set_content_view == YES {
+                            let content_bounds: NSRect = msg_send![native_container, bounds];
+                            let created_content_view: ObjcId = msg_send![class!(NSView), alloc];
+                            let created_content_view: ObjcId =
+                                msg_send![created_content_view, initWithFrame: content_bounds];
+                            if created_content_view != nil {
+                                let () = msg_send![
+                                    created_content_view,
+                                    setAutoresizingMask: Self::NS_VIEW_WIDTH_SIZABLE
+                                        | Self::NS_VIEW_HEIGHT_SIZABLE
+                                ];
+                                let () = msg_send![created_content_view, setWantsLayer: YES];
+                                let () = msg_send![native_container, setContentView: created_content_view];
+                                content_view = created_content_view;
+                                panel_parent_role = "container-created-contentView";
+                            }
+                        }
+                    }
+                    if content_view != nil {
+                        panel_parent = content_view;
+                        if panel_parent_role == "container" {
+                            panel_parent_role = "container-contentView";
+                        }
+                    }
+                }
+                crate::log!(
+                    "[liquid-glass] native-container-panel-parent container={:?} requested=contentView role={} class={}",
+                    container.id,
+                    panel_parent_role,
+                    Self::native_glass_objc_class_name(panel_parent)
+                );
+            }
+
             let mut panels: Vec<&NativeGlassPanelDescriptor> = container
                 .panels
                 .iter()
@@ -1655,7 +1718,7 @@ impl MacosWindow {
                     let () = msg_send![panel_view, setCornerRadius: corner_radius];
                 }
 
-                let () = msg_send![native_container, addSubview: panel_view];
+                let () = msg_send![panel_parent, addSubview: panel_view];
                 self.native_glass_panel_views.push(panel_view);
                 panel_results.push(NativeGlassPanelResult {
                     id: panel.id,
@@ -3080,6 +3143,21 @@ mod tests {
         );
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn native_glass_container_content_view_env_accepts_truthy_values() {
+        assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("1")));
+        assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("true")));
+        assert!(MacosWindow::native_glass_container_content_view_enabled_from_value(Some("on")));
+        assert!(
+            MacosWindow::native_glass_container_content_view_enabled_from_value(Some(
+                "content-view"
+            ))
+        );
+        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(None));
+        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(Some("")));
+        assert!(!MacosWindow::native_glass_container_content_view_enabled_from_value(Some("off")));
     }
 
     #[test]

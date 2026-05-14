@@ -25,6 +25,7 @@ Current AppleNativeInterleave targets:
 - [ ] `makepad-example-aichat-apple-native-interleave-experimental`
 - [ ] `makepad-example-aichat-apple-native-interleave-diagnostic-overlay`
 - [ ] `makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay`
+- [ ] `makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay`
 
 ## Startup Logs
 
@@ -136,12 +137,22 @@ Use the diagnostic overlay before changing production tuning:
 [liquid-glass] app-substrate=apple-native-interleave state=Installed
 ```
 
+- [ ] If the regular diagnostic still looks flat, run
+  `makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay`
+  and confirm startup logs include:
+
+```text
+[liquid-glass] native-container-panel-parent container=... requested=contentView role=container-created-contentView class=NSView
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
+[liquid-glass] app-substrate=apple-native-interleave state=Installed
+```
+
 - [ ] If diagnostic overlay shows visible grid/refraction/liquid distortion but
   `makepad-example-aichat-apple-native-interleave-experimental` looks flat,
   treat the next task as production visual tuning.
-- [ ] If both clear and regular diagnostic overlays look black, opaque,
-  edge-only, or like flat unprocessed lower-scene content, treat the next task
-  as a native/macOS composition visibility blocker.
+- [ ] If clear, regular, and contentView diagnostic overlays all look black,
+  opaque, edge-only, or like flat unprocessed lower-scene content, treat the
+  next task as a native/macOS composition visibility blocker.
 - [ ] Do not use Studio framebuffer screenshots alone for this decision; they
   omit the AppKit native glass layer and normally show only the transparent
   upper Makepad surface.
@@ -206,3 +217,18 @@ adds a style-only A/B check for the same diagnostic lower scene. It sets
 
 If the regular diagnostic still looks like a flat grid, continue with native
 AppKit/Metal composition investigation instead of production visual tuning.
+
+## AppleNativeInterleave ContentView Diagnostic Update 2026-05-15
+
+`makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay`
+tests whether native panel views need to be parented under
+`NSGlassEffectContainerView.contentView` instead of directly under the
+container. Studio build `[65]` reached State 4 and logged:
+
+```text
+[liquid-glass] native-container-panel-parent container=0000000000000010 requested=contentView role=container-created-contentView class=NSView
+[liquid-glass] state=4 substrate=macos-native style=regular style_raw=0
+```
+
+If this target still looks like flat diagnostic content, direct-vs-contentView
+parenting is not sufficient to restore visible Liquid Glass material.

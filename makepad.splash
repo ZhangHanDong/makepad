@@ -66,6 +66,7 @@ let RunAichatMacosGlass = RunItem{
     interleave_layer_probe: ""
     interleave_scene_profile: ""
     interleave_style: ""
+    native_container_content_view: ""
     native_control_probe: ""
     native_control_action_probe: ""
     native_control_accessibility_press_probe: ""
@@ -90,6 +91,7 @@ let RunAichatMacosGlass = RunItem{
                 "AICHAT_NATIVE_INTERLEAVE_LAYER_PROBE": self.interleave_layer_probe
                 "AICHAT_NATIVE_INTERLEAVE_SCENE_PROFILE": self.interleave_scene_profile
                 "AICHAT_NATIVE_INTERLEAVE_STYLE": self.interleave_style
+                "MAKEPAD_NATIVE_GLASS_USE_CONTAINER_CONTENT_VIEW": self.native_container_content_view
                 "AICHAT_NATIVE_CONTROL_PROBE": self.native_control_probe
                 "MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE": self.native_control_action_probe
                 "MAKEPAD_NATIVE_GLASS_CONTROL_ACCESSIBILITY_PRESS_PROBE": self.native_control_accessibility_press_probe
@@ -174,6 +176,7 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-experimental", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-diagnostic-overlay", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "diagnostic", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-regular-diagnostic-overlay", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "diagnostic", interleave_style: "regular", compositing_proof: "transparent-overlay"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "diagnostic", interleave_style: "regular", native_container_content_view: "content-view", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-spacing-probe", backend: "apple-native-interleave", spacing_probe: "animate", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-inactive-probe", backend: "apple-native-interleave", inactive_probe: "1", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}
     RunAichatMacosGlass{name: "makepad-example-aichat-apple-native-interleave-fullscreen-probe", backend: "apple-native-interleave", fullscreen_probe: "1", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay"}

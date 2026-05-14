@@ -554,6 +554,14 @@ behavior, or full native interior Liquid Glass.
   too visually subtle" from "the AppKit/Metal interleave composition is not
   producing visible native material." A manual system-composited verdict is
   still required before choosing production tuning versus composition redesign.
+- Step 194 adds a contentView-parenting diagnostic for
+  `NSGlassEffectContainerView`. Runtime selector inspection found public
+  `contentView` / `setContentView:` selectors even though local SDK headers are
+  only macOS 15.5. Build `[65]` runs
+  `makepad-example-aichat-apple-native-interleave-content-view-diagnostic-overlay`
+  and logs `role=container-created-contentView class=NSView` plus State 4 with
+  `style=regular style_raw=0`. This tests whether direct container parenting is
+  the reason the diagnostic can still look like flat lower-scene content.
 
 ## Next Gates
 
@@ -577,3 +585,7 @@ behavior, or full native interior Liquid Glass.
    visual fork: if regular visibly restores material, tune style/opacity; if it
    still looks like flat lower-scene content, investigate the native composition
    model instead of tuning shader-like foreground parameters.
+6. Use the contentView diagnostic overlay as the next macOS visual fork. If it
+   materially improves the native effect, evaluate contentView parenting for
+   production after input/geometry regression checks. If it does not, continue
+   AppKit/Metal composition model investigation.
