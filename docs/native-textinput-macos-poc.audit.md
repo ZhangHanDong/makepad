@@ -11,8 +11,8 @@ acceptance gate.
 | Stage | Deliverable | Evidence | Status |
 | --- | --- | --- | --- |
 | P0A | macOS `NativeTextInput` compile-oriented skeleton | `widgets/src/native_text_input.rs`, `platform/src/os/apple/apple_native_text_input.rs`, `platform/src/cx_api.rs`; `cargo check -p makepad-widgets` passed | Closed |
-| P0B | macOS runtime loop: AppKit callbacks, widget actions, `on_change`, focus/blur, selection, clipboard commands, cleanup, leak diagnostic path | Code exists in `widgets/src/native_text_input.rs`, `platform/src/os/apple/apple_native_text_input.rs`, `platform/src/action.rs`, `makepad.splash`; `tools/native_textinput_apple_static_check.sh` passed; native unit tests pass | Code/static complete, blocked on Studio runtime gate |
-| P1 | shared typed native host registry with `NativeTextInput` and `NativeLabel` | `MacosNativeHost`, `NativeHostKind`, `NativeHostProps`, `NativeHostCommand`, `NativeLabel`; `tools/native_textinput_host_queue_static_check.sh` passed; platform tests cover TextInput and Label typed mount ops | Code/static complete; runtime checklist retained |
+| P0B | macOS runtime loop: AppKit callbacks, widget actions, `on_change`, focus/blur, selection, clipboard commands, cleanup, leak diagnostic path | Code exists in `widgets/src/native_text_input.rs`, `platform/src/os/apple/apple_native_text_input.rs`, `platform/src/action.rs`, `makepad.splash`; `tools/native_textinput_apple_static_check.sh` passed; native unit tests pass; standalone diagnostic leak evidence records live count 3 -> 0 | Runtime partially accepted; changed-event/manual visual checklist retained |
+| P1 | shared typed native host registry with `NativeTextInput` and `NativeLabel` | `MacosNativeHost`, `NativeHostKind`, `NativeHostProps`, `NativeHostCommand`, `NativeLabel`; `tools/native_textinput_host_queue_static_check.sh` passed; platform tests cover TextInput and Label typed mount ops; user manually confirmed `Set Label` after UI fix | Code/static complete; visual checklist retained |
 | P1.5 | clipped host/content composition | `apple_native_host::clipped_native_host_layout`, `apple_native_host::order_native_host_view`, `apple_webview` clip tests, `NativeTextInput` / `NativeLabel` clipped host views; `tools/native_textinput_host_queue_static_check.sh` passed | Code/static complete; scroll/z-order runtime checklist retained |
 | P2 | iOS `UITextField` implementation | `apple_ios_native_text_input.rs`, iOS typed op handling; `tools/native_textinput_apple_static_check.sh` passed; `cargo check -p makepad-example-native-text-input --target aarch64-apple-ios` and `--release` passed | Compile/static complete, blocked on simulator/device runtime gate |
 | P3 | Android `EditText` implementation | `MakepadActivity.java`, `MakepadNative.java`, `android_jni.rs`, `android.rs`; `tools/native_textinput_android_static_check.sh` passed; `cargo check -p makepad-widgets --target aarch64-linux-android` passed | Compile/static complete, blocked on cargo-makepad/device runtime gate |
@@ -110,8 +110,11 @@ acceptance gate.
 
 ## Blocking Evidence
 
-- Studio bridge cannot connect in this sandbox:
-  `failed to connect to studio websocket at 127.0.0.1:8001/ui: connect failed: Operation not permitted (os error 1)`.
+- Studio bridge FIFO helpers can still hang in this Codex tool environment even
+  though the same Studio protocol works through a persistent TTY bridge. Keep
+  helper self-tests/static validation in the agent loop, and use
+  `docs/native-textinput-evidence/macos-manual-checklist.md` for any remaining
+  human visual checks.
 - Running `cargo test -p makepad-example-native-text-input --test ui
   -- --test-threads=1` in this sandbox fails before app startup because
   `makepad_test` cannot bind its local headless hub server
@@ -137,9 +140,10 @@ acceptance gate.
 
 ## Not Yet Accepted
 
-- macOS screenshot/click/type smoke test through Studio `RunItem`.
-- macOS leak counter or Instruments/leaks validation after repeated
-  `ClearBuild -> RunItem`.
+- macOS manual changed-event confirmation from real typing in the standalone
+  AppKit window.
+- macOS scroll/clipping/z-order visual confirmation for the clipped native host
+  panel.
 - iOS simulator/device input, IME, emoji, selection, and clipboard behavior.
 - Android cargo-makepad package/deploy, input, IME, emoji, selection, and
   clipboard behavior.
@@ -157,8 +161,8 @@ progress summary.
 
 | Requirement | Required evidence | Current evidence | Coverage judgment |
 | --- | --- | --- | --- |
-| P0B macOS runtime loop: visible native field, focus/blur, user input changed action, programmatic set_text no changed loop, selection, clipboard, cleanup | Studio `RunItem` screenshot/click/type evidence, native actions in widget state, leak counter or `leaks` evidence | `tools/native_textinput_apple_static_check.sh`, widget/platform unit tests, diagnostic RunItem wiring | Code/static covered; runtime not accepted |
-| P1 shared host registry: `NativeTextInput` and `NativeLabel` share typed host lifecycle | Static contract plus Studio run showing both components update through the shared registry | `tools/native_textinput_host_queue_static_check.sh`, `examples/native_text_input`, native tests | Code/static covered; Studio runtime not accepted |
+| P0B macOS runtime loop: visible native field, focus/blur, user input changed action, programmatic set_text no changed loop, selection, clipboard, cleanup | Studio `RunItem` screenshot/click/type evidence, native actions in widget state, leak counter or `leaks` evidence | `tools/native_textinput_apple_static_check.sh`, widget/platform unit tests, diagnostic RunItem wiring, `docs/native-textinput-evidence/macos-leak-runtime.md`, manual checklist | Code/static and leak covered; changed-event manual checklist retained |
+| P1 shared host registry: `NativeTextInput` and `NativeLabel` share typed host lifecycle | Static contract plus Studio run showing both components update through the shared registry | `tools/native_textinput_host_queue_static_check.sh`, `examples/native_text_input`, native tests, user manual `Set Label` validation | Code/static covered; visual checklist retained |
 | P1.5 clipped hybrid composition: host/content two-layer clipping, scroll/z-order behavior | Studio runtime scenario with clipped or scrolled native widgets and screenshots/widget dumps | `apple_native_host` tests, `apple_webview` clip tests, `tools/native_textinput_host_queue_static_check.sh` | Unit/static covered; scroll/z-order runtime not accepted |
 | P2 iOS `UITextField`: focus/keyboard/input/emoji/selection/clipboard | Simulator or device run of `makepad-example-native-text-input` | `tools/native_textinput_apple_static_check.sh`, iOS dev/release target checks | Compile/static covered; simulator/device not accepted |
 | P3 Android `EditText`: JNI bridge, IME/input/emoji/selection/clipboard | Android cargo-makepad package/deploy and device/emulator run | `tools/native_textinput_android_static_check.sh`, `cargo check -p makepad-widgets --target aarch64-linux-android` | Compile/static covered; package/device not accepted |
@@ -181,8 +185,9 @@ ui` or `makepad_test` as their command source.
 Runtime evidence is tracked under `docs/native-textinput-evidence/` and checked
 by `tools/native_textinput_completion_audit.sh`. The canonical app for those
 checks is the checked-in `examples/native_text_input` example, launched through
-Studio RunItem `makepad-example-native-text-input` or the diagnostic
-`makepad-example-native-text-input-diag` RunItem. Mobile/device runtime evidence
+Studio RunItem `makepad-example-native-text-input`,
+`makepad-example-native-text-input-macos-standalone`, or the diagnostic
+`makepad-example-native-text-input-macos-standalone-diag` RunItem. Mobile/device runtime evidence
 uses the same example through `makepad-example-native-text-input-ios-sim`,
 `makepad-example-native-text-input-android`, and
 `makepad-example-native-text-input-ohos`.

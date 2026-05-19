@@ -74,6 +74,14 @@ impl NativeLabel {
         }
         self.draw_bg.redraw(cx);
     }
+
+    fn close_native(&mut self, cx: &mut Cx) {
+        self.visible = false;
+        if self.spawned {
+            cx.native_label(self.native_id()).close();
+            self.spawned = false;
+        }
+    }
 }
 
 impl Widget for NativeLabel {
@@ -115,6 +123,12 @@ impl NativeLabelRef {
     pub fn set_text(&self, cx: &mut Cx, text: &str) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.set_text_internal(cx, text);
+        }
+    }
+
+    pub fn close(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.close_native(cx);
         }
     }
 }
@@ -164,6 +178,18 @@ mod tests {
 
         label.handle_event(&mut cx, &Event::Shutdown, &mut Scope::empty());
 
+        assert!(!label.spawned);
+    }
+
+    #[test]
+    fn close_native_hides_and_marks_native_label_closed() {
+        let mut cx = test_cx();
+        let mut label = test_label(&mut cx, WidgetUid(403));
+        label.spawned = true;
+
+        label.close_native(&mut cx);
+
+        assert!(!label.visible);
         assert!(!label.spawned);
     }
 }

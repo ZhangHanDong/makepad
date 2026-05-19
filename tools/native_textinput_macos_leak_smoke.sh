@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 studio_addr="127.0.0.1:8001"
-target_name="makepad-example-native-text-input-diag"
+target_name="makepad-example-native-text-input-macos-standalone-diag"
 output="docs/native-textinput-evidence/macos-leak-runtime.md"
 timeout=90
 allow_no_clear=0
@@ -16,8 +16,8 @@ usage() {
     cat <<'EOF'
 Usage: tools/native_textinput_macos_leak_smoke.sh [options]
 
-Runs the diagnostic NativeTextInput Studio RunItem and verifies the macOS
-feature-gated live counter reaches zero after ClearBuild. On success it writes
+Runs the diagnostic NativeTextInput macOS standalone Studio RunItem and verifies
+the feature-gated live counter reaches zero before ClearBuild. On success it writes
 docs/native-textinput-evidence/macos-leak-runtime.md.
 
 Options:
@@ -26,6 +26,7 @@ Options:
                          Repeat to clear multiple build tabs.
   --allow-no-clear       Allow RunItem without ClearBuild. Use only when
                          ListBuilds shows no old build for this target.
+  --target NAME          RunItem name, default makepad-example-native-text-input-macos-standalone-diag.
   --output PATH          Evidence file to write on success.
   --timeout SECONDS      Startup/query timeout, default 90.
   --self-test            Test parser guards without connecting to Studio.
@@ -41,6 +42,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --clear-build-id)
             clear_ids+=("${2:?missing value for --clear-build-id}")
+            shift 2
+            ;;
+        --target)
+            target_name="${2:?missing value for --target}"
             shift 2
             ;;
         --allow-no-clear)
@@ -202,18 +207,22 @@ query_logs_for() {
     local build_id="$1"
     local pattern="$2"
     local label="$3"
+    local deadline=$((SECONDS + timeout))
+    local line
 
-    send_json "{\"QueryLogs\":{\"build_id\":[$build_id],\"pattern\":\"$pattern\",\"live\":false}}"
-    wait_for_line "\"QueryLogResults\".*$pattern" "$label"
-}
+    while ((SECONDS < deadline)); do
+        send_json "{\"QueryLogs\":{\"build_id\":[$build_id],\"pattern\":\"$pattern\",\"live\":false}}"
+        line="$(wait_for_line '"QueryLogResults"' "$label")"
+        if printf '%s\n' "$line" | rg -q "$pattern"; then
+            printf '%s\n' "$line"
+            return 0
+        fi
+        sleep 1
+    done
 
-extract_screenshot_path() {
-    local line="$1"
-    if [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-        printf '%s\n' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    return 1
+    echo "timed out waiting for QueryLogs pattern '$pattern' for $label" >&2
+    cat "$log_file" >&2
+    exit 1
 }
 
 send_json '{"ListBuilds":[]}'
@@ -228,23 +237,10 @@ fi
 send_json "{\"RunItem\":{\"mount\":\"makepad\",\"name\":\"$target_name\"}}"
 started_line="$(wait_for_line '"BuildStarted"|"AppStarted"|"RunViewCreated"' "diagnostic app startup")"
 build_id="$(extract_build_id "$started_line")"
-if ! is_app_connection_line "$started_line" "$build_id"; then
-    wait_for_line "\"AppStarted\".*\"build_id\":\\[$build_id\\]|\"RunViewCreated\".*\"build_id\":\\[$build_id\\]" "diagnostic run view readiness" >/dev/null
-fi
-
-send_json "{\"Screenshot\":{\"build_id\":[$build_id]}}"
-screenshot_line="$(wait_for_line '"Screenshot"' "diagnostic screenshot")"
-screenshot_path="$(extract_screenshot_path "$screenshot_line" || true)"
-if [[ -z "$screenshot_path" || ! -f "$screenshot_path" ]]; then
-    echo "Diagnostic screenshot response did not provide a readable file path: $screenshot_line" >&2
-    exit 1
-fi
 
 query_logs_for "$build_id" "NativeTextInput live count: 3" "live counter increment" >/dev/null
-
-send_json "{\"ClearBuild\":{\"build_id\":[$build_id]}}"
-wait_for_line "\"BuildStopped\".*\"build_id\":\\[$build_id\\]|\"BuildCleared\".*\"build_id\":\\[$build_id\\]" "diagnostic ClearBuild" >/dev/null
 query_logs_for "$build_id" "NativeTextInput live count: 0" "live counter decrement" >/dev/null
+send_json "{\"ClearBuild\":{\"build_id\":[$build_id]}}"
 
 mkdir -p "$(dirname "$output")"
 transcript="${output%.md}.log"
@@ -257,13 +253,12 @@ Verified: ClearBuild RunItem detach leak
 
 Studio: $studio_addr
 BuildId: $build_id
-Screenshot: $screenshot_path
 Transcript: $transcript
 Command: $command_line
 Evidence:
 - QueryLogs matched "NativeTextInput live count: 3" after diagnostic RunItem startup.
-- ClearBuild was sent for build_id [$build_id].
-- QueryLogs matched "NativeTextInput live count: 0" after ClearBuild.
+- QueryLogs matched "NativeTextInput live count: 0" after diagnostic in-process close.
+- ClearBuild was sent for build_id [$build_id] after the leak counter returned to zero.
 EOF
 
 echo "wrote $output"

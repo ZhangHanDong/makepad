@@ -292,15 +292,26 @@ log_contains "$build_id" "NativeTextInput smoke: focus requested" "focus status"
 
 click_widget "$build_id" "native_input"
 click_widget "$build_id" "set_button"
-log_contains "$build_id" "NativeTextInput smoke: text set" "programmatic set_text"
+log_contains "$build_id" "NativeTextInput smoke: primary text set" "primary programmatic set_text"
+
+click_widget "$build_id" "secondary_set_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary text set" "secondary programmatic set_text"
 
 click_widget "$build_id" "select_button"
-log_contains "$build_id" "NativeTextInput smoke: select all requested" "selection status"
+log_contains "$build_id" "NativeTextInput smoke: primary select all requested" "primary selection status"
+
+click_widget "$build_id" "secondary_select_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary select all requested" "secondary selection status"
 
 click_widget "$build_id" "copy_button"
 click_widget "$build_id" "cut_button"
 click_widget "$build_id" "paste_button"
-log_contains "$build_id" "NativeTextInput smoke: paste requested" "clipboard controls"
+log_contains "$build_id" "NativeTextInput smoke: primary paste requested" "primary clipboard controls"
+
+click_widget "$build_id" "secondary_copy_button"
+click_widget "$build_id" "secondary_cut_button"
+click_widget "$build_id" "secondary_paste_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary paste requested" "secondary clipboard controls"
 
 click_widget "$build_id" "label_button"
 log_contains "$build_id" "NativeTextInput smoke: native label updated" "NativeLabel update"
@@ -327,7 +338,7 @@ cat >"$output" <<EOF
 Status: PASS
 RunItem: $target_name
 Example: examples/native_text_input
-Verified: focus blur set_text selection clipboard native_label shared_host clipped_widget
+Verified: primary secondary focus blur set_text selection clipboard native_label shared_host clipped_widget
 NeedsManualValidation: changed_event_from_native_typing
 
 Studio: $studio_addr
@@ -343,13 +354,21 @@ Smoke sequence:
 - QueryLogs focus requested
 - Click native_input
 - Click set_button
-- QueryLogs text set
+- QueryLogs primary text set
+- Click secondary_set_button
+- QueryLogs secondary text set
 - Click select_button
-- QueryLogs select all requested
+- QueryLogs primary select all requested
+- Click secondary_select_button
+- QueryLogs secondary select all requested
 - Click copy_button
 - Click cut_button
 - Click paste_button
-- QueryLogs paste requested
+- QueryLogs primary paste requested
+- Click secondary_copy_button
+- Click secondary_cut_button
+- Click secondary_paste_button
+- QueryLogs secondary paste requested
 - Click label_button
 - QueryLogs native label updated
 - Click set_both_button

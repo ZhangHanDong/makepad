@@ -10,8 +10,10 @@ historical context and follow:
 - `examples/native_text_input/` as the primary smoke example.
 - `examples/text_input/` and `widgets/src/text_input.rs` as the existing
   Makepad event/ref action reference.
-- `makepad.splash` RunItems `makepad-example-native-text-input` and
-  `makepad-example-native-text-input-diag` for Studio release validation.
+- `makepad.splash` RunItems `makepad-example-native-text-input`,
+  `makepad-example-native-text-input-macos-standalone`, and
+  `makepad-example-native-text-input-macos-standalone-diag` for Studio release
+  validation.
 
 ## Goal
 
@@ -154,7 +156,8 @@ Runtime gate through Studio:
   and `WidgetRef` patterns.
 - Launch with Studio `RunItem` `makepad-example-native-text-input`, not raw
   `cargo run`.
-- For leak diagnostics, launch `makepad-example-native-text-input-diag`.
+- For real macOS AppKit leak diagnostics, launch
+  `makepad-example-native-text-input-macos-standalone-diag`.
 - Verify field visibility, focus, blur, typing, changed action, selection
   action, select all, copy, cut, paste, detach, and close behavior.
 

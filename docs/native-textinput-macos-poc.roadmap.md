@@ -115,8 +115,14 @@ pub enum NativeTextInputAction {
 - 通过 Studio bridge：`ClearBuild` 旧 build → `RunItem` 新 build → `WidgetTreeDump` / `Screenshot` / `Click` / `TypeText` 验证。
 - Studio bridge 启动：`target/release/cargo-makepad studio --studio=127.0.0.1:8001`（AGENTS.md:25）。
 
-**当前阻塞**：在当前 Codex sandbox 内启动 Studio bridge 会失败：
-`failed to connect to studio websocket at 127.0.0.1:8001/ui: connect failed: Operation not permitted (os error 1)`。因此目前只能完成非 UI 编译/单测验证；NSTextField 可见性、真实点击输入、截图、hot-reload 后 native view 不残留仍需在可连接 Studio 的本机环境走 RunItem 验证。
+**当前实现进度**：Studio release RunItem 已能在本机 macOS 路径启动
+`makepad-example-native-text-input-macos-standalone`。用户已手工确认主/副
+native input 的按钮链路、`Set Both`、`Set Label` 和基础交互修复后正常。
+`makepad-example-native-text-input-macos-standalone-diag` 的诊断运行记录到
+`docs/native-textinput-evidence/macos-leak-runtime.md`，`NativeTextInput`
+live counter 从 3 回到 0 后退出。仍需按
+`docs/native-textinput-evidence/macos-manual-checklist.md` 完成人工视觉/输入
+checklist，尤其是 changed event、滚动裁剪和 z-order。
 
 ### P0B 验收标准
 
@@ -130,7 +136,7 @@ pub enum NativeTextInputAction {
 - 文本选区变化触发 `NativeTextInputAction::SelectionChanged { start, end }`；macOS 侧通过 `NSTextField.currentEditor.selectedRange` / `textViewDidChangeSelection:` 回投，移动端通过各平台原生选区回调回投。
 - hide / close / Splash hot-reload 不残留 native view。
 - **泄漏验证方法（两选一，任一通过即可）**：
-  - **A（首选，可在 Studio release 跑）**：在 `MacosNativeTextInput::new` / `Drop` 各放一个 `static AtomicI32`，用 `cfg(feature = "diag-native-leak-count")` feature gate（不限 debug/release）。由于 Studio `RunItem` JSON 不能临时追加 cargo flags，需要在 `makepad.splash` 增加一个专用 diagnostic runnable（例如 `makepad-example-native-text-input-diag`），其 `on_run` cargo args 固定带上 `--features makepad-widgets/diag-native-leak-count`。用这个 runnable 通过 Studio bridge 跑 release，Splash re-eval 5 次后 assert 净增量 = 0。
+  - **A（首选，可在 Studio release 跑）**：在 `MacosNativeTextInput::new` / `Drop` 各放一个 `static AtomicI32`，用 `cfg(feature = "diag-native-leak-count")` feature gate（不限 debug/release）。由于 Studio `RunItem` JSON 不能临时追加 cargo flags，需要在 `makepad.splash` 增加一个专用 diagnostic runnable（当前为 `makepad-example-native-text-input-macos-standalone-diag`），其 `on_run` cargo args 固定带上 `--features diag-native-leak-count`。用这个 runnable 通过 Studio bridge 跑 release，assert 关闭后计数回到 0。
   - **B（fallback，非 UI）**：对 release Studio 进程跑 `leaks <pid>` 或 Instruments Leaks，确认 `NSTextField` 实例数与活跃 widget 数一致。
 
 ---
@@ -237,7 +243,7 @@ RunItem，使用仓库内 `examples/native_text_input` 通过
 
 先把 P0B 做实，再抽 P1。**不要**在 events / lifecycle / retain-release 没闭环前做 codegen 或跨平台扩展。
 
-example 参考源以仓库内真实例子为准：`examples/native_text_input` 是本 POC 的主 smoke example；事件语义参考 `examples/text_input` / `widgets/src/text_input.rs`；Studio runnable 入口参考 `makepad.splash` 中已有 `RunStudioRelease` / diagnostic RunItem。
+example 参考源以仓库内真实例子为准：`examples/native_text_input` 是本 POC 的主 smoke example；事件语义参考 `examples/text_input` / `widgets/src/text_input.rs`；Studio runnable 入口参考 `makepad.splash` 中已有 `RunStudioRelease` / standalone diagnostic RunItem。
 
 具体对齐到这些仓库 example：
 
@@ -248,7 +254,9 @@ example 参考源以仓库内真实例子为准：`examples/native_text_input` �
 - `examples/splash` 与根 `makepad.splash`：只参考 RunItem / Studio release 路径，不用 raw `cargo run` 验 UI。
 
 完成度判断同样以这个 example 为准：运行时验收必须通过
-`makepad-example-native-text-input` / `makepad-example-native-text-input-diag`
+`makepad-example-native-text-input` /
+`makepad-example-native-text-input-macos-standalone` /
+`makepad-example-native-text-input-macos-standalone-diag`
 收集 evidence，并让 `tools/native_textinput_completion_audit.sh` 通过。
 该 audit 脚本默认只检查真实 runtime/device evidence marker，不把
 `cargo check`、static grep 或 unit test 当成 UI/device 验收。
@@ -388,7 +396,9 @@ P1 完成后：
 
 ### macOS Studio gate（P0B / P1 / P1.5）
 
-- 使用 `makepad-example-native-text-input` RunItem，必要时用 `makepad-example-native-text-input-diag` 跑 leak counter。
+- 使用 `makepad-example-native-text-input` 或
+  `makepad-example-native-text-input-macos-standalone` RunItem，必要时用
+  `makepad-example-native-text-input-macos-standalone-diag` 跑 leak counter。
 - P0B 使用 `native_input` 做非滚动主 smoke，确认事件、focus、selection、clipboard 与 lifecycle 闭环。
 - P1.5 使用同一 example 里的 `clipped_native_input` 做滚动/裁剪场景，确认 native view 不越界、不遮挡、不乱序。
 - 验证 lifecycle：连续 `ClearBuild -> RunItem` 至少 5 次，或用 Splash re-eval 替换 View，确认旧 native views 关闭且 leak counter 回到活跃 widget 数。

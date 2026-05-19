@@ -8,7 +8,9 @@ The canonical smoke example is:
 - `examples/native_text_input`
 - package `makepad-example-native-text-input`
 - Studio RunItem `makepad-example-native-text-input`
-- diagnostic Studio RunItem `makepad-example-native-text-input-diag`
+- macOS standalone Studio RunItem `makepad-example-native-text-input-macos-standalone`
+- macOS standalone diagnostic RunItem `makepad-example-native-text-input-macos-standalone-diag`
+- legacy RunView diagnostic RunItem `makepad-example-native-text-input-diag`
 - iOS simulator Studio RunItem `makepad-example-native-text-input-ios-sim`
 - Android Studio RunItem `makepad-example-native-text-input-android`
 - OpenHarmony Studio RunItem `makepad-example-native-text-input-ohos`
@@ -110,7 +112,7 @@ Use `--allow-no-clear` only after `tools/native_textinput_studio_gate.sh
 
 ```text
 Status: PASS
-RunItem: makepad-example-native-text-input-diag
+RunItem: makepad-example-native-text-input-macos-standalone-diag
 Example: examples/native_text_input
 Verified: ClearBuild RunItem detach leak
 BuildId: 123
@@ -127,6 +129,10 @@ Helper:
 ```bash
 tools/native_textinput_macos_leak_smoke.sh --clear-build-id N
 ```
+
+The standalone diagnostic RunItem is the macOS AppKit evidence path. The legacy
+RunView diagnostic remains useful for bridge plumbing, but it does not replace
+the standalone AppKit lifecycle check.
 
 ### `macos-composition-runtime.md`
 

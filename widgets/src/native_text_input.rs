@@ -109,6 +109,14 @@ impl NativeTextInput {
         self.draw_bg.redraw(cx);
     }
 
+    fn close_native(&mut self, cx: &mut Cx) {
+        self.visible = false;
+        if self.spawned {
+            cx.native_text_input(self.native_id()).close();
+            self.spawned = false;
+        }
+    }
+
     fn emit_change(&mut self, cx: &mut Cx, uid: WidgetUid, text: String) {
         self.text.as_mut_empty().push_str(&text);
         self.last_text.clear();
@@ -377,6 +385,12 @@ impl NativeTextInputRef {
             inner.set_text_internal(cx, text);
         }
     }
+
+    pub fn close(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.close_native(cx);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -545,9 +559,21 @@ mod tests {
     }
 
     #[test]
-    fn widget_ref_reads_native_text_input_text() {
+    fn close_native_hides_and_marks_native_text_input_closed() {
         let mut cx = test_cx();
         let mut input = test_input(&mut cx, WidgetUid(307));
+        input.spawned = true;
+
+        input.close_native(&mut cx);
+
+        assert!(!input.visible);
+        assert!(!input.spawned);
+    }
+
+    #[test]
+    fn widget_ref_reads_native_text_input_text() {
+        let mut cx = test_cx();
+        let mut input = test_input(&mut cx, WidgetUid(308));
         input.set_text(&mut cx, "readable");
         let input_ref = WidgetRef::new_with_inner(Box::new(input));
 

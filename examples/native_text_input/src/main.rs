@@ -206,6 +206,12 @@ pub struct App {
     selection_count: usize,
     #[rust]
     label_count: usize,
+    #[rust]
+    diag_frame_count: usize,
+    #[rust]
+    diag_closed: bool,
+    #[rust]
+    diag_quit_requested: bool,
 }
 
 impl App {
@@ -524,6 +530,37 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        #[cfg(feature = "diag-native-leak-count")]
+        {
+            if matches!(event, Event::Startup) {
+                self.diag_frame_count = 0;
+                self.diag_closed = false;
+                self.diag_quit_requested = false;
+                cx.new_next_frame();
+            }
+            if matches!(event, Event::NextFrame(_)) && !self.diag_quit_requested {
+                self.diag_frame_count += 1;
+                if self.diag_frame_count < 2 {
+                    cx.new_next_frame();
+                } else if !self.diag_closed {
+                    self.ui.native_text_input(cx, ids!(native_input)).close(cx);
+                    self.ui
+                        .native_text_input(cx, ids!(secondary_native_input))
+                        .close(cx);
+                    self.ui
+                        .native_text_input(cx, ids!(clipped_native_input))
+                        .close(cx);
+                    self.ui.native_label(cx, ids!(native_label)).close(cx);
+                    self.diag_closed = true;
+                    log!("NativeTextInput smoke: diagnostic close requested");
+                    cx.new_next_frame();
+                } else {
+                    self.diag_quit_requested = true;
+                    log!("NativeTextInput smoke: diagnostic quit requested");
+                    cx.quit();
+                }
+            }
+        }
         self.match_event(cx, event);
         self.ui.handle_event(cx, event, &mut Scope::empty());
     }

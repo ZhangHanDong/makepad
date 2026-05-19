@@ -24,7 +24,8 @@ require_pattern() {
 
 require_pattern "$widgets_toml" "diag-native-leak-count = \\[\"makepad-draw/diag-native-leak-count\"\\]" "widgets diagnostic feature"
 require_pattern "$splash_file" "RunStudioNativeTextInputDiag\\{name: \"makepad-example-native-text-input-diag\"\\}" "diagnostic RunItem"
-require_pattern "$splash_file" "--features\" \"makepad-widgets/diag-native-leak-count\"" "diagnostic feature flag"
+require_pattern "$splash_file" "RunNativeTextInputStandaloneDiag\\{name: \"makepad-example-native-text-input-macos-standalone-diag\"\\}" "standalone diagnostic RunItem"
+require_pattern "$splash_file" "--features\" \"diag-native-leak-count\"" "diagnostic feature flag"
 
 require_pattern "$macos_input" "ClassDecl::new\\(\"MakepadNativeTextInputDelegate\"" "macOS delegate class"
 require_pattern "$macos_input" "sel!\\(controlTextDidChange:\\)" "macOS changed selector"

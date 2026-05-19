@@ -120,6 +120,20 @@ let RunNativeTextInputStandalone = RunItem{
     }
 }
 
+let RunNativeTextInputStandaloneDiag = RunItem{
+    run: "makepad-example-native-text-input"
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_local_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.run "RUST_BACKTRACE": "1"},
+            "cargo",
+            [
+                "run" "-p" self.run "--release" "--features" "diag-native-leak-count"
+                "--message-format=json" "--" "--message-format=json"
+            ],
+        )
+    }
+}
+
 
 let RunStudio = RunItem{
     on_run: fn(id){
@@ -156,6 +170,7 @@ hub.set_run_items([
     RunStudioRelease{name: "makepad-example-todo"}
     RunStudioRelease{name: "makepad-example-native-text-input"}
     RunNativeTextInputStandalone{name: "makepad-example-native-text-input-macos-standalone"}
+    RunNativeTextInputStandaloneDiag{name: "makepad-example-native-text-input-macos-standalone-diag"}
     RunStudioNativeTextInputDiag{name: "makepad-example-native-text-input-diag"}
     RunIosSimPackage{name: "makepad-example-native-text-input-ios-sim", package_name: "makepad-example-native-text-input"}
     RunAndroidPackage{name: "makepad-example-native-text-input-android", package_name: "makepad-example-native-text-input"}
