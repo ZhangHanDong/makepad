@@ -33,6 +33,48 @@ let RunAndroid = RunItem{
     }
 }
 
+let RunAndroidPackage = RunItem{
+    package_name: ""
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_ext_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name "MAKEPAD": "vulkan"},
+            "cargo",
+            [
+                "run" "-p" "cargo-makepad" "--release" "--message-format=json" "--"
+                "android" "--no-icon" "--small-fonts" "run" "-p" self.package_name "--release" "--message-format=json"
+            ],
+        )
+    }
+}
+
+let RunIosSimPackage = RunItem{
+    package_name: ""
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_local_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name},
+            "cargo",
+            [
+                "run" "-p" "cargo-makepad" "--release" "--message-format=json" "--"
+                "apple" "ios" "run-sim" "-p" self.package_name "--release" "--message-format=json"
+            ],
+        )
+    }
+}
+
+let RunOhosPackage = RunItem{
+    package_name: ""
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_ext_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name "MAKEPAD": "ohos"},
+            "cargo",
+            [
+                "run" "-p" "cargo-makepad" "--release" "--message-format=json" "--"
+                "ohos" "run" "-p" self.package_name "--release" "--message-format=json"
+            ],
+        )
+    }
+}
+
 let RunStudioRelease = RunItem{
     on_run: fn(id){
         hub.run(
@@ -43,11 +85,36 @@ let RunStudioRelease = RunItem{
     }
 }
 
+let RunStudioNativeTextInputDiag = RunItem{
+    package_name: "makepad-example-native-text-input"
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_local_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name},
+            "cargo",
+            [
+                "run" "-p" self.package_name "--release" "--features" "diag-native-leak-count"
+                "--message-format=json" "--" "--message-format=json" "--stdin-loop"
+            ],
+        )
+    }
+}
+
 let RunRelease = RunItem{
     on_run: fn(id){
         hub.run(
             {"STUDIO_HOST": hub.studio_local_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.run},
             "cargo", 
+            ["run" "-p" self.run "--release" "--message-format=json" "--" "--message-format=json"],
+        )
+    }
+}
+
+let RunNativeTextInputStandalone = RunItem{
+    run: "makepad-example-native-text-input"
+    on_run: fn(id){
+        hub.run(
+            {"STUDIO_HOST": hub.studio_local_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.run "RUST_BACKTRACE": "1"},
+            "cargo",
             ["run" "-p" self.run "--release" "--message-format=json" "--" "--message-format=json"],
         )
     }
@@ -87,6 +154,12 @@ hub.set_run_items([
     RunAndroid{name: "makepad-example-pdf"}
     RunStudioRelease{name: "makepad-example-map"}
     RunStudioRelease{name: "makepad-example-todo"}
+    RunStudioRelease{name: "makepad-example-native-text-input"}
+    RunNativeTextInputStandalone{name: "makepad-example-native-text-input-macos-standalone"}
+    RunStudioNativeTextInputDiag{name: "makepad-example-native-text-input-diag"}
+    RunIosSimPackage{name: "makepad-example-native-text-input-ios-sim", package_name: "makepad-example-native-text-input"}
+    RunAndroidPackage{name: "makepad-example-native-text-input-android", package_name: "makepad-example-native-text-input"}
+    RunOhosPackage{name: "makepad-example-native-text-input-ohos", package_name: "makepad-example-native-text-input"}
     RunStudio{name: "makepad-studio"} 
     RunStudioExt{name: "makepad-studio-ext"} 
     RunStudioRelease{name: "makepad-example-xr"}

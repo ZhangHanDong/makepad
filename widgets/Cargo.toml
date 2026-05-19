@@ -29,6 +29,7 @@ serde = { version = "1.0", optional = true, features = ["derive"] }
 
 [features]
 default = []
+diag-native-leak-count = ["makepad-draw/diag-native-leak-count"]
 
 voice = ["dep:makepad-voice"]
 maps = ["dep:makepad-mbtile-reader", "dep:makepad-fast-inflate"]

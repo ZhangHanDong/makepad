@@ -12,8 +12,42 @@ export interface MakepadXComponentInterface{
   handleInsertTextEvent(text:String):void;
   handleDeleteLeftEvent(length: number):void;
   handleKeyboardStatus(isOpen:boolean, keyboardHeight:number):void;
+  handleNativeTextInputChanged(inputId: string, text: string): void;
+  handleNativeTextInputFocusChanged(inputId: string, hasFocus: boolean): void;
+  handleNativeTextInputSelectionChanged(inputId: string, start: number, end: number): void;
 }
 
+export interface NativeTextInputHost {
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean): void;
+  updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void;
+  detachNativeTextInput(inputId: string): void;
+  setNativeTextInputText(inputId: string, text: string, programmatic: boolean): void;
+  setNativeTextInputPlaceholder(inputId: string, placeholder: string): void;
+  setNativeTextInputEditable(inputId: string, editable: boolean): void;
+  focusNativeTextInput(inputId: string): void;
+  blurNativeTextInput(inputId: string): void;
+  selectAllNativeTextInput(inputId: string): void;
+  copyNativeTextInput(inputId: string): void;
+  cutNativeTextInput(inputId: string): void;
+  pasteNativeTextInput(inputId: string): void;
+  closeNativeTextInput(inputId: string): void;
+}
+
+export interface NativeTextInputState {
+  inputId: string;
+  text: string;
+  placeholder: string;
+  editable: boolean;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  visible: boolean;
+  programmatic: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  controller: TextInputController;
+}
 
 function getDensity(): number {
   try {
@@ -61,6 +95,7 @@ export class ArkGlue{
 
   keyboardHeight : number = 1020;
   xComponentContext : MakepadXComponentInterface | undefined = undefined;
+  nativeTextInputHost : NativeTextInputHost | undefined = undefined;
 
   private inputMethodController : inputMethod.InputMethodController;
   private textConfig: inputMethod.TextConfig;
@@ -87,6 +122,58 @@ export class ArkGlue{
 
   hideKeyBoard(): void {
     this.hideTextInput();
+  }
+
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean): void {
+    this.nativeTextInputHost?.createNativeTextInput(inputId, text, placeholder, editable);
+  }
+
+  updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
+    this.nativeTextInputHost?.updateNativeTextInput(inputId, left, top, width, height, visible);
+  }
+
+  detachNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.detachNativeTextInput(inputId);
+  }
+
+  setNativeTextInputText(inputId: string, text: string, programmatic: boolean): void {
+    this.nativeTextInputHost?.setNativeTextInputText(inputId, text, programmatic);
+  }
+
+  setNativeTextInputPlaceholder(inputId: string, placeholder: string): void {
+    this.nativeTextInputHost?.setNativeTextInputPlaceholder(inputId, placeholder);
+  }
+
+  setNativeTextInputEditable(inputId: string, editable: boolean): void {
+    this.nativeTextInputHost?.setNativeTextInputEditable(inputId, editable);
+  }
+
+  focusNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.focusNativeTextInput(inputId);
+  }
+
+  blurNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.blurNativeTextInput(inputId);
+  }
+
+  selectAllNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.selectAllNativeTextInput(inputId);
+  }
+
+  copyNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.copyNativeTextInput(inputId);
+  }
+
+  cutNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.cutNativeTextInput(inputId);
+  }
+
+  pasteNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.pasteNativeTextInput(inputId);
+  }
+
+  closeNativeTextInput(inputId: string): void {
+    this.nativeTextInputHost?.closeNativeTextInput(inputId);
   }
 
   private async showTextInput(): Promise<void> {

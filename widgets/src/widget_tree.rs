@@ -5,6 +5,7 @@ use {
     crate::drop_down::DropDown,
     crate::makepad_draw::{cx_2d::Cx2d, cx_3d::Cx3d, *},
     crate::makepad_platform::studio::WidgetSnapshot,
+    crate::native_text_input::NativeTextInput,
     crate::radio_button::RadioButton,
     crate::text_input::TextInput,
     crate::widget::{WidgetRef, WidgetRegistry, WidgetUid, WidgetWeakRef},
@@ -1961,7 +1962,8 @@ impl WidgetTree {
             let dropdown_selected = widget
                 .borrow::<DropDown>()
                 .map(|drop_down| drop_down.selected_item_label());
-            let is_text_input = widget.borrow::<TextInput>().is_some();
+            let is_text_input = widget.borrow::<TextInput>().is_some()
+                || widget.borrow::<NativeTextInput>().is_some();
 
             let mut text = None;
             let mut value = None;

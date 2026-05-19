@@ -74,4 +74,9 @@ public class MakepadNative {
     public static native void onH264EncoderError(long encoderId, String error);
     public static native void onCameraPreviewSurfaceReady(long videoId, Surface surface, int width, int height);
     public static native void onCameraPreviewSurfaceDestroyed(long videoId);
+
+    // native host widgets
+    public static native void onNativeTextInputChanged(long inputId, String text);
+    public static native void onNativeTextInputFocusChanged(long inputId, boolean hasFocus);
+    public static native void onNativeTextInputSelectionChanged(long inputId, int start, int end);
 }

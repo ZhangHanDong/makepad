@@ -17,7 +17,15 @@ mod apple_resources;
 
 pub mod apple_classes;
 pub mod apple_game_input;
+#[cfg(target_os = "ios")]
+pub mod apple_ios_native_text_input;
 pub mod apple_media;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod apple_native_host;
+#[cfg(target_os = "macos")]
+pub mod apple_native_label;
+#[cfg(target_os = "macos")]
+pub mod apple_native_text_input;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_video_playback;
 #[cfg(any(target_os = "macos", target_os = "ios"))]

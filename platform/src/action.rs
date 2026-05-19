@@ -1,5 +1,8 @@
-use crate::cx::Cx;
 use crate::thread::SignalToUI;
+use crate::{
+    cx::Cx,
+    cx_api::{CxOsOp, NativeLabelCloseRequested, NativeTextInputCloseRequested},
+};
 use std::any::TypeId;
 use std::fmt;
 use std::fmt::Debug;
@@ -104,9 +107,23 @@ impl<T: ActionTrait + ActionDefaultRef> ActionCastRef<T>
 impl Cx {
     pub fn handle_action_receiver(&mut self) {
         while let Ok(action) = self.action_receiver.try_recv() {
-            self.new_actions.push(action);
+            self.handle_received_action(action);
         }
         self.handle_actions();
+    }
+
+    fn handle_received_action(&mut self, action: ActionSend) {
+        let action_ref = action.as_ref() as &dyn ActionTrait;
+        if let Some(close) = action_ref.downcast_ref::<NativeTextInputCloseRequested>() {
+            self.platform_ops.push(CxOsOp::CloseNativeView {
+                id: close.text_input_id,
+            });
+        } else if let Some(close) = action_ref.downcast_ref::<NativeLabelCloseRequested>() {
+            self.platform_ops
+                .push(CxOsOp::CloseNativeView { id: close.label_id });
+        } else {
+            self.new_actions.push(action);
+        }
     }
 
     /// Enqueues an action from a background thread context.
@@ -122,6 +139,20 @@ impl Cx {
             .send(Box::new(action))
             .unwrap();
         SignalToUI::set_action_signal();
+    }
+
+    pub fn try_post_action(action: impl ActionTrait + Send) -> bool {
+        let Ok(mut sender) = ACTION_SENDER_GLOBAL.lock() else {
+            return false;
+        };
+        let Some(sender) = sender.as_mut() else {
+            return false;
+        };
+        if sender.send(Box::new(action)).is_err() {
+            return false;
+        }
+        SignalToUI::set_action_signal();
+        true
     }
 
     pub fn action(&mut self, action: impl ActionTrait) {
@@ -185,5 +216,43 @@ impl Cx {
         f(self);
         std::mem::swap(&mut self.new_actions, &mut actions);
         actions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{event::Event, makepad_live_id::LiveId};
+
+    fn test_cx() -> Cx {
+        Cx::new(Box::new(|_cx: &mut Cx, _event: &Event| {}))
+    }
+
+    #[test]
+    fn native_text_input_close_request_becomes_platform_close_op() {
+        let mut cx = test_cx();
+        let text_input_id = LiveId(101);
+
+        cx.handle_received_action(Box::new(NativeTextInputCloseRequested::new(text_input_id)));
+
+        assert_eq!(cx.new_actions.len(), 0);
+        assert!(matches!(
+            cx.platform_ops.as_slice(),
+            [CxOsOp::CloseNativeView { id }] if *id == text_input_id
+        ));
+    }
+
+    #[test]
+    fn native_label_close_request_becomes_platform_close_op() {
+        let mut cx = test_cx();
+        let label_id = LiveId(202);
+
+        cx.handle_received_action(Box::new(NativeLabelCloseRequested::new(label_id)));
+
+        assert_eq!(cx.new_actions.len(), 0);
+        assert!(matches!(
+            cx.platform_ops.as_slice(),
+            [CxOsOp::CloseNativeView { id }] if *id == label_id
+        ));
     }
 }

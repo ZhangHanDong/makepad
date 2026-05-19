@@ -567,6 +567,7 @@ impl Cx {
         windows: &mut Vec<HeadlessWindowState>,
         send_protocol: bool,
     ) -> bool {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {

@@ -1,7 +1,10 @@
 use {
     crate::{
         cx::{Cx, IosParams, OsType},
-        cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
+        cx_api::{
+            CxOsApi, CxOsOp, NativeHostCommand, NativeHostKind, NativeHostPropUpdate,
+            NativeHostProps, NativeTextInputCommand, OpenUrlInPlace,
+        },
         draw_pass::CxDrawPassParent,
         event::{
             drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
@@ -19,6 +22,8 @@ use {
         media_plugin::PlaybackPrepared,
         os::{
             apple::{
+                apple_ios_native_text_input::IosNativeTextInput,
+                apple_native_host::IosNativeHost,
                 apple_sys::*,
                 apple_video_player::AppleUnifiedVideoPlayer,
                 apple_webview::IosSystemBrowser,
@@ -905,6 +910,7 @@ impl Cx {
     }
 
     fn handle_platform_ops(&mut self, metal_cx: &MetalCx) {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
@@ -1084,6 +1090,91 @@ impl Cx {
                 CxOsOp::CloseSystemBrowser { browser_id } => {
                     if let Some(mut browser) = self.os.system_browsers.remove(&browser_id) {
                         browser.cleanup();
+                    }
+                }
+                CxOsOp::CreateNativeView { id, kind, props } => {
+                    if let (
+                        NativeHostKind::TextInput,
+                        NativeHostProps::TextInput {
+                            text,
+                            placeholder,
+                            editable,
+                        },
+                    ) = (kind, props)
+                    {
+                        self.os.native_hosts.entry(id).or_insert_with(|| {
+                            Box::new(IosNativeTextInput::new(id, &text, &placeholder, editable))
+                        });
+                    }
+                }
+                CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
+                    let rect = area.clipped_rect(self);
+                    let mtk_view = with_ios_app(|app| app.mtk_view);
+                    if let Some(mtk_view) = mtk_view {
+                        let host_view: ObjcId = unsafe { msg_send![mtk_view, superview] };
+                        if host_view != nil {
+                            if let Some(host) = self.os.native_hosts.get_mut(&id) {
+                                host.update_layout(host_view, rect, visible);
+                            }
+                        }
+                    }
+                }
+                CxOsOp::UpdateNativeViewProps { id, update } => match update {
+                    NativeHostPropUpdate::TextInputText { text, programmatic } => {
+                        if let Some(input) =
+                            self.os.native_hosts.get_mut(&id).and_then(|host| {
+                                host.as_any_mut().downcast_mut::<IosNativeTextInput>()
+                            })
+                        {
+                            input.set_text(&text, programmatic);
+                        }
+                    }
+                    NativeHostPropUpdate::TextInputPlaceholder { placeholder } => {
+                        if let Some(input) =
+                            self.os.native_hosts.get_mut(&id).and_then(|host| {
+                                host.as_any_mut().downcast_mut::<IosNativeTextInput>()
+                            })
+                        {
+                            input.set_placeholder(&placeholder);
+                        }
+                    }
+                    NativeHostPropUpdate::TextInputEditable { editable } => {
+                        if let Some(input) =
+                            self.os.native_hosts.get_mut(&id).and_then(|host| {
+                                host.as_any_mut().downcast_mut::<IosNativeTextInput>()
+                            })
+                        {
+                            input.set_editable(editable);
+                        }
+                    }
+                    NativeHostPropUpdate::LabelText { .. } => {}
+                },
+                CxOsOp::CommandNativeView { id, command } => match command {
+                    NativeHostCommand::TextInput(command) => {
+                        if let Some(input) =
+                            self.os.native_hosts.get_mut(&id).and_then(|host| {
+                                host.as_any_mut().downcast_mut::<IosNativeTextInput>()
+                            })
+                        {
+                            match command {
+                                NativeTextInputCommand::Focus => input.focus(),
+                                NativeTextInputCommand::Blur => input.blur(),
+                                NativeTextInputCommand::SelectAll => input.select_all(),
+                                NativeTextInputCommand::Copy => input.copy(),
+                                NativeTextInputCommand::Cut => input.cut(),
+                                NativeTextInputCommand::Paste => input.paste(),
+                            }
+                        }
+                    }
+                },
+                CxOsOp::DetachNativeView { id } => {
+                    if let Some(host) = self.os.native_hosts.get_mut(&id) {
+                        host.detach();
+                    }
+                }
+                CxOsOp::CloseNativeView { id } => {
+                    if let Some(mut host) = self.os.native_hosts.remove(&id) {
+                        host.cleanup();
                     }
                 }
                 CxOsOp::PrepareVideoPlayback(
@@ -1623,6 +1714,7 @@ pub struct CxOs {
     pub(crate) camera_players: HashMap<LiveId, IosCameraPlayer>,
     pub(crate) native_camera_previews: HashMap<LiveId, IosNativeCameraPreview>,
     pub(crate) system_browsers: HashMap<LiveId, IosSystemBrowser>,
+    pub(crate) native_hosts: HashMap<LiveId, Box<dyn IosNativeHost>>,
     pub(crate) internal_drag_items: Option<Arc<Vec<DragItem>>>,
 }
 

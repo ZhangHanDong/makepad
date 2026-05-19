@@ -5,11 +5,15 @@ use {
     },
     crate::{
         cx::{Cx, OpenHarmonyParams, OsType},
-        cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
+        cx_api::{
+            CxOsApi, CxOsOp, NativeHostCommand, NativeHostKind, NativeHostPropUpdate,
+            NativeHostProps, NativeTextInputCommand, OpenUrlInPlace,
+        },
         draw_pass::{CxDrawPassParent, DrawPassClearColor, DrawPassClearDepth, DrawPassId},
         egl_sys::{self, LibEgl, EGL_NONE},
         event::{Event, KeyCode, KeyEvent, TouchUpdateEvent, VirtualKeyboardEvent, WindowGeom},
         gpu_info::GpuPerformance,
+        makepad_live_id::LiveId,
         makepad_math::*,
         os::cx_native::EventFlow,
         shared_framebuf::{PollTimer, PollTimers},
@@ -19,7 +23,14 @@ use {
     },
     napi_derive_ohos::napi,
     napi_ohos::{sys::*, Env, JsObject, NapiRaw},
-    std::{ffi::CString, os::raw::c_void, ptr::null_mut, rc::Rc, sync::mpsc, time::Instant},
+    std::{
+        ffi::CString,
+        os::raw::{c_char, c_void},
+        ptr::null_mut,
+        rc::Rc,
+        sync::mpsc,
+        time::Instant,
+    },
 };
 
 #[napi(js_name = "onCreate")]
@@ -46,7 +57,15 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
 
     let raw_file = RawFileMgr::new(raw_env, res_mgr);
 
-    crate::log!("call onCreate, device_type = {}, os_full_name = {}, display_density = {}, files_dir = {}, cache_dir = {}, temp_dir = {}", device_type, os_full_name, display_density, files_dir,cache_dir,temp_dir);
+    crate::log!(
+        "call onCreate, device_type = {}, os_full_name = {}, display_density = {}, files_dir = {}, cache_dir = {}, temp_dir = {}",
+        device_type,
+        os_full_name,
+        display_density,
+        files_dir,
+        cache_dir,
+        temp_dir
+    );
 
     send_from_ohos_message(FromOhosMessage::Init {
         device_type,
@@ -63,6 +82,174 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
 }
 
 impl Cx {
+    fn oh_make_string(raw_env: napi_env, value: &str) -> Option<napi_value> {
+        let mut result = null_mut();
+        let status = unsafe {
+            napi_create_string_utf8(
+                raw_env,
+                value.as_ptr() as *const c_char,
+                value.len(),
+                &mut result,
+            )
+        };
+        if status != Status::napi_ok {
+            crate::error!("failed to create OpenHarmony string argument");
+            return None;
+        }
+        Some(result)
+    }
+
+    fn oh_make_f64(raw_env: napi_env, value: f64) -> Option<napi_value> {
+        let mut result = null_mut();
+        let status = unsafe { napi_create_double(raw_env, value, &mut result) };
+        if status != Status::napi_ok {
+            crate::error!("failed to create OpenHarmony number argument");
+            return None;
+        }
+        Some(result)
+    }
+
+    fn oh_make_bool(raw_env: napi_env, value: bool) -> Option<napi_value> {
+        let mut result = null_mut();
+        let status = unsafe { napi_get_boolean(raw_env, value, &mut result) };
+        if status != Status::napi_ok {
+            crate::error!("failed to create OpenHarmony bool argument");
+            return None;
+        }
+        Some(result)
+    }
+
+    fn oh_call_arkts(&mut self, name: &str, argv: &[napi_value]) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_mut() else {
+            return;
+        };
+        if let Err(err) = arkts_obj.call_js_function(name, argv.len(), argv.as_ptr()) {
+            crate::error!("OpenHarmony ArkTS call `{}` failed: {:?}", name, err);
+        }
+    }
+
+    fn oh_call_native_text_input_create(
+        &mut self,
+        id: LiveId,
+        text: &str,
+        placeholder: &str,
+        editable: bool,
+    ) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let Some(text) = Self::oh_make_string(raw_env, text) else {
+            return;
+        };
+        let Some(placeholder) = Self::oh_make_string(raw_env, placeholder) else {
+            return;
+        };
+        let Some(editable) = Self::oh_make_bool(raw_env, editable) else {
+            return;
+        };
+        let argv = [id, text, placeholder, editable];
+        self.oh_call_arkts("createNativeTextInput", &argv);
+    }
+
+    fn oh_call_native_text_input_update(
+        &mut self,
+        id: LiveId,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        visible: bool,
+    ) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let Some(left) = Self::oh_make_f64(raw_env, left) else {
+            return;
+        };
+        let Some(top) = Self::oh_make_f64(raw_env, top) else {
+            return;
+        };
+        let Some(width) = Self::oh_make_f64(raw_env, width) else {
+            return;
+        };
+        let Some(height) = Self::oh_make_f64(raw_env, height) else {
+            return;
+        };
+        let Some(visible) = Self::oh_make_bool(raw_env, visible) else {
+            return;
+        };
+        let argv = [id, left, top, width, height, visible];
+        self.oh_call_arkts("updateNativeTextInput", &argv);
+    }
+
+    fn oh_call_native_text_input_text(&mut self, id: LiveId, text: &str, programmatic: bool) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let Some(text) = Self::oh_make_string(raw_env, text) else {
+            return;
+        };
+        let Some(programmatic) = Self::oh_make_bool(raw_env, programmatic) else {
+            return;
+        };
+        let argv = [id, text, programmatic];
+        self.oh_call_arkts("setNativeTextInputText", &argv);
+    }
+
+    fn oh_call_native_text_input_string_prop(&mut self, name: &str, id: LiveId, value: &str) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let Some(value) = Self::oh_make_string(raw_env, value) else {
+            return;
+        };
+        let argv = [id, value];
+        self.oh_call_arkts(name, &argv);
+    }
+
+    fn oh_call_native_text_input_bool_prop(&mut self, name: &str, id: LiveId, value: bool) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let Some(value) = Self::oh_make_bool(raw_env, value) else {
+            return;
+        };
+        let argv = [id, value];
+        self.oh_call_arkts(name, &argv);
+    }
+
+    fn oh_call_native_text_input_id(&mut self, name: &str, id: LiveId) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
+            return;
+        };
+        let raw_env = arkts_obj.raw();
+        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
+            return;
+        };
+        let argv = [id];
+        self.oh_call_arkts(name, &argv);
+    }
+
     fn main_loop(&mut self, from_ohos_rx: mpsc::Receiver<FromOhosMessage>) {
         crate::log!("entry main_loop");
 
@@ -511,6 +698,7 @@ impl Cx {
     }
 
     fn handle_platform_ops(&mut self) -> EventFlow {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             //crate::log!("============ handle_platform_ops");
             match op {
@@ -583,6 +771,72 @@ impl Cx {
                     );
                     //self.os.keyboard_visible = false;
                     //unsafe {android_jni::to_java_show_keyboard(false);}
+                }
+                CxOsOp::CreateNativeView { id, kind, props } => match (kind, props) {
+                    (
+                        NativeHostKind::TextInput,
+                        NativeHostProps::TextInput {
+                            text,
+                            placeholder,
+                            editable,
+                        },
+                    ) => self.oh_call_native_text_input_create(id, &text, &placeholder, editable),
+                    _ => {}
+                },
+                CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
+                    let rect = area.clipped_rect(self);
+                    self.oh_call_native_text_input_update(
+                        id,
+                        rect.pos.x,
+                        rect.pos.y,
+                        rect.size.x,
+                        rect.size.y,
+                        visible && rect.size.x > 0.0 && rect.size.y > 0.0,
+                    );
+                }
+                CxOsOp::UpdateNativeViewProps { id, update } => match update {
+                    NativeHostPropUpdate::TextInputText { text, programmatic } => {
+                        self.oh_call_native_text_input_text(id, &text, programmatic);
+                    }
+                    NativeHostPropUpdate::TextInputPlaceholder { placeholder } => self
+                        .oh_call_native_text_input_string_prop(
+                            "setNativeTextInputPlaceholder",
+                            id,
+                            &placeholder,
+                        ),
+                    NativeHostPropUpdate::TextInputEditable { editable } => self
+                        .oh_call_native_text_input_bool_prop(
+                            "setNativeTextInputEditable",
+                            id,
+                            editable,
+                        ),
+                    NativeHostPropUpdate::LabelText { .. } => {}
+                },
+                CxOsOp::CommandNativeView { id, command } => match command {
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Focus) => {
+                        self.oh_call_native_text_input_id("focusNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Blur) => {
+                        self.oh_call_native_text_input_id("blurNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll) => {
+                        self.oh_call_native_text_input_id("selectAllNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Copy) => {
+                        self.oh_call_native_text_input_id("copyNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Cut) => {
+                        self.oh_call_native_text_input_id("cutNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Paste) => {
+                        self.oh_call_native_text_input_id("pasteNativeTextInput", id);
+                    }
+                },
+                CxOsOp::DetachNativeView { id } => {
+                    self.oh_call_native_text_input_id("detachNativeTextInput", id);
+                }
+                CxOsOp::CloseNativeView { id } => {
+                    self.oh_call_native_text_input_id("closeNativeTextInput", id);
                 }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);

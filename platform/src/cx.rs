@@ -4,7 +4,7 @@ use {
         action::{ActionSend, ACTION_SENDER_GLOBAL},
         area::Area,
         component::ComponentRegistries,
-        cx_api::CxOsOp,
+        cx_api::{CxOsOp, NativeMountQueue},
         debug::Debug,
         display_context::DisplayContext,
         draw_list::CxDrawListPool,
@@ -96,6 +96,7 @@ pub struct Cx {
     pub(crate) drag_drop: CxDragDrop,
 
     pub(crate) platform_ops: Vec<CxOsOp>,
+    pub(crate) native_mount_queue: NativeMountQueue,
     pub(crate) pending_camera_playbacks: Vec<PendingCameraPlayback>,
 
     pub(crate) new_next_frames: HashSet<NextFrame>,
@@ -420,6 +421,7 @@ impl Cx {
             ime_area: Default::default(),
             keyboard_shift: 0.0,
             platform_ops: Default::default(),
+            native_mount_queue: Default::default(),
             pending_camera_playbacks: Vec::new(),
             studio_http: "".to_string(),
             new_next_frames: Default::default(),

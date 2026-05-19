@@ -426,6 +426,7 @@ impl Cx {
         d3d11_windows: &mut Vec<D3d11Window>,
         d3d11_cx: &D3d11Cx,
     ) -> EventFlow {
+        self.flush_native_mount_queue();
         let mut ret = EventFlow::Poll;
         let mut geom_changes = Vec::new();
         while let Some(op) = self.platform_ops.pop() {

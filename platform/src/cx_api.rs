@@ -92,6 +92,513 @@ impl From<LiveId> for SystemBrowserId {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NativeTextInputId(pub LiveId);
+
+impl From<LiveId> for NativeTextInputId {
+    fn from(value: LiveId) -> Self {
+        Self(value)
+    }
+}
+
+impl From<u64> for NativeTextInputId {
+    fn from(value: u64) -> Self {
+        Self(LiveId(value))
+    }
+}
+
+impl TryFrom<i64> for NativeTextInputId {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        u64::try_from(value).map(Self::from)
+    }
+}
+
+impl std::str::FromStr for NativeTextInputId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<u64>().map(Self::from)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NativeLabelId(pub LiveId);
+
+impl From<LiveId> for NativeLabelId {
+    fn from(value: LiveId) -> Self {
+        Self(value)
+    }
+}
+
+impl From<u64> for NativeLabelId {
+    fn from(value: u64) -> Self {
+        Self(LiveId(value))
+    }
+}
+
+impl TryFrom<i64> for NativeLabelId {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        u64::try_from(value).map(Self::from)
+    }
+}
+
+impl std::str::FromStr for NativeLabelId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<u64>().map(Self::from)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeHostKind {
+    TextInput,
+    Label,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeHostProps {
+    TextInput {
+        text: String,
+        placeholder: String,
+        editable: bool,
+    },
+    Label {
+        text: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeHostPropUpdate {
+    TextInputText { text: String, programmatic: bool },
+    TextInputPlaceholder { placeholder: String },
+    TextInputEditable { editable: bool },
+    LabelText { text: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeTextInputCommand {
+    Focus,
+    Blur,
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeHostCommand {
+    TextInput(NativeTextInputCommand),
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeTextInputChanged {
+    pub text_input_id: LiveId,
+    pub text: String,
+}
+
+impl NativeTextInputChanged {
+    pub fn new(id: impl Into<NativeTextInputId>, text: impl Into<String>) -> Self {
+        Self {
+            text_input_id: id.into().0,
+            text: text.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeTextInputFocusChanged {
+    pub text_input_id: LiveId,
+    pub has_focus: bool,
+}
+
+impl NativeTextInputFocusChanged {
+    pub fn new(id: impl Into<NativeTextInputId>, has_focus: bool) -> Self {
+        Self {
+            text_input_id: id.into().0,
+            has_focus,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeTextInputSelectionChanged {
+    pub text_input_id: LiveId,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl NativeTextInputSelectionChanged {
+    pub fn new(id: impl Into<NativeTextInputId>, start: usize, end: usize) -> Self {
+        Self {
+            text_input_id: id.into().0,
+            start: start.min(end),
+            end: start.max(end),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NativeTextInputCloseRequested {
+    pub text_input_id: LiveId,
+}
+
+impl NativeTextInputCloseRequested {
+    pub fn new(id: impl Into<NativeTextInputId>) -> Self {
+        Self {
+            text_input_id: id.into().0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NativeLabelCloseRequested {
+    pub label_id: LiveId,
+}
+
+impl NativeLabelCloseRequested {
+    pub fn new(id: impl Into<NativeLabelId>) -> Self {
+        Self {
+            label_id: id.into().0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeMountMutation {
+    Create {
+        id: LiveId,
+        kind: NativeHostKind,
+        props: NativeHostProps,
+    },
+    Layout {
+        id: LiveId,
+        area: Area,
+        visible: bool,
+    },
+    Props {
+        id: LiveId,
+        update: NativeHostPropUpdate,
+    },
+    Command {
+        id: LiveId,
+        command: NativeHostCommand,
+    },
+    Detach {
+        id: LiveId,
+    },
+    Close {
+        id: LiveId,
+    },
+}
+
+impl NativeMountMutation {
+    fn id(&self) -> LiveId {
+        match self {
+            Self::Create { id, .. }
+            | Self::Layout { id, .. }
+            | Self::Props { id, .. }
+            | Self::Command { id, .. }
+            | Self::Detach { id }
+            | Self::Close { id } => *id,
+        }
+    }
+
+    fn into_os_op(self) -> CxOsOp {
+        match self {
+            Self::Create { id, kind, props } => CxOsOp::CreateNativeView { id, kind, props },
+            Self::Layout { id, area, visible } => {
+                CxOsOp::UpdateNativeViewLayout { id, area, visible }
+            }
+            Self::Props { id, update } => CxOsOp::UpdateNativeViewProps { id, update },
+            Self::Command { id, command } => CxOsOp::CommandNativeView { id, command },
+            Self::Detach { id } => CxOsOp::DetachNativeView { id },
+            Self::Close { id } => CxOsOp::CloseNativeView { id },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeHostPropUpdateKind {
+    TextInputText,
+    TextInputPlaceholder,
+    TextInputEditable,
+    LabelText,
+}
+
+impl NativeHostPropUpdate {
+    fn kind(&self) -> NativeHostPropUpdateKind {
+        match self {
+            Self::TextInputText { .. } => NativeHostPropUpdateKind::TextInputText,
+            Self::TextInputPlaceholder { .. } => NativeHostPropUpdateKind::TextInputPlaceholder,
+            Self::TextInputEditable { .. } => NativeHostPropUpdateKind::TextInputEditable,
+            Self::LabelText { .. } => NativeHostPropUpdateKind::LabelText,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct NativeMountQueue {
+    in_flush: bool,
+    mutations: Vec<NativeMountMutation>,
+}
+
+impl NativeMountQueue {
+    pub fn push(&mut self, mutation: NativeMountMutation) {
+        self.mutations.push(mutation);
+    }
+
+    pub fn flush_into(&mut self, platform_ops: &mut Vec<CxOsOp>) {
+        if self.in_flush || self.mutations.is_empty() {
+            return;
+        }
+        self.in_flush = true;
+        let mutations = std::mem::take(&mut self.mutations);
+        let mutations = Self::coalesce(mutations);
+        for mutation in mutations.into_iter().rev() {
+            platform_ops.push(mutation.into_os_op());
+        }
+        self.in_flush = false;
+    }
+
+    fn coalesce(mutations: Vec<NativeMountMutation>) -> Vec<NativeMountMutation> {
+        let mut coalesced = Vec::with_capacity(mutations.len());
+        for mutation in mutations {
+            match &mutation {
+                NativeMountMutation::Layout { id, .. } => {
+                    if let Some(index) = Self::replaceable_layout_index(&coalesced, *id) {
+                        coalesced[index] = mutation;
+                    } else {
+                        coalesced.push(mutation);
+                    }
+                }
+                NativeMountMutation::Props { id, update } => {
+                    if let Some(index) =
+                        Self::replaceable_prop_index(&coalesced, *id, update.kind())
+                    {
+                        coalesced[index] = mutation;
+                    } else {
+                        coalesced.push(mutation);
+                    }
+                }
+                NativeMountMutation::Detach { id } => {
+                    if let Some(index) = Self::replaceable_detach_index(&coalesced, *id) {
+                        coalesced[index] = mutation;
+                    } else {
+                        coalesced.push(mutation);
+                    }
+                }
+                NativeMountMutation::Close { id } => {
+                    coalesced.retain(|existing: &NativeMountMutation| existing.id() != *id);
+                    coalesced.push(mutation);
+                }
+                NativeMountMutation::Create { .. } | NativeMountMutation::Command { .. } => {
+                    coalesced.push(mutation);
+                }
+            }
+        }
+        coalesced
+    }
+
+    fn replaceable_layout_index(coalesced: &[NativeMountMutation], id: LiveId) -> Option<usize> {
+        for (index, existing) in coalesced.iter().enumerate().rev() {
+            if existing.id() != id {
+                continue;
+            }
+            match existing {
+                NativeMountMutation::Layout { .. } => return Some(index),
+                NativeMountMutation::Props { .. } => {}
+                NativeMountMutation::Create { .. }
+                | NativeMountMutation::Command { .. }
+                | NativeMountMutation::Detach { .. }
+                | NativeMountMutation::Close { .. } => return None,
+            }
+        }
+        None
+    }
+
+    fn replaceable_prop_index(
+        coalesced: &[NativeMountMutation],
+        id: LiveId,
+        kind: NativeHostPropUpdateKind,
+    ) -> Option<usize> {
+        for (index, existing) in coalesced.iter().enumerate().rev() {
+            if existing.id() != id {
+                continue;
+            }
+            match existing {
+                NativeMountMutation::Props { update, .. } if update.kind() == kind => {
+                    return Some(index);
+                }
+                NativeMountMutation::Layout { .. } | NativeMountMutation::Props { .. } => {}
+                NativeMountMutation::Create { .. }
+                | NativeMountMutation::Command { .. }
+                | NativeMountMutation::Detach { .. }
+                | NativeMountMutation::Close { .. } => return None,
+            }
+        }
+        None
+    }
+
+    fn replaceable_detach_index(coalesced: &[NativeMountMutation], id: LiveId) -> Option<usize> {
+        for (index, existing) in coalesced.iter().enumerate().rev() {
+            if existing.id() != id {
+                continue;
+            }
+            match existing {
+                NativeMountMutation::Detach { .. } => return Some(index),
+                NativeMountMutation::Layout { .. } | NativeMountMutation::Props { .. } => {}
+                NativeMountMutation::Create { .. }
+                | NativeMountMutation::Command { .. }
+                | NativeMountMutation::Close { .. } => return None,
+            }
+        }
+        None
+    }
+}
+
+pub struct CxNativeTextInput<'a> {
+    cx: &'a mut Cx,
+    id: NativeTextInputId,
+}
+
+impl<'a> CxNativeTextInput<'a> {
+    pub fn spawn(&mut self, text: &str, placeholder: &str, editable: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Create {
+                id: self.id.0,
+                kind: NativeHostKind::TextInput,
+                props: NativeHostProps::TextInput {
+                    text: text.to_string(),
+                    placeholder: placeholder.to_string(),
+                    editable,
+                },
+            });
+    }
+
+    pub fn update(&mut self, area: Area, visible: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Layout {
+                id: self.id.0,
+                area,
+                visible,
+            });
+    }
+
+    pub fn detach(&mut self) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Detach { id: self.id.0 });
+    }
+
+    pub fn set_text(&mut self, text: &str, programmatic: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Props {
+                id: self.id.0,
+                update: NativeHostPropUpdate::TextInputText {
+                    text: text.to_string(),
+                    programmatic,
+                },
+            });
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: &str) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Props {
+                id: self.id.0,
+                update: NativeHostPropUpdate::TextInputPlaceholder {
+                    placeholder: placeholder.to_string(),
+                },
+            });
+    }
+
+    pub fn set_editable(&mut self, editable: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Props {
+                id: self.id.0,
+                update: NativeHostPropUpdate::TextInputEditable { editable },
+            });
+    }
+
+    pub fn command(&mut self, command: LiveId) {
+        let command = if command == live_id!(focus) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Focus)
+        } else if command == live_id!(blur) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Blur)
+        } else if command == live_id!(select_all) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll)
+        } else if command == live_id!(copy) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Copy)
+        } else if command == live_id!(cut) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Cut)
+        } else if command == live_id!(paste) {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Paste)
+        } else {
+            return;
+        };
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Command {
+                id: self.id.0,
+                command,
+            });
+    }
+
+    pub fn close(&mut self) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Close { id: self.id.0 });
+    }
+}
+
+pub struct CxNativeLabel<'a> {
+    cx: &'a mut Cx,
+    id: NativeLabelId,
+}
+
+impl<'a> CxNativeLabel<'a> {
+    pub fn spawn(&mut self, text: &str) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Create {
+                id: self.id.0,
+                kind: NativeHostKind::Label,
+                props: NativeHostProps::Label {
+                    text: text.to_string(),
+                },
+            });
+    }
+
+    pub fn update(&mut self, area: Area, visible: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Layout {
+                id: self.id.0,
+                area,
+                visible,
+            });
+    }
+
+    pub fn detach(&mut self) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Detach { id: self.id.0 });
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Props {
+                id: self.id.0,
+                update: NativeHostPropUpdate::LabelText {
+                    text: text.to_string(),
+                },
+            });
+    }
+
+    pub fn close(&mut self) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Close { id: self.id.0 });
+    }
+}
+
 pub struct CxSystemBrowser<'a> {
     cx: &'a mut Cx,
     id: SystemBrowserId,
@@ -359,6 +866,30 @@ pub enum CxOsOp {
     CloseSystemBrowser {
         browser_id: LiveId,
     },
+    CreateNativeView {
+        id: LiveId,
+        kind: NativeHostKind,
+        props: NativeHostProps,
+    },
+    UpdateNativeViewLayout {
+        id: LiveId,
+        area: Area,
+        visible: bool,
+    },
+    UpdateNativeViewProps {
+        id: LiveId,
+        update: NativeHostPropUpdate,
+    },
+    CommandNativeView {
+        id: LiveId,
+        command: NativeHostCommand,
+    },
+    DetachNativeView {
+        id: LiveId,
+    },
+    CloseNativeView {
+        id: LiveId,
+    },
     PrepareAudioPlayback(LiveId, VideoSource, bool, bool),
     BeginVideoPlayback(LiveId),
     PauseVideoPlayback(LiveId),
@@ -452,6 +983,12 @@ impl std::fmt::Debug for CxOsOp {
             Self::SetSystemBrowserUrl { .. } => write!(f, "SetSystemBrowserUrl"),
             Self::SystemBrowserHistoryGo { .. } => write!(f, "SystemBrowserHistoryGo"),
             Self::CloseSystemBrowser { .. } => write!(f, "CloseSystemBrowser"),
+            Self::CreateNativeView { .. } => write!(f, "CreateNativeView"),
+            Self::UpdateNativeViewLayout { .. } => write!(f, "UpdateNativeViewLayout"),
+            Self::UpdateNativeViewProps { .. } => write!(f, "UpdateNativeViewProps"),
+            Self::CommandNativeView { .. } => write!(f, "CommandNativeView"),
+            Self::DetachNativeView { .. } => write!(f, "DetachNativeView"),
+            Self::CloseNativeView { .. } => write!(f, "CloseNativeView"),
             Self::PrepareAudioPlayback(..) => write!(f, "PrepareAudioPlayback"),
             Self::BeginVideoPlayback(..) => write!(f, "BeginVideoPlayback"),
             Self::PauseVideoPlayback(..) => write!(f, "PauseVideoPlayback"),
@@ -484,6 +1021,14 @@ impl std::fmt::Debug for CxOsOp {
     }
 }
 impl Cx {
+    pub(crate) fn queue_native_mount_mutation(&mut self, mutation: NativeMountMutation) {
+        self.native_mount_queue.push(mutation);
+    }
+
+    pub(crate) fn flush_native_mount_queue(&mut self) {
+        self.native_mount_queue.flush_into(&mut self.platform_ops);
+    }
+
     pub fn in_draw_event(&self) -> bool {
         self.in_draw_event
     }
@@ -845,6 +1390,20 @@ impl Cx {
 
     pub fn system_browser(&mut self, id: impl Into<SystemBrowserId>) -> CxSystemBrowser<'_> {
         CxSystemBrowser {
+            cx: self,
+            id: id.into(),
+        }
+    }
+
+    pub fn native_text_input(&mut self, id: impl Into<NativeTextInputId>) -> CxNativeTextInput<'_> {
+        CxNativeTextInput {
+            cx: self,
+            id: id.into(),
+        }
+    }
+
+    pub fn native_label(&mut self, id: impl Into<NativeLabelId>) -> CxNativeLabel<'_> {
+        CxNativeLabel {
             cx: self,
             id: id.into(),
         }
@@ -1656,6 +2215,684 @@ fn can_play_type_impl(mime: &str) -> &'static str {
 )))]
 fn can_play_type_impl(_mime: &str) -> &'static str {
     ""
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_host_schema::{native_host_component, NativeHostFieldType};
+
+    fn field_schema(component: &str, field: &str) -> Option<NativeHostFieldType> {
+        native_host_component(component)?
+            .props
+            .iter()
+            .find(|schema| schema.name == field)
+            .map(|schema| schema.ty)
+    }
+
+    fn prop_update_schema(component: &str, field: &str) -> Option<NativeHostFieldType> {
+        native_host_component(component)?
+            .prop_updates
+            .iter()
+            .find(|schema| schema.name == field)
+            .map(|schema| schema.ty)
+    }
+
+    fn test_cx() -> Cx {
+        Cx::new(Box::new(|_cx: &mut Cx, _event: &Event| {}))
+    }
+
+    #[test]
+    fn native_mount_queue_flushes_in_pop_order() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_test);
+
+        queue.push(NativeMountMutation::Create {
+            id,
+            kind: NativeHostKind::TextInput,
+            props: NativeHostProps::TextInput {
+                text: "a".to_string(),
+                placeholder: "p".to_string(),
+                editable: true,
+            },
+        });
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: true,
+        });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert!(matches!(ops.pop(), Some(CxOsOp::CreateNativeView { .. })));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout { .. })
+        ));
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn native_mount_queue_coalesces_layout_and_props() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_coalesce_test);
+
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: false,
+        });
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: true,
+        });
+        queue.push(NativeMountMutation::Props {
+            id,
+            update: NativeHostPropUpdate::TextInputText {
+                text: "old".to_string(),
+                programmatic: true,
+            },
+        });
+        queue.push(NativeMountMutation::Props {
+            id,
+            update: NativeHostPropUpdate::TextInputText {
+                text: "new".to_string(),
+                programmatic: true,
+            },
+        });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout { visible: true, .. })
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                update: NativeHostPropUpdate::TextInputText { text, .. },
+                ..
+            }) if text == "new"
+        ));
+    }
+
+    #[test]
+    fn native_mount_queue_close_drops_prior_same_host_mutations() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_close_test);
+
+        queue.push(NativeMountMutation::Create {
+            id,
+            kind: NativeHostKind::Label,
+            props: NativeHostProps::Label {
+                text: "temporary".to_string(),
+            },
+        });
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: true,
+        });
+        queue.push(NativeMountMutation::Close { id });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops.pop(), Some(CxOsOp::CloseNativeView { .. })));
+    }
+
+    #[test]
+    fn native_mount_queue_preserves_commands() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_command_test);
+
+        queue.push(NativeMountMutation::Command {
+            id,
+            command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+        });
+        queue.push(NativeMountMutation::Command {
+            id,
+            command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
+        });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+                ..
+            })
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn native_mount_queue_does_not_coalesce_props_across_commands() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_props_command_barrier_test);
+
+        queue.push(NativeMountMutation::Props {
+            id,
+            update: NativeHostPropUpdate::TextInputText {
+                text: "before command".to_string(),
+                programmatic: true,
+            },
+        });
+        queue.push(NativeMountMutation::Command {
+            id,
+            command: NativeHostCommand::TextInput(NativeTextInputCommand::Copy),
+        });
+        queue.push(NativeMountMutation::Props {
+            id,
+            update: NativeHostPropUpdate::TextInputText {
+                text: "after command".to_string(),
+                programmatic: true,
+            },
+        });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                update: NativeHostPropUpdate::TextInputText { text, .. },
+                ..
+            }) if text == "before command"
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Copy),
+                ..
+            })
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                update: NativeHostPropUpdate::TextInputText { text, .. },
+                ..
+            }) if text == "after command"
+        ));
+    }
+
+    #[test]
+    fn native_mount_queue_does_not_coalesce_layout_across_commands() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_layout_command_barrier_test);
+
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: false,
+        });
+        queue.push(NativeMountMutation::Command {
+            id,
+            command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+        });
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: true,
+        });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout { visible: false, .. })
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+                ..
+            })
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout { visible: true, .. })
+        ));
+    }
+
+    #[test]
+    fn native_mount_queue_close_keeps_other_hosts() {
+        let mut queue = NativeMountQueue::default();
+        let closing_id = live_id!(native_mount_queue_close_only_this_host);
+        let other_id = live_id!(native_mount_queue_close_keeps_other_host);
+
+        queue.push(NativeMountMutation::Layout {
+            id: closing_id,
+            area: Area::Empty,
+            visible: true,
+        });
+        queue.push(NativeMountMutation::Layout {
+            id: other_id,
+            area: Area::Empty,
+            visible: true,
+        });
+        queue.push(NativeMountMutation::Close { id: closing_id });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout { id, .. }) if id == other_id
+        ));
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CloseNativeView { id }) if id == closing_id
+        ));
+    }
+
+    #[test]
+    fn native_mount_queue_reentrant_flush_is_guarded() {
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_reentrant_flush);
+        queue.push(NativeMountMutation::Command {
+            id,
+            command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+        });
+        queue.in_flush = true;
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert!(ops.is_empty());
+        assert_eq!(queue.mutations.len(), 1);
+
+        queue.in_flush = false;
+        queue.flush_into(&mut ops);
+
+        assert!(matches!(
+            ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                id: op_id,
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+            }) if op_id == id
+        ));
+        assert!(queue.mutations.is_empty());
+    }
+
+    #[test]
+    fn native_text_input_api_flushes_typed_mount_ops() {
+        let mut cx = test_cx();
+        let id = NativeTextInputId(live_id!(native_text_input_api_mount_test));
+
+        cx.native_text_input(id)
+            .spawn("initial", "placeholder", true);
+        cx.native_text_input(id).update(Area::Empty, true);
+        cx.native_text_input(id).set_text("next", true);
+        cx.native_text_input(id).command(live_id!(focus));
+        cx.native_text_input(id)
+            .command(live_id!(native_text_input_unknown_command));
+
+        assert!(cx.platform_ops.is_empty());
+        cx.flush_native_mount_queue();
+
+        assert_eq!(cx.platform_ops.len(), 4);
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::CreateNativeView {
+                id: op_id,
+                kind: NativeHostKind::TextInput,
+                props: NativeHostProps::TextInput { text, placeholder, editable },
+            }) if op_id == id.0 && text == "initial" && placeholder == "placeholder" && editable
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout {
+                id: op_id,
+                visible: true,
+                ..
+            }) if op_id == id.0
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                id: op_id,
+                update: NativeHostPropUpdate::TextInputText { text, programmatic },
+            }) if op_id == id.0 && text == "next" && programmatic
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                id: op_id,
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+            }) if op_id == id.0
+        ));
+    }
+
+    #[test]
+    fn native_text_input_api_flushes_props_commands_and_detach() {
+        let mut cx = test_cx();
+        let id = NativeTextInputId(live_id!(native_text_input_api_props_test));
+
+        cx.native_text_input(id).set_placeholder("hint");
+        cx.native_text_input(id).set_editable(false);
+        cx.native_text_input(id).command(live_id!(blur));
+        cx.native_text_input(id).detach();
+
+        assert!(cx.platform_ops.is_empty());
+        cx.flush_native_mount_queue();
+
+        assert_eq!(cx.platform_ops.len(), 4);
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                id: op_id,
+                update: NativeHostPropUpdate::TextInputPlaceholder { placeholder },
+            }) if op_id == id.0 && placeholder == "hint"
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                id: op_id,
+                update: NativeHostPropUpdate::TextInputEditable { editable },
+            }) if op_id == id.0 && !editable
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::CommandNativeView {
+                id: op_id,
+                command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
+            }) if op_id == id.0
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::DetachNativeView { id: op_id }) if op_id == id.0
+        ));
+    }
+
+    #[test]
+    fn native_text_input_api_flushes_clipboard_commands() {
+        let mut cx = test_cx();
+        let id = NativeTextInputId(live_id!(native_text_input_api_clipboard_commands_test));
+
+        cx.native_text_input(id).command(live_id!(select_all));
+        cx.native_text_input(id).command(live_id!(copy));
+        cx.native_text_input(id).command(live_id!(cut));
+        cx.native_text_input(id).command(live_id!(paste));
+
+        cx.flush_native_mount_queue();
+
+        let expected = [
+            NativeTextInputCommand::SelectAll,
+            NativeTextInputCommand::Copy,
+            NativeTextInputCommand::Cut,
+            NativeTextInputCommand::Paste,
+        ];
+        for expected_command in expected {
+            assert!(matches!(
+                cx.platform_ops.pop(),
+                Some(CxOsOp::CommandNativeView {
+                    id: op_id,
+                    command: NativeHostCommand::TextInput(command),
+                }) if op_id == id.0 && command == expected_command
+            ));
+        }
+        assert!(cx.platform_ops.is_empty());
+    }
+
+    #[test]
+    fn native_host_ids_parse_from_decimal_strings() {
+        assert_eq!(
+            "42".parse::<NativeTextInputId>().unwrap(),
+            NativeTextInputId(LiveId(42))
+        );
+        assert_eq!(
+            "77".parse::<NativeLabelId>().unwrap(),
+            NativeLabelId(LiveId(77))
+        );
+        assert!("not-a-number".parse::<NativeTextInputId>().is_err());
+        assert!("".parse::<NativeLabelId>().is_err());
+
+        assert_eq!(NativeTextInputId::from(5_u64), NativeTextInputId(LiveId(5)));
+        assert_eq!(
+            NativeLabelId::try_from(9_i64).unwrap(),
+            NativeLabelId(LiveId(9))
+        );
+        assert!(NativeTextInputId::try_from(-1_i64).is_err());
+        assert!(NativeLabelId::try_from(-1_i64).is_err());
+    }
+
+    #[test]
+    fn native_label_api_flushes_typed_mount_ops() {
+        let mut cx = test_cx();
+        let id = NativeLabelId(live_id!(native_label_api_typed_mount_test));
+
+        cx.native_label(id).spawn("label");
+        cx.native_label(id).update(Area::Empty, true);
+        cx.native_label(id).set_text("updated");
+
+        assert!(cx.platform_ops.is_empty());
+        cx.flush_native_mount_queue();
+
+        assert_eq!(cx.platform_ops.len(), 3);
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::CreateNativeView {
+                id: op_id,
+                kind: NativeHostKind::Label,
+                props: NativeHostProps::Label { text },
+            }) if op_id == id.0 && text == "label"
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewLayout {
+                id: op_id,
+                visible: true,
+                ..
+            }) if op_id == id.0
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                id: op_id,
+                update: NativeHostPropUpdate::LabelText { text },
+            }) if op_id == id.0 && text == "updated"
+        ));
+    }
+
+    #[test]
+    fn native_label_api_close_coalesces_pending_mount_ops() {
+        let mut cx = test_cx();
+        let id = NativeLabelId(live_id!(native_label_api_mount_test));
+
+        cx.native_label(id).spawn("label");
+        cx.native_label(id).set_text("updated");
+        cx.native_label(id).close();
+
+        assert!(cx.platform_ops.is_empty());
+        cx.flush_native_mount_queue();
+
+        assert_eq!(cx.platform_ops.len(), 1);
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::CloseNativeView { id: op_id }) if op_id == id.0
+        ));
+    }
+
+    #[test]
+    fn native_host_schema_matches_typed_kinds() {
+        let kinds = [NativeHostKind::TextInput, NativeHostKind::Label];
+        let names = kinds.map(|kind| match kind {
+            NativeHostKind::TextInput => "TextInput",
+            NativeHostKind::Label => "Label",
+        });
+
+        assert_eq!(
+            names.len(),
+            crate::native_host_schema::NATIVE_HOST_SCHEMA.len()
+        );
+        for name in names {
+            assert!(native_host_component(name).is_some());
+        }
+    }
+
+    #[test]
+    fn native_host_schema_matches_typed_props() {
+        let text_input = NativeHostProps::TextInput {
+            text: String::new(),
+            placeholder: String::new(),
+            editable: true,
+        };
+        match text_input {
+            NativeHostProps::TextInput {
+                text: _,
+                placeholder: _,
+                editable: _,
+            } => {
+                assert_eq!(
+                    field_schema("TextInput", "text"),
+                    Some(NativeHostFieldType::String)
+                );
+                assert_eq!(
+                    field_schema("TextInput", "placeholder"),
+                    Some(NativeHostFieldType::String)
+                );
+                assert_eq!(
+                    field_schema("TextInput", "editable"),
+                    Some(NativeHostFieldType::Bool)
+                );
+            }
+            NativeHostProps::Label { .. } => unreachable!(),
+        }
+
+        let label = NativeHostProps::Label {
+            text: String::new(),
+        };
+        match label {
+            NativeHostProps::TextInput { .. } => unreachable!(),
+            NativeHostProps::Label { text: _ } => {
+                assert_eq!(
+                    field_schema("Label", "text"),
+                    Some(NativeHostFieldType::String)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_host_schema_matches_typed_prop_updates() {
+        let updates = [
+            NativeHostPropUpdate::TextInputText {
+                text: String::new(),
+                programmatic: true,
+            },
+            NativeHostPropUpdate::TextInputPlaceholder {
+                placeholder: String::new(),
+            },
+            NativeHostPropUpdate::TextInputEditable { editable: true },
+            NativeHostPropUpdate::LabelText {
+                text: String::new(),
+            },
+        ];
+
+        for update in updates {
+            match update {
+                NativeHostPropUpdate::TextInputText {
+                    text: _,
+                    programmatic: _,
+                } => assert_eq!(
+                    prop_update_schema("TextInput", "text"),
+                    Some(NativeHostFieldType::String)
+                ),
+                NativeHostPropUpdate::TextInputPlaceholder { placeholder: _ } => assert_eq!(
+                    prop_update_schema("TextInput", "placeholder"),
+                    Some(NativeHostFieldType::String)
+                ),
+                NativeHostPropUpdate::TextInputEditable { editable: _ } => assert_eq!(
+                    prop_update_schema("TextInput", "editable"),
+                    Some(NativeHostFieldType::Bool)
+                ),
+                NativeHostPropUpdate::LabelText { text: _ } => assert_eq!(
+                    prop_update_schema("Label", "text"),
+                    Some(NativeHostFieldType::String)
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn native_host_schema_matches_typed_commands_and_events() {
+        let text_input = native_host_component("TextInput").unwrap();
+        let command_names = [
+            NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
+            NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
+            NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll),
+            NativeHostCommand::TextInput(NativeTextInputCommand::Copy),
+            NativeHostCommand::TextInput(NativeTextInputCommand::Cut),
+            NativeHostCommand::TextInput(NativeTextInputCommand::Paste),
+        ]
+        .map(|command| match command {
+            NativeHostCommand::TextInput(NativeTextInputCommand::Focus) => "focus",
+            NativeHostCommand::TextInput(NativeTextInputCommand::Blur) => "blur",
+            NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll) => "select_all",
+            NativeHostCommand::TextInput(NativeTextInputCommand::Copy) => "copy",
+            NativeHostCommand::TextInput(NativeTextInputCommand::Cut) => "cut",
+            NativeHostCommand::TextInput(NativeTextInputCommand::Paste) => "paste",
+        });
+
+        for command_name in command_names {
+            assert!(text_input
+                .commands
+                .iter()
+                .any(|schema| schema.name == command_name));
+        }
+
+        let changed = NativeTextInputChanged::new(LiveId(1), String::new());
+        let focus_changed = NativeTextInputFocusChanged::new(LiveId(1), true);
+        let selection_changed = NativeTextInputSelectionChanged::new(LiveId(1), 4, 2);
+        assert_eq!(changed.text_input_id, LiveId(1));
+        assert_eq!(focus_changed.text_input_id, LiveId(1));
+        assert_eq!(selection_changed.text_input_id, LiveId(1));
+        assert_eq!(selection_changed.start, 2);
+        assert_eq!(selection_changed.end, 4);
+        assert!(text_input.events.iter().any(|event| event.name == "changed"
+            && event
+                .fields
+                .iter()
+                .any(|field| field.name == "text" && field.ty == NativeHostFieldType::String)));
+        assert!(text_input
+            .events
+            .iter()
+            .any(|event| event.name == "focus_changed"
+                && event.fields.iter().any(
+                    |field| field.name == "has_focus" && field.ty == NativeHostFieldType::Bool
+                )));
+        assert!(text_input
+            .events
+            .iter()
+            .any(|event| event.name == "selection_changed"
+                && event
+                    .fields
+                    .iter()
+                    .any(|field| field.name == "start" && field.ty == NativeHostFieldType::Usize)
+                && event
+                    .fields
+                    .iter()
+                    .any(|field| field.name == "end" && field.ty == NativeHostFieldType::Usize)));
+    }
 }
 
 #[macro_export]

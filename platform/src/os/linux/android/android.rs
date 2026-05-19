@@ -26,7 +26,10 @@ use {
     },
     crate::{
         cx::{AndroidParams, Cx, OsType},
-        cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace, XrFrameCpuBreakdown},
+        cx_api::{
+            CxOsApi, CxOsOp, NativeHostCommand, NativeHostKind, NativeHostPropUpdate,
+            NativeHostProps, NativeTextInputCommand, OpenUrlInPlace, XrFrameCpuBreakdown,
+        },
         draw_pass::CxDrawPassParent,
         draw_pass::{DrawPassClearColor, DrawPassClearDepth, DrawPassId},
         event::{
@@ -2220,6 +2223,7 @@ impl Cx {
     }
 
     fn handle_platform_ops(&mut self) -> EventFlow {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
@@ -2406,6 +2410,76 @@ impl Cx {
                         }
                     }
                 }
+                CxOsOp::CreateNativeView { id, kind, props } => {
+                    if let (
+                        NativeHostKind::TextInput,
+                        NativeHostProps::TextInput {
+                            text,
+                            placeholder,
+                            editable,
+                        },
+                    ) = (kind, props)
+                    {
+                        unsafe {
+                            android_jni::to_java_create_native_text_input(
+                                id,
+                                &text,
+                                &placeholder,
+                                editable,
+                            );
+                        }
+                    }
+                }
+                CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
+                    let rect = area.clipped_rect(self);
+                    let left = (rect.pos.x * self.os.dpi_factor) as i32;
+                    let top = (rect.pos.y * self.os.dpi_factor) as i32;
+                    let right = ((rect.pos.x + rect.size.x) * self.os.dpi_factor) as i32;
+                    let bottom = ((rect.pos.y + rect.size.y) * self.os.dpi_factor) as i32;
+                    unsafe {
+                        android_jni::to_java_update_native_text_input(
+                            id, left, top, right, bottom, visible,
+                        );
+                    }
+                }
+                CxOsOp::UpdateNativeViewProps { id, update } => match update {
+                    NativeHostPropUpdate::TextInputText { text, programmatic } => unsafe {
+                        android_jni::to_java_set_native_text_input_text(id, &text, programmatic);
+                    },
+                    NativeHostPropUpdate::TextInputPlaceholder { placeholder } => unsafe {
+                        android_jni::to_java_set_native_text_input_placeholder(id, &placeholder);
+                    },
+                    NativeHostPropUpdate::TextInputEditable { editable } => unsafe {
+                        android_jni::to_java_set_native_text_input_editable(id, editable);
+                    },
+                    NativeHostPropUpdate::LabelText { .. } => {}
+                },
+                CxOsOp::CommandNativeView { id, command } => match command {
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Focus) => unsafe {
+                        android_jni::to_java_focus_native_text_input(id);
+                    },
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Blur) => unsafe {
+                        android_jni::to_java_blur_native_text_input(id);
+                    },
+                    NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll) => unsafe {
+                        android_jni::to_java_select_all_native_text_input(id);
+                    },
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Copy) => unsafe {
+                        android_jni::to_java_copy_native_text_input(id);
+                    },
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Cut) => unsafe {
+                        android_jni::to_java_cut_native_text_input(id);
+                    },
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Paste) => unsafe {
+                        android_jni::to_java_paste_native_text_input(id);
+                    },
+                },
+                CxOsOp::DetachNativeView { id } => unsafe {
+                    android_jni::to_java_detach_native_text_input(id);
+                },
+                CxOsOp::CloseNativeView { id } => unsafe {
+                    android_jni::to_java_close_native_text_input(id);
+                },
                 CxOsOp::CheckPermission {
                     permission,
                     request_id,

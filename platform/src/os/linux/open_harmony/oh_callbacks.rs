@@ -1,5 +1,10 @@
 use self::super::oh_sys::*;
 use crate::area::Area;
+use crate::cx::Cx;
+use crate::cx_api::{
+    NativeTextInputChanged, NativeTextInputFocusChanged, NativeTextInputId,
+    NativeTextInputSelectionChanged,
+};
 use crate::event::{TextInputEvent, TouchPoint, TouchState};
 use crate::makepad_math::*;
 use napi_derive_ohos::napi;
@@ -55,6 +60,41 @@ pub fn handle_delete_left_event(length: i32) -> napi_ohos::Result<()> {
 #[napi]
 pub fn handle_keyboard_status(is_open: bool, keyboard_height: i32) -> napi_ohos::Result<()> {
     send_from_ohos_message(FromOhosMessage::ResizeTextIME(is_open, keyboard_height));
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_changed(input_id: String, text: String) -> napi_ohos::Result<()> {
+    if let Ok(input_id) = input_id.parse::<NativeTextInputId>() {
+        let _ = Cx::try_post_action(NativeTextInputChanged::new(input_id, text));
+    }
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_focus_changed(
+    input_id: String,
+    has_focus: bool,
+) -> napi_ohos::Result<()> {
+    if let Ok(input_id) = input_id.parse::<NativeTextInputId>() {
+        let _ = Cx::try_post_action(NativeTextInputFocusChanged::new(input_id, has_focus));
+    }
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_selection_changed(
+    input_id: String,
+    start: i32,
+    end: i32,
+) -> napi_ohos::Result<()> {
+    if let (Ok(input_id), Ok(start), Ok(end)) = (
+        input_id.parse::<NativeTextInputId>(),
+        usize::try_from(start),
+        usize::try_from(end),
+    ) {
+        let _ = Cx::try_post_action(NativeTextInputSelectionChanged::new(input_id, start, end));
+    }
     Ok(())
 }
 

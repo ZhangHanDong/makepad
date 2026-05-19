@@ -5,7 +5,11 @@ use {
     self::super::{ndk_sys, ndk_utils},
     crate::{
         area::Area,
-        cx::AndroidParams,
+        cx::{AndroidParams, Cx},
+        cx_api::{
+            NativeTextInputChanged, NativeTextInputFocusChanged, NativeTextInputId,
+            NativeTextInputSelectionChanged,
+        },
         event::{SelectionHandleKind, SelectionHandlePhase, TouchPoint, TouchState, VideoSource},
         ime::{AutoCapitalize, AutoCorrect, InputMode, ReturnKeyType, TextInputConfig},
         makepad_live_id::*,
@@ -1247,6 +1251,48 @@ pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onImeEditorActio
     });
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onNativeTextInputChanged(
+    env: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    input_id: jni_sys::jlong,
+    text: jni_sys::jstring,
+) {
+    let text = jstring_to_string(env, text);
+    if let Ok(input_id) = NativeTextInputId::try_from(input_id) {
+        let _ = Cx::try_post_action(NativeTextInputChanged::new(input_id, text));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onNativeTextInputFocusChanged(
+    _: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    input_id: jni_sys::jlong,
+    has_focus: jni_sys::jboolean,
+) {
+    if let Ok(input_id) = NativeTextInputId::try_from(input_id) {
+        let _ = Cx::try_post_action(NativeTextInputFocusChanged::new(input_id, has_focus != 0));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onNativeTextInputSelectionChanged(
+    _: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    input_id: jni_sys::jlong,
+    start: jni_sys::jint,
+    end: jni_sys::jint,
+) {
+    if let (Ok(input_id), Ok(start), Ok(end)) = (
+        NativeTextInputId::try_from(input_id),
+        usize::try_from(start),
+        usize::try_from(end),
+    ) {
+        let _ = Cx::try_post_action(NativeTextInputSelectionChanged::new(input_id, start, end));
+    }
+}
+
 unsafe fn jstring_to_string(env: *mut jni_sys::JNIEnv, java_string: jni_sys::jstring) -> String {
     let chars = (**env).GetStringUTFChars.unwrap()(env, java_string, std::ptr::null_mut());
     let rust_string = std::ffi::CStr::from_ptr(chars)
@@ -1717,6 +1763,185 @@ pub unsafe fn to_java_detach_camera_preview(video_id: LiveId) {
         "detachCameraNativePreview",
         "(J)V",
         video_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_create_native_text_input(
+    input_id: LiveId,
+    text: &str,
+    placeholder: &str,
+    editable: bool,
+) {
+    let env = attach_jni_env();
+    let Some(text) = new_jstring(env, text) else {
+        return;
+    };
+    let Some(placeholder) = new_jstring(env, placeholder) else {
+        return;
+    };
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "createNativeTextInput",
+        "(JLjava/lang/String;Ljava/lang/String;Z)V",
+        input_id.get_value() as jni_sys::jlong,
+        text,
+        placeholder,
+        editable as jni_sys::jboolean as std::ffi::c_uint
+    );
+}
+
+pub unsafe fn to_java_update_native_text_input(
+    input_id: LiveId,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    visible: bool,
+) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "updateNativeTextInput",
+        "(JIIIIZ)V",
+        input_id.get_value() as jni_sys::jlong,
+        left,
+        top,
+        right,
+        bottom,
+        visible as jni_sys::jboolean as std::ffi::c_uint
+    );
+}
+
+pub unsafe fn to_java_detach_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "detachNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_set_native_text_input_text(input_id: LiveId, text: &str, programmatic: bool) {
+    let env = attach_jni_env();
+    let Some(text) = new_jstring(env, text) else {
+        return;
+    };
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "setNativeTextInputText",
+        "(JLjava/lang/String;Z)V",
+        input_id.get_value() as jni_sys::jlong,
+        text,
+        programmatic as jni_sys::jboolean as std::ffi::c_uint
+    );
+}
+
+pub unsafe fn to_java_set_native_text_input_placeholder(input_id: LiveId, placeholder: &str) {
+    let env = attach_jni_env();
+    let Some(placeholder) = new_jstring(env, placeholder) else {
+        return;
+    };
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "setNativeTextInputPlaceholder",
+        "(JLjava/lang/String;)V",
+        input_id.get_value() as jni_sys::jlong,
+        placeholder
+    );
+}
+
+pub unsafe fn to_java_set_native_text_input_editable(input_id: LiveId, editable: bool) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "setNativeTextInputEditable",
+        "(JZ)V",
+        input_id.get_value() as jni_sys::jlong,
+        editable as jni_sys::jboolean as std::ffi::c_uint
+    );
+}
+
+pub unsafe fn to_java_focus_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "focusNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_blur_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "blurNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_select_all_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "selectAllNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_copy_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "copyNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_cut_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "cutNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_paste_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "pasteNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
+    );
+}
+
+pub unsafe fn to_java_close_native_text_input(input_id: LiveId) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "closeNativeTextInput",
+        "(J)V",
+        input_id.get_value() as jni_sys::jlong
     );
 }
 

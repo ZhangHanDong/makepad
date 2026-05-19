@@ -1,7 +1,10 @@
 use {
     crate::{
         cx::{Cx, OsType},
-        cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
+        cx_api::{
+            CxOsApi, CxOsOp, NativeHostCommand, NativeHostKind, NativeHostPropUpdate,
+            NativeHostProps, NativeTextInputCommand, OpenUrlInPlace,
+        },
         draw_pass::CxDrawPassParent,
         event::{
             drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
@@ -19,6 +22,9 @@ use {
             apple::{
                 apple_classes::init_apple_classes_global,
                 apple_game_input::AppleGameInput,
+                apple_native_host::MacosNativeHost,
+                apple_native_label::MacosNativeLabel,
+                apple_native_text_input::MacosNativeTextInput,
                 apple_sys::*,
                 apple_util::str_to_nsstring,
                 apple_video_player::AppleUnifiedVideoPlayer,
@@ -567,7 +573,9 @@ impl Cx {
                     // next NSEvent — the symptom being a Ctrl+C that runs
                     // the user's `QuitRequested` / `Shutdown` handlers but
                     // never actually exits.
-                    if let EventFlow::Exit = self.cocoa_event_callback(MacosEvent::Paint, metal_cx, metal_windows) {
+                    if let EventFlow::Exit =
+                        self.cocoa_event_callback(MacosEvent::Paint, metal_cx, metal_windows)
+                    {
                         return EventFlow::Exit;
                     }
 
@@ -892,6 +900,7 @@ impl Cx {
         metal_windows: &mut Vec<MetalWindow>,
         metal_cx: &MetalCx,
     ) -> EventFlow {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
@@ -1236,6 +1245,118 @@ impl Cx {
                 CxOsOp::CloseSystemBrowser { browser_id } => {
                     if let Some(mut browser) = self.os.system_browsers.remove(&browser_id) {
                         browser.cleanup();
+                    }
+                }
+                CxOsOp::CreateNativeView { id, kind, props } => match (kind, props) {
+                    (
+                        NativeHostKind::TextInput,
+                        NativeHostProps::TextInput {
+                            text,
+                            placeholder,
+                            editable,
+                        },
+                    ) => {
+                        self.os.native_hosts.entry(id).or_insert_with(|| {
+                            Box::new(MacosNativeTextInput::new(id, &text, &placeholder, editable))
+                        });
+                    }
+                    (NativeHostKind::Label, NativeHostProps::Label { text }) => {
+                        self.os
+                            .native_hosts
+                            .entry(id)
+                            .or_insert_with(|| Box::new(MacosNativeLabel::new(&text)));
+                    }
+                    _ => {}
+                },
+                CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
+                    let Some(draw_list_id) = area.draw_list_id() else {
+                        continue;
+                    };
+                    let Some(draw_pass_id) = self.draw_lists[draw_list_id].draw_pass_id else {
+                        continue;
+                    };
+                    let Some(window_id) = self.get_pass_window_id(draw_pass_id) else {
+                        continue;
+                    };
+                    let Some(metal_window) =
+                        metal_windows.iter().find(|w| w.window_id == window_id)
+                    else {
+                        continue;
+                    };
+
+                    let mut unclipped_rect = area.rect(self);
+                    let mut clipped_rect = area.clipped_rect(self);
+                    let win_h = self.windows[window_id].window_geom.inner_size.y;
+                    unclipped_rect.pos.y = win_h - unclipped_rect.pos.y - unclipped_rect.size.y;
+                    clipped_rect.pos.y = win_h - clipped_rect.pos.y - clipped_rect.size.y;
+                    let parent_view = metal_window.cocoa_window.view;
+
+                    if let Some(host) = self.os.native_hosts.get_mut(&id) {
+                        host.update_layout(
+                            window_id,
+                            parent_view,
+                            unclipped_rect,
+                            clipped_rect,
+                            visible,
+                        );
+                    }
+                }
+                CxOsOp::UpdateNativeViewProps { id, update } => match update {
+                    NativeHostPropUpdate::TextInputText { text, programmatic } => {
+                        if let Some(input) = self.os.native_hosts.get_mut(&id).and_then(|host| {
+                            host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
+                        }) {
+                            input.set_text(&text, programmatic);
+                        }
+                    }
+                    NativeHostPropUpdate::TextInputPlaceholder { placeholder } => {
+                        if let Some(input) = self.os.native_hosts.get_mut(&id).and_then(|host| {
+                            host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
+                        }) {
+                            input.set_placeholder(&placeholder);
+                        }
+                    }
+                    NativeHostPropUpdate::TextInputEditable { editable } => {
+                        if let Some(input) = self.os.native_hosts.get_mut(&id).and_then(|host| {
+                            host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
+                        }) {
+                            input.set_editable(editable);
+                        }
+                    }
+                    NativeHostPropUpdate::LabelText { text } => {
+                        if let Some(label) =
+                            self.os.native_hosts.get_mut(&id).and_then(|host| {
+                                host.as_any_mut().downcast_mut::<MacosNativeLabel>()
+                            })
+                        {
+                            label.set_text(&text);
+                        }
+                    }
+                },
+                CxOsOp::CommandNativeView { id, command } => match command {
+                    NativeHostCommand::TextInput(command) => {
+                        if let Some(input) = self.os.native_hosts.get_mut(&id).and_then(|host| {
+                            host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
+                        }) {
+                            match command {
+                                NativeTextInputCommand::Focus => input.focus(),
+                                NativeTextInputCommand::Blur => input.blur(),
+                                NativeTextInputCommand::SelectAll => input.select_all(),
+                                NativeTextInputCommand::Copy => input.copy(),
+                                NativeTextInputCommand::Cut => input.cut(),
+                                NativeTextInputCommand::Paste => input.paste(),
+                            }
+                        }
+                    }
+                },
+                CxOsOp::DetachNativeView { id } => {
+                    if let Some(host) = self.os.native_hosts.get_mut(&id) {
+                        host.detach();
+                    }
+                }
+                CxOsOp::CloseNativeView { id } => {
+                    if let Some(mut host) = self.os.native_hosts.remove(&id) {
+                        host.cleanup();
                     }
                 }
                 CxOsOp::SaveFileDialog(settings) => {
@@ -1701,5 +1822,6 @@ pub struct CxOs {
     pub(crate) video_players: HashMap<LiveId, AppleUnifiedVideoPlayer>,
     pub(crate) native_camera_previews: HashMap<LiveId, MacosNativeCameraPreview>,
     pub(crate) system_browsers: HashMap<LiveId, MacosSystemBrowser>,
+    pub(crate) native_hosts: HashMap<LiveId, Box<dyn MacosNativeHost>>,
     pub(crate) internal_drag_items: Option<Arc<Vec<DragItem>>>,
 }
