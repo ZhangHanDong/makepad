@@ -15,6 +15,7 @@ workspace.members = [
     "examples/vector",
     "examples/comfyui",
     "examples/aichat",
+    "examples/native_liquid_glass",
     "examples/pdf",
     "examples/exf",
     "examples/shader",

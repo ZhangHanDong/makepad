@@ -8,6 +8,7 @@ This document supersedes the "single native substrate" mental model from v1 for 
 
 Related documents:
 
+- [APPLE-NATIVE-LIQUID-GLASS-STANDARD.md](APPLE-NATIVE-LIQUID-GLASS-STANDARD.md)
 - [aichat-liquid-glass-v1-release-notes.md](aichat-liquid-glass-v1-release-notes.md)
 - [aichat-liquid-glass-v3-macos-native.plan.md](aichat-liquid-glass-v3-macos-native.plan.md)
 - [AICHAT-LIQUID-GLASS-OPAQUE-PIXEL-AUDIT.md](AICHAT-LIQUID-GLASS-OPAQUE-PIXEL-AUDIT.md)
@@ -15,6 +16,8 @@ Related documents:
 
 External references:
 
+- Apple Liquid Glass technology overview: <https://developer.apple.com/documentation/technologyoverviews/liquid-glass>
+- Apple "Adopting Liquid Glass": <https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass>
 - Apple AppKit `NSGlassEffectView`: <https://developer.apple.com/documentation/appkit/nsglasseffectview>
 - Apple AppKit `NSGlassEffectContainerView`: <https://developer.apple.com/documentation/appkit/nsglasseffectcontainerview>
 - Apple UIKit `UIGlassEffect`: <https://developer.apple.com/documentation/uikit/uiglasseffect>

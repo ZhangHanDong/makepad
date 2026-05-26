@@ -727,6 +727,54 @@ script_mod! {
                         height: Fill
                         native: false
                         spacing: 20.0
+                        flow: Overlay
+
+                    showcase_panel := GlassPanel {
+                        visible: false
+                        width: Fill
+                        height: Fill
+                        margin: Inset{left: 18 top: 18 right: 18 bottom: 18}
+                        native: true
+                        native_radius: 38.0
+                        native_z_order: 0.0
+                        show_bg: true
+                        draw_bg +: {
+                            tint_color: #x0A3A30
+                            tint_alpha: 0.10
+                            border_color: #xEAD8B8
+                            border_alpha: 0.12
+                            border_width: 1.0
+                            corner_radius: 38.0
+                            halo_strength: 0.0
+                            halo_radius: 0.0
+                            highlight_strength: 0.06
+                            highlight_band_height: 44.0
+                            noise_strength: 0.001
+                        }
+                    }
+
+                    showcase_overlay := View {
+                        visible: false
+                        width: Fill
+                        height: Fill
+                        flow: Down
+                        padding: Inset{left: 44 top: 36 right: 44 bottom: 36}
+                        spacing: 10
+
+                        showcase_title := Label {
+                            text: "Native Glass Showcase"
+                            draw_text.color: #xF3E3C7E8
+                            draw_text.text_style.font_size: 13
+                        }
+
+                        showcase_subtitle := Label {
+                            text: "macOS clear"
+                            draw_text.color: #xEAD8B8A8
+                            draw_text.text_style.font_size: 11
+                        }
+
+                        View { width: Fill height: Fill }
+                    }
 
                     app_shell := GlassShell {
                         native: true
@@ -1155,15 +1203,21 @@ script_mod! {
                     }
                     }
 
-                    resize_grip := Vector{
-                        width: 34
-                        height: 34
-                        margin: Inset{right: 18 bottom: 18}
+                    resize_grip_host := View {
+                        width: Fill
+                        height: Fill
+                        flow: Overlay
                         align: Align{x: 1.0 y: 1.0}
-                        viewbox: vec4(0 0 34 34)
-                        Path{d: "M 18 28 L 28 18" fill: false stroke: #xEAD8B8AA stroke_width: 1.5 stroke_linecap: "round"}
-                        Path{d: "M 12 28 L 28 12" fill: false stroke: #xF3E3C788 stroke_width: 1.2 stroke_linecap: "round"}
-                        Path{d: "M 24 28 L 28 24" fill: false stroke: #x9F7E4BAA stroke_width: 1.5 stroke_linecap: "round"}
+
+                        resize_grip := Vector{
+                            width: 34
+                            height: 34
+                            margin: Inset{right: 18 bottom: 18}
+                            viewbox: vec4(0 0 34 34)
+                            Path{d: "M 18 28 L 28 18" fill: false stroke: #xEAD8B8AA stroke_width: 1.5 stroke_linecap: "round"}
+                            Path{d: "M 12 28 L 28 12" fill: false stroke: #xF3E3C788 stroke_width: 1.2 stroke_linecap: "round"}
+                            Path{d: "M 24 28 L 28 24" fill: false stroke: #x9F7E4BAA stroke_width: 1.5 stroke_linecap: "round"}
+                        }
                     }
                 }
             }
@@ -2026,6 +2080,92 @@ fn native_compositing_proof_transparent_overlay() -> bool {
 
 fn native_compositing_proof_transparent_overlay_from_value(value: Option<&str>) -> bool {
     value == Some("transparent-overlay")
+}
+
+fn native_glass_showcase_enabled() -> bool {
+    native_glass_showcase_enabled_from_value(
+        std::env::var("AICHAT_NATIVE_GLASS_SHOWCASE")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_glass_showcase_enabled_from_value(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true" | "on" | "showcase"))
+}
+
+fn resize_grip_visible_for_native_glass_showcase(_show_native_glass_showcase: bool) -> bool {
+    true
+}
+
+fn native_glass_showcase_mode_label(
+    interleave_backend_enabled: bool,
+    lower_scene_pass_enabled: bool,
+    interleave_profile_name: Option<&str>,
+    native_style: Option<MacosGlassStyle>,
+) -> &'static str {
+    if interleave_backend_enabled && lower_scene_pass_enabled {
+        match interleave_profile_name {
+            Some("diagnostic") => "interleave diagnostic",
+            Some("production") => "interleave production",
+            _ => "interleave lower scene",
+        }
+    } else {
+        match native_style {
+            Some(MacosGlassStyle::Regular) => "macOS native regular",
+            Some(MacosGlassStyle::Clear) | None => "macOS native clear",
+        }
+    }
+}
+
+fn native_glass_showcase_style_from_backend_value(value: Option<&str>) -> Option<MacosGlassStyle> {
+    let (request, warning) = parse_glass_backend(value);
+    if warning.is_some() {
+        return None;
+    }
+    match request {
+        GlassBackendRequest::MacosNative(style) => Some(style),
+        GlassBackendRequest::AppleNativeInterleave => Some(native_interleave_style()),
+        GlassBackendRequest::Auto => Some(MacosGlassStyle::Regular),
+        _ => None,
+    }
+}
+
+const DEFAULT_NATIVE_GLASS_SHOWCASE_CLEAR_ALPHA: f32 = 0.26;
+
+fn native_glass_showcase_clear_alpha() -> f32 {
+    native_glass_showcase_clear_alpha_from_value(
+        std::env::var("AICHAT_NATIVE_GLASS_SHOWCASE_CLEAR_ALPHA")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_glass_showcase_clear_alpha_from_value(value: Option<&str>) -> f32 {
+    value
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|alpha| *alpha > 0.0 && *alpha < 1.0)
+        .unwrap_or(DEFAULT_NATIVE_GLASS_SHOWCASE_CLEAR_ALPHA)
+}
+
+fn native_glass_showcase_tint_for_style(native_style: Option<MacosGlassStyle>) -> Option<Vec4f> {
+    native_glass_showcase_tint_for_style_with_clear_alpha(
+        native_style,
+        native_glass_showcase_clear_alpha(),
+    )
+}
+
+fn native_glass_showcase_tint_for_style_with_clear_alpha(
+    native_style: Option<MacosGlassStyle>,
+    clear_alpha: f32,
+) -> Option<Vec4f> {
+    native_style.map(|style| {
+        let alpha = match style {
+            MacosGlassStyle::Regular => 0.55,
+            MacosGlassStyle::Clear => clear_alpha,
+        };
+        vec4(0.06, 0.08, 0.12, alpha)
+    })
 }
 
 fn native_lower_scene_pass_probe_enabled() -> bool {
@@ -6019,6 +6159,11 @@ impl App {
             Some(MacosGlassStyle::Clear) => makepad_widgets::glass_panel::GlassNativeStyle::Clear,
             _ => makepad_widgets::glass_panel::GlassNativeStyle::Regular,
         };
+        let showcase_native_tint = if native_glass_showcase_enabled() {
+            native_glass_showcase_tint_for_style(appearance.substrate.native_style())
+        } else {
+            None
+        };
         if appearance.substrate.native_style() == Some(MacosGlassStyle::Clear) {
             glass = glass.with_native_clear_multiplier();
         }
@@ -6039,6 +6184,30 @@ impl App {
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
             native: #(use_native_panels)
+        });
+
+        let mut showcase_panel = self.ui.view(cx, ids!(showcase_panel));
+        script_apply_eval!(cx, showcase_panel, {
+            native: #(use_native_panels)
+            native_style: #(native_style)
+            native_tint: #(showcase_native_tint)
+            draw_bg +: {
+                tint_alpha: #(glass.app)
+                border_alpha: #(0.18 * glass.border_scale)
+                highlight_strength: #(0.10 * glass.highlight_scale)
+                noise_strength: #(0.002 * glass.noise_scale)
+                halo_strength: #(0.0 * glass.halo_scale)
+                backdrop_sample_strength: #(backdrop_sample_strength)
+                backdrop_mix: #(backdrop_mix)
+                backdrop_grid_strength: #(backdrop_grid_strength)
+                backdrop_blur_radius: #(backdrop_blur_radius)
+                backdrop_blur_mix: #(backdrop_blur_mix)
+                backdrop_texture_strength: #(backdrop_texture_strength)
+                backdrop_refraction_strength: #(backdrop_refraction_strength)
+                backdrop_rim_strength: #(backdrop_rim_strength)
+                chroma_strength: #(chroma_strength)
+                backdrop_liquid_warp_strength: #(backdrop_liquid_warp_strength)
+            }
         });
 
         let mut app_shell = self.ui.view(cx, ids!(app_shell));
@@ -6464,6 +6633,50 @@ impl MatchEvent for App {
         self.ui
             .widget(cx, ids!(glass_container))
             .set_visible(cx, !show_metal_probe_pattern);
+        let show_native_glass_showcase = native_glass_showcase_enabled();
+        if show_native_glass_showcase {
+            let interleave_profile = native_interleave_scene_profile();
+            let startup_glass_backend = std::env::var("AICHAT_GLASS_BACKEND").ok();
+            let startup_native_style =
+                native_glass_showcase_style_from_backend_value(startup_glass_backend.as_deref())
+                    .or_else(|| self.glass_appearance.substrate.native_style());
+            let showcase_mode = native_glass_showcase_mode_label(
+                apple_native_interleave_backend_enabled(),
+                native_lower_scene_pass_probe_enabled(),
+                Some(interleave_profile.name),
+                startup_native_style,
+            );
+            log!(
+                "[liquid-glass] native-glass-showcase=enabled mode={}",
+                showcase_mode
+            );
+            let showcase_title = if apple_native_interleave_backend_enabled()
+                && native_lower_scene_pass_probe_enabled()
+            {
+                "Native Glass Interleave Showcase"
+            } else {
+                "Native Glass Showcase"
+            };
+            self.ui
+                .label(cx, ids!(showcase_title))
+                .set_text(cx, showcase_title);
+            self.ui
+                .label(cx, ids!(showcase_subtitle))
+                .set_text(cx, showcase_mode);
+        }
+        self.ui
+            .widget(cx, ids!(app_shell))
+            .set_visible(cx, !show_native_glass_showcase);
+        self.ui
+            .widget(cx, ids!(showcase_panel))
+            .set_visible(cx, show_native_glass_showcase);
+        self.ui
+            .view(cx, ids!(showcase_overlay))
+            .set_visible(cx, show_native_glass_showcase);
+        self.ui.view(cx, ids!(resize_grip_host)).set_visible(
+            cx,
+            resize_grip_visible_for_native_glass_showcase(show_native_glass_showcase),
+        );
         let initial_glass_opacity = initial_glass_opacity();
         self.ui
             .slider(cx, ids!(opacity_slider))
@@ -6766,12 +6979,17 @@ mod tests {
         native_fullscreen_probe_enabled_from_value, native_fullscreen_probe_should_continue_wait,
         native_fullscreen_probe_should_delay_exit, native_fullscreen_probe_should_start,
         native_geometry_probe_enabled_from_value, native_geometry_probe_should_start,
+        native_glass_showcase_clear_alpha_from_value, native_glass_showcase_enabled_from_value,
+        native_glass_showcase_mode_label, native_glass_showcase_style_from_backend_value,
+        native_glass_showcase_tint_for_style,
+        native_glass_showcase_tint_for_style_with_clear_alpha,
         native_inactive_probe_enabled_from_value, native_inactive_probe_log_line,
         native_interleave_scene_profile_from_value, native_interleave_style_from_value,
         native_spacing_probe_enabled_from_value, native_spacing_probe_should_continue,
         native_spacing_probe_spacing_for_frame, native_substrate_resolved_appearance,
         native_transient_probe_enabled_from_value, parse_glass_backend, render_state_templates,
-        render_state_templates_for_ui, resolve_glass_appearance, resolve_glass_appearance_for_backend,
+        render_state_templates_for_ui, resize_grip_visible_for_native_glass_showcase,
+        resolve_glass_appearance, resolve_glass_appearance_for_backend,
         resolve_startup_glass_appearance, shader_backdrop_visual_profile, should_start_window_drag,
         strip_appplan_fences_for_ui, Agent, App, AppCapability, AppDemoState, BackendType,
         CalculatorDemoState, ChatScrollEdgeVisibility, ClaudeCodeCliAgent, GenericCollectionsState,
@@ -6884,6 +7102,137 @@ mod tests {
         assert!(!native_transient_probe_enabled_from_value(None));
         assert!(!native_transient_probe_enabled_from_value(Some("0")));
         assert!(!native_transient_probe_enabled_from_value(Some("false")));
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_env_contract() {
+        assert!(native_glass_showcase_enabled_from_value(Some("1")));
+        assert!(native_glass_showcase_enabled_from_value(Some("true")));
+        assert!(native_glass_showcase_enabled_from_value(Some("on")));
+        assert!(native_glass_showcase_enabled_from_value(Some(" showcase ")));
+        assert!(!native_glass_showcase_enabled_from_value(None));
+        assert!(!native_glass_showcase_enabled_from_value(Some("0")));
+        assert!(!native_glass_showcase_enabled_from_value(Some("false")));
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_mode_labels_interleave() {
+        assert_eq!(
+            native_glass_showcase_mode_label(false, false, None, Some(MacosGlassStyle::Clear)),
+            "macOS native clear"
+        );
+        assert_eq!(
+            native_glass_showcase_mode_label(
+                true,
+                false,
+                Some("production"),
+                Some(MacosGlassStyle::Regular)
+            ),
+            "macOS native regular"
+        );
+        assert_eq!(
+            native_glass_showcase_mode_label(true, false, Some("production"), None),
+            "macOS native clear"
+        );
+        assert_eq!(
+            native_glass_showcase_mode_label(
+                true,
+                true,
+                Some("production"),
+                Some(MacosGlassStyle::Clear)
+            ),
+            "interleave production"
+        );
+        assert_eq!(
+            native_glass_showcase_mode_label(
+                true,
+                true,
+                Some("diagnostic"),
+                Some(MacosGlassStyle::Regular)
+            ),
+            "interleave diagnostic"
+        );
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_style_label_uses_requested_backend() {
+        assert_eq!(
+            native_glass_showcase_style_from_backend_value(Some("macos-native")),
+            Some(MacosGlassStyle::Regular)
+        );
+        assert_eq!(
+            native_glass_showcase_style_from_backend_value(Some("apple-native-underlay-clear")),
+            Some(MacosGlassStyle::Clear)
+        );
+        assert_eq!(
+            native_glass_showcase_style_from_backend_value(Some("auto")),
+            Some(MacosGlassStyle::Regular)
+        );
+        assert_eq!(native_glass_showcase_style_from_backend_value(None), None);
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_tint_uses_visible_native_material() {
+        let regular = native_glass_showcase_tint_for_style(Some(MacosGlassStyle::Regular))
+            .expect("regular native style should get a native tint");
+        assert_eq!(regular.x, 0.06);
+        assert_eq!(regular.y, 0.08);
+        assert_eq!(regular.z, 0.12);
+        assert!((regular.w - 0.55).abs() < f32::EPSILON);
+
+        let clear = native_glass_showcase_tint_for_style(Some(MacosGlassStyle::Clear))
+            .expect("clear native style should get a native tint");
+        assert_eq!(clear.x, 0.06);
+        assert_eq!(clear.y, 0.08);
+        assert_eq!(clear.z, 0.12);
+        assert!((clear.w - 0.26).abs() < f32::EPSILON);
+
+        assert_eq!(native_glass_showcase_tint_for_style(None), None);
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_clear_alpha_override_contract() {
+        assert_eq!(native_glass_showcase_clear_alpha_from_value(None), 0.26);
+        assert_eq!(
+            native_glass_showcase_clear_alpha_from_value(Some("0.18")),
+            0.18
+        );
+        assert_eq!(
+            native_glass_showcase_clear_alpha_from_value(Some(" 0.20 ")),
+            0.20
+        );
+        assert_eq!(
+            native_glass_showcase_clear_alpha_from_value(Some("0")),
+            0.26
+        );
+        assert_eq!(
+            native_glass_showcase_clear_alpha_from_value(Some("1.2")),
+            0.26
+        );
+        assert_eq!(
+            native_glass_showcase_clear_alpha_from_value(Some("bad")),
+            0.26
+        );
+
+        let light = native_glass_showcase_tint_for_style_with_clear_alpha(
+            Some(MacosGlassStyle::Clear),
+            0.18,
+        )
+        .expect("clear native style should get a native tint");
+        assert!((light.w - 0.18).abs() < f32::EPSILON);
+
+        let regular = native_glass_showcase_tint_for_style_with_clear_alpha(
+            Some(MacosGlassStyle::Regular),
+            0.18,
+        )
+        .expect("regular native style should ignore clear alpha override");
+        assert!((regular.w - 0.55).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn aichat_native_glass_showcase_keeps_resize_grip_visible() {
+        assert!(resize_grip_visible_for_native_glass_showcase(false));
+        assert!(resize_grip_visible_for_native_glass_showcase(true));
     }
 
     #[test]

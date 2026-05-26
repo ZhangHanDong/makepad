@@ -357,6 +357,37 @@ impl MacosWindow {
         )
     }
 
+    fn transparent_window_background_alpha_floor_enabled_from_value(value: Option<&str>) -> bool {
+        matches!(
+            value.map(str::trim),
+            Some("1" | "true" | "on" | "ghostty" | "ghostty-floor" | "white-alpha-0.001")
+        )
+    }
+
+    fn transparent_window_background_alpha_floor_enabled() -> bool {
+        Self::transparent_window_background_alpha_floor_enabled_from_value(
+            std::env::var("MAKEPAD_MACOS_TRANSPARENT_WINDOW_BACKGROUND")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn transparent_window_background_color() -> ObjcId {
+        unsafe {
+            if Self::transparent_window_background_alpha_floor_enabled() {
+                msg_send![
+                    class!(NSColor),
+                    colorWithSRGBRed: 1.0f64
+                    green: 1.0f64
+                    blue: 1.0f64
+                    alpha: 0.001f64
+                ]
+            } else {
+                msg_send![class!(NSColor), clearColor]
+            }
+        }
+    }
+
     pub(crate) fn native_glass_window_geometry_changed(
         old_geom: &WindowGeom,
         new_geom: &WindowGeom,
@@ -2294,8 +2325,7 @@ impl MacosWindow {
             let opaque = if visuals.transparent { NO } else { YES };
             let () = msg_send![self.window, setOpaque: opaque];
             let bg_color = if visuals.transparent {
-                let clear: ObjcId = msg_send![class!(NSColor), clearColor];
-                clear
+                Self::transparent_window_background_color()
             } else {
                 let color: ObjcId = msg_send![class!(NSColor), windowBackgroundColor];
                 color
@@ -3159,6 +3189,26 @@ mod tests {
         assert!(
             !MacosWindow::native_glass_container_content_view_enabled_from_value(Some("direct"))
         );
+    }
+
+    #[test]
+    fn transparent_window_background_alpha_floor_env_matches_ghostty_mode() {
+        assert!(MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(Some(
+            "ghostty-floor"
+        )));
+        assert!(MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(Some(
+            "white-alpha-0.001"
+        )));
+        assert!(MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(Some(
+            " true "
+        )));
+        assert!(!MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(None));
+        assert!(!MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(Some(
+            ""
+        )));
+        assert!(!MacosWindow::transparent_window_background_alpha_floor_enabled_from_value(Some(
+            "clear"
+        )));
     }
 
     #[test]

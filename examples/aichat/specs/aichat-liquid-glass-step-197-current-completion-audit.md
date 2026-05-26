@@ -31,7 +31,7 @@ single macOS visual pass. The concrete completion criteria are:
 | macOS style raw values | `NativeGlassStyle::Regular.macos_raw_value() == 0`; `Clear == 1`; Studio logs through build `[69]` show `style_raw=1` for clear; above-metal regular build `[68]` shows `style_raw=0` | Covered for macOS runtime path |
 | macOS public container API semantics | Step 196 promotes `NSGlassEffectContainerView.contentView` parenting by default; build `[69]` logs `role=container-created-contentView class=NSView` | Covered structurally; visual effect still needs manual verdict |
 | macOS native batch install | build `[69]` logs `containers=1 panels_installed=4 panels_failed=0` and `app-substrate=apple-native-interleave state=Installed` | Covered for production interleave route |
-| macOS visual Liquid Glass material | user reports have varied; recent diagnostic reports included flat grid/no liquid material; build `[69]` needs a fresh manual verdict after contentView default | Incomplete |
+| macOS visual Liquid Glass material | Step 198 records `makepad-example-aichat-native-glass-showcase` build `[15]` with user system screenshot `/Users/zhangalex/Desktop/截屏2026-05-26 14.29.40.png`; broad clear native material is visible in the showcase target | Showcase underlay pass covered; real aichat/interleave visual verdict still required |
 | Studio visual run policy | run through Studio remote release RunItems; latest production route build `[69]`, above-metal probe build `[68]` | Covered |
 | Screenshot evidence | Studio screenshots omit AppKit native layer; system `screencapture` remains black on this machine | Blocked locally; requires manual visual verdict or external screenshot |
 | macOS native controls | macOS native button activation and accessibility probes are documented in completion audit through Step 165 | Partially covered; broader focus/accessibility behavior remains incomplete |
@@ -56,6 +56,14 @@ cargo check -p makepad-example-aichat --release
 git diff --check
 ```
 
+Additional Step 198 verification:
+
+```text
+cargo check -p makepad-example-aichat --release
+cargo test -p makepad-example-aichat --release aichat_native_glass_showcase_keeps_resize_grip_visible
+git diff --check
+```
+
 Studio release evidence:
 
 ```text
@@ -77,11 +85,11 @@ public AppKit container contentView model and reaches State 4 with four panels.
 However, this does not prove full Apple Liquid Glass support. The remaining
 completion blockers are:
 
-1. fresh macOS manual visual verdict after Step 196
+1. fresh macOS manual visual verdict for the real aichat
+   `AppleNativeInterleave` route after Step 198's showcase-only pass
 2. iOS 26 runtime validation for UIKit native glass surfaces and controls
 3. advanced behavior validation for fullscreen, Stage Manager/split view,
    multi-display, morphing, inactive-window visual behavior, popup/modal, and
    accessibility/focus
 4. system-composited evidence source that is not Studio framebuffer and not the
    currently black `screencapture` output
-

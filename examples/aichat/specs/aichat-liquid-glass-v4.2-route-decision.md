@@ -1,5 +1,9 @@
 # aichat Liquid Glass v4.2 Route Decision
 
+Related standard:
+
+- [APPLE-NATIVE-LIQUID-GLASS-STANDARD.md](APPLE-NATIVE-LIQUID-GLASS-STANDARD.md)
+
 ## Selected Route: ShaderBackdropInterior
 
 v4.2 selects `ShaderBackdropInterior` for complete aichat interior Liquid

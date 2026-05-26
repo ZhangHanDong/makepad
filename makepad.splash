@@ -43,6 +43,24 @@ let RunStudioRelease = RunItem{
     }
 }
 
+let RunNativeLiquidGlass = RunItem{
+    package_name: "makepad-example-native-liquid-glass"
+    native_control_action_probe: ""
+    on_run: fn(id){
+        hub.run(
+            {
+                "STUDIO_HOST": hub.studio_local_host()
+                "STUDIO_BUILD": id.to_string()
+                "STUDIO_CRATE": self.name
+                "MAKEPAD_MACOS_TRANSPARENT_WINDOW_BACKGROUND": "ghostty-floor"
+                "MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE": self.native_control_action_probe
+            },
+            "cargo",
+            ["run" "-p" self.package_name "--release" "--message-format=json" "--" "--message-format=json"],
+        )
+    }
+}
+
 let RunRelease = RunItem{
     on_run: fn(id){
         hub.run(
@@ -73,6 +91,9 @@ let RunAichatMacosGlass = RunItem{
     native_control_mouse_probe: ""
     native_control_cg_probe: ""
     native_transient_probe: ""
+    native_glass_showcase: ""
+    native_glass_showcase_clear_alpha: ""
+    transparent_window_background: ""
     on_run: fn(id){
         hub.run(
             {
@@ -98,6 +119,9 @@ let RunAichatMacosGlass = RunItem{
                 "MAKEPAD_NATIVE_GLASS_CONTROL_MOUSE_EVENT_PROBE": self.native_control_mouse_probe
                 "MAKEPAD_NATIVE_GLASS_CONTROL_CGEVENT_PROBE": self.native_control_cg_probe
                 "MAKEPAD_NATIVE_GLASS_TRANSIENT_PROBE": self.native_transient_probe
+                "AICHAT_NATIVE_GLASS_SHOWCASE": self.native_glass_showcase
+                "AICHAT_NATIVE_GLASS_SHOWCASE_CLEAR_ALPHA": self.native_glass_showcase_clear_alpha
+                "MAKEPAD_MACOS_TRANSPARENT_WINDOW_BACKGROUND": self.transparent_window_background
             },
             "cargo",
             ["run" "-p" "makepad-example-aichat" "--release" "--message-format=json" "--" "--message-format=json"],
@@ -135,6 +159,8 @@ hub.set_run_items([
     RunStudioRelease{name: "makepad-example-map"}
     RunStudioRelease{name: "makepad-example-todo"}
     RunStudioRelease{name: "makepad-example-aichat"}
+    RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass"}
+    RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass-control-action-probe", native_control_action_probe: "Native Press"}
     RunRelease{name: "makepad-example-aichat-native", run: "makepad-example-aichat"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-proof", backend: "shader-backdrop-proof"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-blur-proof", backend: "shader-backdrop-blur-proof"}
@@ -152,6 +178,10 @@ hub.set_run_items([
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native", backend: "macos-native"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear", backend: "macos-native-clear"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-transparent-overlay", backend: "macos-native-clear", compositing_proof: "transparent-overlay"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-native-glass-showcase", backend: "macos-native-clear", compositing_proof: "transparent-overlay", native_glass_showcase: "1", transparent_window_background: "ghostty-floor"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-native-glass-showcase-regular", backend: "macos-native", compositing_proof: "transparent-overlay", native_glass_showcase: "1", transparent_window_background: "ghostty-floor"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-native-glass-showcase-interleave", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "production", compositing_proof: "transparent-overlay", native_glass_showcase: "1"}
+    RunAichatMacosGlass{name: "makepad-example-aichat-native-glass-showcase-interleave-diagnostic", backend: "apple-native-interleave", interleave_layer_probe: "lower-scene-pass", interleave_scene_profile: "diagnostic", compositing_proof: "transparent-overlay", native_glass_showcase: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-spacing-probe", backend: "macos-native-clear", spacing_probe: "animate"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-inactive-probe", backend: "macos-native-clear", inactive_probe: "1"}
     RunAichatMacosGlass{name: "makepad-example-aichat-macos-native-clear-fullscreen-probe", backend: "macos-native-clear", fullscreen_probe: "1"}
