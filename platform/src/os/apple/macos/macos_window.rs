@@ -331,6 +331,16 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_panel_result_line(
+        container_id: LiveId,
+        panel: &NativeGlassPanelResult,
+    ) -> String {
+        format!(
+            "[liquid-glass] native-panel-result container={:?} panel={:?} state={:?} reason={}",
+            container_id, panel.id, panel.state, panel.reason
+        )
+    }
+
     pub(crate) fn native_glass_geometry_snapshot_enabled_from_value(value: Option<&str>) -> bool {
         matches!(value, Some("1" | "true" | "self-resize"))
     }
@@ -834,6 +844,12 @@ impl MacosWindow {
                 container.installed_panels,
                 container.failed_panels
             );
+            for panel in &container.panels {
+                crate::log!(
+                    "{}",
+                    Self::native_glass_panel_result_line(container.id, panel)
+                );
+            }
         }
     }
 
@@ -2878,6 +2894,23 @@ mod tests {
         assert!(line.contains("appkit=(20.0,240.0,100.0,40.0)"));
         assert!(line.contains("z_order=7"));
         assert!(line.contains("visible=true"));
+    }
+
+    #[test]
+    fn native_glass_panel_result_line_records_panel_state_and_reason() {
+        let result = NativeGlassPanelResult {
+            id: LiveId(2),
+            state: NativeGlassInstallState::Installed,
+            reason: "installed",
+        };
+
+        let line = MacosWindow::native_glass_panel_result_line(LiveId(1), &result);
+
+        assert!(line.contains("native-panel-result"));
+        assert!(line.contains("container=0000000000000001"));
+        assert!(line.contains("panel=0000000000000002"));
+        assert!(line.contains("state=Installed"));
+        assert!(line.contains("reason=installed"));
     }
 
     #[test]

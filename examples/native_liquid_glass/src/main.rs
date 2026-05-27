@@ -260,6 +260,20 @@ script_mod! {
                             spacing: 8
                             draw_bg.color: #00000000
 
+                            mode_row := View{
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{x: 0.0 y: 0.5}
+                                draw_bg.color: #00000000
+
+                                mode_panels_button := ControlButton{text: "Panels"}
+                                mode_morph_button := ControlButton{text: "Morph"}
+                                mode_controls_button := ControlButton{text: "Controls"}
+                                mode_readability_button := ControlButton{text: "Readability"}
+                            }
+
                             control_row_1 := View{
                                 width: Fill
                                 height: Fit
@@ -291,7 +305,7 @@ script_mod! {
                             }
 
                             status_readout := ControlValue{
-                                text: "Clear  tint 22%  spacing 28  radius 44"
+                                text: "Panels  Clear  tint 22%  spacing 28  radius 44"
                             }
                         }
 
@@ -384,6 +398,8 @@ pub struct App {
     #[rust]
     configured: bool,
     #[rust]
+    demo_mode: NativeDemoVisualMode,
+    #[rust]
     style_mode: NativeDemoStyleMode,
     #[rust]
     tint_alpha: f32,
@@ -403,6 +419,26 @@ pub struct App {
     native_press_pulse_amount: f64,
     #[rust]
     native_press_pulse_active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativeDemoVisualMode {
+    #[default]
+    Panels,
+    Morph,
+    Controls,
+    Readability,
+}
+
+impl NativeDemoVisualMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Panels => "Panels",
+            Self::Morph => "Morph",
+            Self::Controls => "Controls",
+            Self::Readability => "Readability",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -463,13 +499,15 @@ fn native_liquid_glass_tint_for_mode(mode: NativeDemoStyleMode, alpha: f32) -> O
 }
 
 fn native_liquid_glass_status_text(
+    visual_mode: NativeDemoVisualMode,
     mode: NativeDemoStyleMode,
     alpha: f32,
     spacing: f64,
     radius: f64,
 ) -> String {
     format!(
-        "{}  tint {:.0}%  spacing {:.0}  radius {:.0}",
+        "{}  {}  tint {:.0}%  spacing {:.0}  radius {:.0}",
+        visual_mode.label(),
         mode.label(),
         clamp_native_demo_tint_alpha(alpha) * 100.0,
         clamp_native_demo_spacing(spacing),
@@ -525,6 +563,36 @@ fn native_liquid_glass_control_status_text(activations: u32, pulse: f64) -> Stri
         format!("native button {} pulse {:.0}%", activations, pulse * 100.0)
     } else {
         format!("native button {}", activations)
+    }
+}
+
+fn native_liquid_glass_visual_mode_tuning(
+    visual_mode: NativeDemoVisualMode,
+    alpha: f32,
+    spacing: f64,
+    radius: f64,
+) -> (f32, f64, f64) {
+    match visual_mode {
+        NativeDemoVisualMode::Panels => (
+            clamp_native_demo_tint_alpha(alpha),
+            clamp_native_demo_spacing(spacing),
+            clamp_native_demo_radius(radius),
+        ),
+        NativeDemoVisualMode::Morph => (
+            clamp_native_demo_tint_alpha(alpha + 0.03),
+            clamp_native_demo_spacing(spacing + 14.0),
+            clamp_native_demo_radius(radius + 10.0),
+        ),
+        NativeDemoVisualMode::Controls => (
+            clamp_native_demo_tint_alpha(alpha + 0.01),
+            clamp_native_demo_spacing(spacing - 6.0),
+            clamp_native_demo_radius(radius - 6.0),
+        ),
+        NativeDemoVisualMode::Readability => (
+            clamp_native_demo_tint_alpha(alpha + 0.10),
+            clamp_native_demo_spacing(spacing),
+            clamp_native_demo_radius(radius),
+        ),
     }
 }
 
@@ -597,11 +665,17 @@ impl App {
         let capsule = makepad_widgets::glass_panel::GlassNativeShape::Capsule;
         let main_style = self.style_mode.style();
         let top_style = self.style_mode.opposite_style();
+        let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
+            self.demo_mode,
+            self.tint_alpha,
+            self.container_spacing,
+            self.main_radius,
+        );
         let (effective_tint_alpha, effective_spacing, effective_radius) =
             native_liquid_glass_effective_tuning(
-                self.tint_alpha,
-                self.container_spacing,
-                self.main_radius,
+                mode_tint_alpha,
+                mode_spacing,
+                mode_radius,
                 self.native_press_pulse_amount,
             );
         let main_tint = native_liquid_glass_tint_for_mode(self.style_mode, effective_tint_alpha);
@@ -703,19 +777,25 @@ impl App {
     }
 
     fn update_tuning_labels(&mut self, cx: &mut Cx) {
-        let status = native_liquid_glass_status_text(
-            self.style_mode,
+        let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
+            self.demo_mode,
             self.tint_alpha,
             self.container_spacing,
             self.main_radius,
         );
+        let status = native_liquid_glass_status_text(
+            self.demo_mode,
+            self.style_mode,
+            mode_tint_alpha,
+            mode_spacing,
+            mode_radius,
+        );
         self.ui
             .label(cx, ids!(status_readout))
             .set_text(cx, &status);
-        self.ui.label(cx, ids!(spacing_caption)).set_text(
-            cx,
-            &format!("container spacing {:.0}", self.container_spacing),
-        );
+        self.ui
+            .label(cx, ids!(spacing_caption))
+            .set_text(cx, &format!("container spacing {:.0}", mode_spacing));
         self.ui.label(cx, ids!(native_control_status)).set_text(
             cx,
             &native_liquid_glass_control_status_text(
@@ -732,6 +812,7 @@ impl App {
     }
 
     fn reset_tuning(&mut self) {
+        self.demo_mode = NativeDemoVisualMode::Panels;
         self.style_mode = NativeDemoStyleMode::Clear;
         self.tint_alpha = DEFAULT_CLEAR_TINT_ALPHA;
         self.container_spacing = DEFAULT_CONTAINER_SPACING;
@@ -775,6 +856,35 @@ impl MatchEvent for App {
                 self.native_button_activations
             );
             self.start_native_press_pulse(cx);
+        }
+
+        if self
+            .ui
+            .button(cx, ids!(mode_panels_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Panels;
+            changed = true;
+        }
+        if self.ui.button(cx, ids!(mode_morph_button)).clicked(actions) {
+            self.demo_mode = NativeDemoVisualMode::Morph;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(mode_controls_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Controls;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(mode_readability_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Readability;
+            changed = true;
         }
 
         if self
@@ -843,13 +953,21 @@ impl MatchEvent for App {
         }
 
         if changed {
+            let (mode_tint_alpha, mode_spacing, mode_radius) =
+                native_liquid_glass_visual_mode_tuning(
+                    self.demo_mode,
+                    self.tint_alpha,
+                    self.container_spacing,
+                    self.main_radius,
+                );
             log!(
                 "[liquid-glass] standalone-native-example tuning {}",
                 native_liquid_glass_status_text(
+                    self.demo_mode,
                     self.style_mode,
-                    self.tint_alpha,
-                    self.container_spacing,
-                    self.main_radius
+                    mode_tint_alpha,
+                    mode_spacing,
+                    mode_radius
                 )
             );
             self.configure_native_liquid_glass(cx);
@@ -927,9 +1045,42 @@ mod tests {
     #[test]
     fn standalone_native_glass_status_text_reports_effective_values() {
         assert_eq!(
-            native_liquid_glass_status_text(NativeDemoStyleMode::Clear, 0.22, 28.0, 44.0),
-            "Clear  tint 22%  spacing 28  radius 44"
+            native_liquid_glass_status_text(
+                NativeDemoVisualMode::Panels,
+                NativeDemoStyleMode::Clear,
+                0.22,
+                28.0,
+                44.0
+            ),
+            "Panels  Clear  tint 22%  spacing 28  radius 44"
         );
+    }
+
+    #[test]
+    fn standalone_native_glass_visual_modes_have_stable_labels() {
+        assert_eq!(NativeDemoVisualMode::Panels.label(), "Panels");
+        assert_eq!(NativeDemoVisualMode::Morph.label(), "Morph");
+        assert_eq!(NativeDemoVisualMode::Controls.label(), "Controls");
+        assert_eq!(NativeDemoVisualMode::Readability.label(), "Readability");
+    }
+
+    #[test]
+    fn standalone_native_glass_visual_modes_adjust_effective_tuning() {
+        let panels =
+            native_liquid_glass_visual_mode_tuning(NativeDemoVisualMode::Panels, 0.22, 28.0, 44.0);
+        let morph =
+            native_liquid_glass_visual_mode_tuning(NativeDemoVisualMode::Morph, 0.22, 28.0, 44.0);
+        let readability = native_liquid_glass_visual_mode_tuning(
+            NativeDemoVisualMode::Readability,
+            0.22,
+            28.0,
+            44.0,
+        );
+
+        assert_eq!(panels, (0.22, 28.0, 44.0));
+        assert!(morph.1 > panels.1);
+        assert!(morph.2 > panels.2);
+        assert!(readability.0 > panels.0);
     }
 
     #[test]
