@@ -369,6 +369,42 @@ impl NativeGlassBatch {
                         .all(|(a, b)| Self::native_panel_equivalent(a, b))
             })
     }
+
+    pub fn can_update_native_views_in_place_from(&self, previous: &Self) -> bool {
+        if self.window_id != previous.window_id {
+            return false;
+        }
+
+        let (Some(container), Some(previous_container)) =
+            (self.containers.first(), previous.containers.first())
+        else {
+            return false;
+        };
+
+        if self.containers.len() != 1
+            || previous.containers.len() != 1
+            || container.id != previous_container.id
+        {
+            return false;
+        }
+
+        let mut panels: Vec<&NativeGlassPanelDescriptor> =
+            container.panels.iter().filter(|panel| panel.visible).collect();
+        let mut previous_panels: Vec<&NativeGlassPanelDescriptor> = previous_container
+            .panels
+            .iter()
+            .filter(|panel| panel.visible)
+            .collect();
+        panels.sort_by_key(|panel| panel.z_order);
+        previous_panels.sort_by_key(|panel| panel.z_order);
+
+        panels.len() == previous_panels.len()
+            && panels.iter().zip(previous_panels).all(|(panel, previous)| {
+                panel.id == previous.id
+                    && panel.z_order == previous.z_order
+                    && panel.hit_test == previous.hit_test
+            })
+    }
 }
 
 impl NativeGlassControlBatch {
@@ -812,6 +848,41 @@ mod native_glass_tests {
         let mut visible = a.clone();
         visible.containers[0].panels[0].visible = false;
         assert!(!a.equivalent_for_native_update(&visible));
+    }
+
+    #[test]
+    fn native_glass_batch_can_update_views_in_place_for_descriptor_tuning_changes() {
+        let a = batch_with_panels(vec![panel(1), panel(2)]);
+        let mut b = a.clone();
+        b.containers[0].spacing += 8.0;
+        b.containers[0].panels[0].rect.pos.x += 24.0;
+        b.containers[0].panels[0].shape = NativeGlassShape::RoundedRect { radius: 28.0 };
+        b.containers[0].panels[0].style = NativeGlassStyle::Clear;
+        b.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.9,
+            y: 0.95,
+            z: 1.0,
+            w: 0.22,
+        });
+
+        assert!(b.can_update_native_views_in_place_from(&a));
+    }
+
+    #[test]
+    fn native_glass_batch_reinstalls_when_panel_identity_or_order_changes() {
+        let a = batch_with_panels(vec![panel(1), panel(2)]);
+
+        let mut z_order = a.clone();
+        z_order.containers[0].panels[0].z_order = 9;
+        assert!(!z_order.can_update_native_views_in_place_from(&a));
+
+        let mut hidden = a.clone();
+        hidden.containers[0].panels[1].visible = false;
+        assert!(!hidden.can_update_native_views_in_place_from(&a));
+
+        let mut added = a.clone();
+        added.containers[0].panels.push(panel(3));
+        assert!(!added.can_update_native_views_in_place_from(&a));
     }
 
     #[test]

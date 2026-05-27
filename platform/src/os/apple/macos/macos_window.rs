@@ -4,7 +4,8 @@ use {
         event::{
             finger::MouseButton, DragItem, KeyModifiers, MouseDownEvent, MouseMoveEvent,
             MouseUpEvent, NativeGlassBackendState, NativeGlassBatch, NativeGlassBatchResult,
-            NativeGlassBatchValidationError, NativeGlassContainerResult, NativeGlassControlBatch,
+            NativeGlassBatchValidationError, NativeGlassContainerDescriptor,
+            NativeGlassContainerResult, NativeGlassControlBatch,
             NativeGlassControlBatchValidationError, NativeGlassControlDescriptor,
             NativeGlassHitTest, NativeGlassInstallState, NativeGlassPanelDescriptor,
             NativeGlassPanelResult, NativeGlassStyle, ScrollEvent, TextInputEvent,
@@ -451,6 +452,64 @@ impl MacosWindow {
         }
     }
 
+    unsafe fn apply_native_glass_container_descriptor(
+        native_container: ObjcId,
+        container: &NativeGlassContainerDescriptor,
+        frame: NSRect,
+    ) {
+        let () = msg_send![native_container, setFrame: frame];
+        let set_spacing_sel = sel!(setSpacing:);
+        let can_set_spacing: BOOL = msg_send![native_container, respondsToSelector: set_spacing_sel];
+        if can_set_spacing == YES {
+            let () = msg_send![native_container, setSpacing: container.spacing];
+            crate::log!(
+                "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
+                container.id,
+                container.spacing
+            );
+        }
+    }
+
+    unsafe fn apply_native_glass_panel_descriptor(
+        panel_view: ObjcId,
+        container: &NativeGlassContainerDescriptor,
+        panel: &NativeGlassPanelDescriptor,
+    ) {
+        let panel_frame = Self::native_glass_panel_ns_rect(panel.rect, container.rect);
+        let () = msg_send![panel_view, setFrame: panel_frame];
+        let () = msg_send![panel_view, setWantsLayer: YES];
+
+        let panel_layer: ObjcId = msg_send![panel_view, layer];
+        let corner_radius = panel.shape.corner_radius_for_rect(panel.rect);
+        if panel_layer != nil {
+            let () = msg_send![panel_layer, setMasksToBounds: YES];
+            let () = msg_send![panel_layer, setCornerRadius: corner_radius];
+        }
+
+        let set_style_sel = sel!(setStyle:);
+        let can_set_style: BOOL = msg_send![panel_view, respondsToSelector: set_style_sel];
+        if can_set_style == YES {
+            let () = msg_send![panel_view, setStyle: panel.style.macos_raw_value()];
+        }
+
+        let set_tint_sel = sel!(setTintColor:);
+        let can_set_tint: BOOL = msg_send![panel_view, respondsToSelector: set_tint_sel];
+        if can_set_tint == YES {
+            let tint = panel
+                .tint
+                .unwrap_or_else(|| Self::default_native_glass_tint(panel.style));
+            let ns_tint = Self::ns_color_from_vec4f(tint);
+            let () = msg_send![panel_view, setTintColor: ns_tint];
+        }
+
+        let set_corner_radius_sel = sel!(setCornerRadius:);
+        let can_set_corner_radius: BOOL =
+            msg_send![panel_view, respondsToSelector: set_corner_radius_sel];
+        if can_set_corner_radius == YES {
+            let () = msg_send![panel_view, setCornerRadius: corner_radius];
+        }
+    }
+
     fn event_style_from_native_glass(style: NativeGlassStyle) -> WindowNativeSubstrateStyle {
         match style {
             NativeGlassStyle::Regular => WindowNativeSubstrateStyle::MacosGlassRegular,
@@ -850,6 +909,34 @@ impl MacosWindow {
                     Self::native_glass_panel_result_line(container.id, panel)
                 );
             }
+        }
+    }
+
+    fn native_glass_in_place_update_result(batch: &NativeGlassBatch) -> NativeGlassBatchResult {
+        NativeGlassBatchResult {
+            window_id: batch.window_id,
+            backend_state: NativeGlassBackendState::Installed,
+            containers: batch
+                .containers
+                .iter()
+                .map(|container| {
+                    NativeGlassContainerResult::from_panel_results(
+                        container.id,
+                        NativeGlassInstallState::Installed,
+                        "updated",
+                        container
+                            .panels
+                            .iter()
+                            .filter(|panel| panel.visible)
+                            .map(|panel| NativeGlassPanelResult {
+                                id: panel.id,
+                                state: NativeGlassInstallState::Installed,
+                                reason: "updated",
+                            })
+                            .collect(),
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -1556,6 +1643,81 @@ impl MacosWindow {
         self.last_native_glass_batch_result = Some(result.clone());
     }
 
+    unsafe fn update_native_glass_batch_in_place(
+        &mut self,
+        batch: &NativeGlassBatch,
+    ) -> Option<(
+        NativeGlassBatchResult,
+        Option<WindowNativeSubstrateResolvedEvent>,
+    )> {
+        let can_update = self
+            .last_native_glass_batch
+            .as_ref()
+            .map(|previous| batch.can_update_native_views_in_place_from(previous))
+            .unwrap_or(false);
+        if !can_update || self.native_glass_container_view == nil {
+            return None;
+        }
+
+        let container = batch.containers.first()?;
+        let mut panels: Vec<&NativeGlassPanelDescriptor> = container
+            .panels
+            .iter()
+            .filter(|panel| panel.visible)
+            .collect();
+        panels.sort_by_key(|panel| panel.z_order);
+        if panels.len() != self.native_glass_panel_views.len() {
+            return None;
+        }
+
+        let bounds: NSRect = msg_send![self.container_view, bounds];
+        let native_container_frame =
+            Self::native_glass_ns_rect_from_makepad_rect(container.rect, bounds.size.height);
+        Self::apply_native_glass_container_descriptor(
+            self.native_glass_container_view,
+            container,
+            native_container_frame,
+        );
+
+        for (panel_view, panel) in self.native_glass_panel_views.iter().zip(panels) {
+            Self::apply_native_glass_panel_descriptor(*panel_view, container, panel);
+            crate::log!(
+                "[liquid-glass] native-panel-update container={:?} panel={:?} z_order={}",
+                container.id,
+                panel.id,
+                panel.z_order
+            );
+        }
+
+        let result = Self::native_glass_in_place_update_result(batch);
+        Self::log_native_glass_batch_result(&result);
+        self.cache_native_glass_batch_result(batch, &result);
+
+        let first_style = container
+            .panels
+            .iter()
+            .find(|panel| panel.visible && panel.hit_test == NativeGlassHitTest::Passthrough)
+            .map(|panel| panel.style);
+        if let Some(style) = first_style {
+            crate::log!(
+                "[liquid-glass] state=4 substrate=macos-native style={} style_raw={}",
+                match style {
+                    NativeGlassStyle::Regular => "regular",
+                    NativeGlassStyle::Clear => "clear",
+                },
+                style.macos_raw_value()
+            );
+        }
+        let compat_event = first_style.map(|style| WindowNativeSubstrateResolvedEvent {
+            window_id: batch.window_id,
+            state: WindowNativeSubstrateState::Installed,
+            style: Some(Self::event_style_from_native_glass(style)),
+            reason: "updated-native-glass-batch",
+        });
+
+        Some((result, compat_event))
+    }
+
     pub(crate) fn install_native_glass_batch(
         &mut self,
         batch: NativeGlassBatch,
@@ -1594,6 +1756,10 @@ impl MacosWindow {
         };
 
         unsafe {
+            if let Some(result) = self.update_native_glass_batch_in_place(&batch) {
+                return result;
+            }
+
             let container_class = Self::native_glass_container_view_class();
             if container_class.is_null() {
                 crate::log!(
@@ -2911,6 +3077,61 @@ mod tests {
         assert!(line.contains("panel=0000000000000002"));
         assert!(line.contains("state=Installed"));
         assert!(line.contains("reason=installed"));
+    }
+
+    #[test]
+    fn native_glass_in_place_update_result_marks_panels_updated() {
+        let batch = NativeGlassBatch {
+            window_id: WindowId(0, 0),
+            containers: vec![NativeGlassContainerDescriptor {
+                id: LiveId(1),
+                rect: Rect {
+                    pos: Vec2d { x: 0.0, y: 0.0 },
+                    size: Vec2d { x: 400.0, y: 300.0 },
+                },
+                spacing: 42.0,
+                panels: vec![
+                    NativeGlassPanelDescriptor {
+                        id: LiveId(2),
+                        rect: Rect {
+                            pos: Vec2d { x: 20.0, y: 20.0 },
+                            size: Vec2d { x: 100.0, y: 48.0 },
+                        },
+                        shape: NativeGlassShape::RoundedRect { radius: 18.0 },
+                        style: NativeGlassStyle::Clear,
+                        tint: None,
+                        hit_test: NativeGlassHitTest::Passthrough,
+                        z_order: 0,
+                        visible: true,
+                    },
+                    NativeGlassPanelDescriptor {
+                        id: LiveId(3),
+                        rect: Rect {
+                            pos: Vec2d { x: 140.0, y: 20.0 },
+                            size: Vec2d { x: 100.0, y: 48.0 },
+                        },
+                        shape: NativeGlassShape::Capsule,
+                        style: NativeGlassStyle::Regular,
+                        tint: None,
+                        hit_test: NativeGlassHitTest::Passthrough,
+                        z_order: 1,
+                        visible: true,
+                    },
+                ],
+            }],
+        };
+
+        let result = MacosWindow::native_glass_in_place_update_result(&batch);
+        let container = &result.containers[0];
+
+        assert_eq!(result.backend_state, NativeGlassBackendState::Installed);
+        assert_eq!(container.reason, "updated");
+        assert_eq!(container.installed_panels, 2);
+        assert_eq!(container.failed_panels, 0);
+        assert!(container
+            .panels
+            .iter()
+            .all(|panel| panel.reason == "updated"));
     }
 
     #[test]
