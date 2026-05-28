@@ -274,6 +274,20 @@ script_mod! {
                                 mode_readability_button := ControlButton{text: "Readability"}
                             }
 
+                            morph_row := View{
+                                visible: false
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{x: 0.0 y: 0.5}
+                                draw_bg.color: #00000000
+
+                                morph_near_button := ControlButton{text: "Near"}
+                                morph_far_button := ControlButton{text: "Far"}
+                                morph_overlap_button := ControlButton{text: "Overlap"}
+                            }
+
                             control_row_1 := View{
                                 width: Fill
                                 height: Fit
@@ -400,6 +414,8 @@ pub struct App {
     #[rust]
     demo_mode: NativeDemoVisualMode,
     #[rust]
+    morph_state: NativeDemoMorphState,
+    #[rust]
     style_mode: NativeDemoStyleMode,
     #[rust]
     tint_alpha: f32,
@@ -437,6 +453,24 @@ impl NativeDemoVisualMode {
             Self::Morph => "Morph",
             Self::Controls => "Controls",
             Self::Readability => "Readability",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativeDemoMorphState {
+    #[default]
+    Near,
+    Far,
+    Overlap,
+}
+
+impl NativeDemoMorphState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Near => "Near",
+            Self::Far => "Far",
+            Self::Overlap => "Overlap",
         }
     }
 }
@@ -504,7 +538,10 @@ struct NativeDemoVisualScene {
     native_control_visible: bool,
 }
 
-fn native_liquid_glass_visual_scene(mode: NativeDemoVisualMode) -> NativeDemoVisualScene {
+fn native_liquid_glass_visual_scene(
+    mode: NativeDemoVisualMode,
+    morph_state: NativeDemoMorphState,
+) -> NativeDemoVisualScene {
     match mode {
         NativeDemoVisualMode::Panels => NativeDemoVisualScene {
             main_panel_margin: NativeDemoInset::all(28.0),
@@ -521,20 +558,52 @@ fn native_liquid_glass_visual_scene(mode: NativeDemoVisualMode) -> NativeDemoVis
             bottom_right_label: "Regular",
             native_control_visible: false,
         },
-        NativeDemoVisualMode::Morph => NativeDemoVisualScene {
-            main_panel_margin: NativeDemoInset::all(64.0),
-            top_panel_width: 330.0,
-            top_panel_height: 96.0,
-            top_panel_margin: NativeDemoInset::top_right(118.0, 134.0),
-            bottom_panel_width: 340.0,
-            bottom_panel_height: 86.0,
-            bottom_panel_margin: NativeDemoInset::bottom(250.0),
-            top_panel_title: "Morph spacing",
-            top_panel_line_1: "near edges share one container",
-            top_panel_line_2: "spacing changes should update in place",
-            bottom_left_label: "Near",
-            bottom_right_label: "Overlap",
-            native_control_visible: false,
+        NativeDemoVisualMode::Morph => match morph_state {
+            NativeDemoMorphState::Near => NativeDemoVisualScene {
+                main_panel_margin: NativeDemoInset::all(64.0),
+                top_panel_width: 300.0,
+                top_panel_height: 92.0,
+                top_panel_margin: NativeDemoInset::top_right(170.0, 260.0),
+                bottom_panel_width: 300.0,
+                bottom_panel_height: 84.0,
+                bottom_panel_margin: NativeDemoInset::bottom(208.0),
+                top_panel_title: "Morph: Near",
+                top_panel_line_1: "edges sit inside container spacing",
+                top_panel_line_2: "watch for Apple-provided merging",
+                bottom_left_label: "Near",
+                bottom_right_label: "Gap",
+                native_control_visible: false,
+            },
+            NativeDemoMorphState::Far => NativeDemoVisualScene {
+                main_panel_margin: NativeDemoInset::all(64.0),
+                top_panel_width: 280.0,
+                top_panel_height: 86.0,
+                top_panel_margin: NativeDemoInset::top_right(62.0, 62.0),
+                bottom_panel_width: 340.0,
+                bottom_panel_height: 70.0,
+                bottom_panel_margin: NativeDemoInset::bottom(70.0),
+                top_panel_title: "Morph: Far",
+                top_panel_line_1: "panels sit outside merge distance",
+                top_panel_line_2: "container spacing should not fuse them",
+                bottom_left_label: "Far",
+                bottom_right_label: "Separate",
+                native_control_visible: false,
+            },
+            NativeDemoMorphState::Overlap => NativeDemoVisualScene {
+                main_panel_margin: NativeDemoInset::all(64.0),
+                top_panel_width: 340.0,
+                top_panel_height: 104.0,
+                top_panel_margin: NativeDemoInset::top_right(202.0, 230.0),
+                bottom_panel_width: 360.0,
+                bottom_panel_height: 96.0,
+                bottom_panel_margin: NativeDemoInset::bottom(204.0),
+                top_panel_title: "Morph: Overlap",
+                top_panel_line_1: "Regular and Clear panels cross",
+                top_panel_line_2: "z-order and style mixing stay native",
+                bottom_left_label: "Overlap",
+                bottom_right_label: "Mixed",
+                native_control_visible: false,
+            },
         },
         NativeDemoVisualMode::Controls => NativeDemoVisualScene {
             main_panel_margin: NativeDemoInset::all(72.0),
@@ -628,14 +697,19 @@ fn native_liquid_glass_tint_for_mode(mode: NativeDemoStyleMode, alpha: f32) -> O
 
 fn native_liquid_glass_status_text(
     visual_mode: NativeDemoVisualMode,
+    morph_state: NativeDemoMorphState,
     mode: NativeDemoStyleMode,
     alpha: f32,
     spacing: f64,
     radius: f64,
 ) -> String {
+    let visual_label = match visual_mode {
+        NativeDemoVisualMode::Morph => format!("{} {}", visual_mode.label(), morph_state.label()),
+        _ => visual_mode.label().to_string(),
+    };
     format!(
         "{}  {}  tint {:.0}%  spacing {:.0}  radius {:.0}",
-        visual_mode.label(),
+        visual_label,
         mode.label(),
         clamp_native_demo_tint_alpha(alpha) * 100.0,
         clamp_native_demo_spacing(spacing),
@@ -764,6 +838,7 @@ impl App {
         self.configure_window_visuals(cx);
         self.configure_native_panels(cx);
         self.configure_native_controls(cx);
+        self.configure_morph_controls(cx);
         self.update_tuning_labels(cx);
         self.ui.redraw(cx);
     }
@@ -791,7 +866,7 @@ impl App {
     fn configure_native_panels(&mut self, cx: &mut Cx) {
         let rounded_rect = makepad_widgets::glass_panel::GlassNativeShape::RoundedRect;
         let capsule = makepad_widgets::glass_panel::GlassNativeShape::Capsule;
-        let scene = native_liquid_glass_visual_scene(self.demo_mode);
+        let scene = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state);
         let main_style = self.style_mode.style();
         let top_style = self.style_mode.opposite_style();
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
@@ -876,7 +951,8 @@ impl App {
     }
 
     fn configure_native_controls(&mut self, cx: &mut Cx) {
-        let visible = native_liquid_glass_visual_scene(self.demo_mode).native_control_visible;
+        let visible = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state)
+            .native_control_visible;
         let role = makepad_widgets::button::ButtonNativeGlassRole::Primary;
         self.ui
             .view(cx, ids!(native_control_host))
@@ -887,6 +963,12 @@ impl App {
             native_control: #(visible)
             native_control_role: #(role)
         });
+    }
+
+    fn configure_morph_controls(&mut self, cx: &mut Cx) {
+        self.ui
+            .view(cx, ids!(morph_row))
+            .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Morph);
     }
 
     fn start_native_press_pulse(&mut self, cx: &mut Cx) {
@@ -928,7 +1010,7 @@ impl App {
     }
 
     fn update_tuning_labels(&mut self, cx: &mut Cx) {
-        let scene = native_liquid_glass_visual_scene(self.demo_mode);
+        let scene = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state);
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
             self.demo_mode,
             self.tint_alpha,
@@ -937,6 +1019,7 @@ impl App {
         );
         let status = native_liquid_glass_status_text(
             self.demo_mode,
+            self.morph_state,
             self.style_mode,
             mode_tint_alpha,
             mode_spacing,
@@ -980,6 +1063,7 @@ impl App {
 
     fn reset_tuning(&mut self) {
         self.demo_mode = NativeDemoVisualMode::Panels;
+        self.morph_state = NativeDemoMorphState::Near;
         self.style_mode = NativeDemoStyleMode::Clear;
         self.tint_alpha = DEFAULT_CLEAR_TINT_ALPHA;
         self.container_spacing = DEFAULT_CONTAINER_SPACING;
@@ -1051,6 +1135,26 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.demo_mode = NativeDemoVisualMode::Readability;
+            changed = true;
+        }
+
+        if self.ui.button(cx, ids!(morph_near_button)).clicked(actions) {
+            self.demo_mode = NativeDemoVisualMode::Morph;
+            self.morph_state = NativeDemoMorphState::Near;
+            changed = true;
+        }
+        if self.ui.button(cx, ids!(morph_far_button)).clicked(actions) {
+            self.demo_mode = NativeDemoVisualMode::Morph;
+            self.morph_state = NativeDemoMorphState::Far;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(morph_overlap_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Morph;
+            self.morph_state = NativeDemoMorphState::Overlap;
             changed = true;
         }
 
@@ -1131,6 +1235,7 @@ impl MatchEvent for App {
                 "[liquid-glass] standalone-native-example tuning {}",
                 native_liquid_glass_status_text(
                     self.demo_mode,
+                    self.morph_state,
                     self.style_mode,
                     mode_tint_alpha,
                     mode_spacing,
@@ -1214,6 +1319,7 @@ mod tests {
         assert_eq!(
             native_liquid_glass_status_text(
                 NativeDemoVisualMode::Panels,
+                NativeDemoMorphState::Near,
                 NativeDemoStyleMode::Clear,
                 0.22,
                 28.0,
@@ -1252,26 +1358,77 @@ mod tests {
 
     #[test]
     fn standalone_native_glass_visual_modes_have_distinct_scene_layouts() {
-        let panels = native_liquid_glass_visual_scene(NativeDemoVisualMode::Panels);
-        let morph = native_liquid_glass_visual_scene(NativeDemoVisualMode::Morph);
-        let controls = native_liquid_glass_visual_scene(NativeDemoVisualMode::Controls);
+        let panels = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Panels,
+            NativeDemoMorphState::Near,
+        );
+        let morph = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Morph,
+            NativeDemoMorphState::Near,
+        );
+        let controls = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+        );
 
         assert_ne!(panels.top_panel_width, morph.top_panel_width);
         assert!(morph.bottom_panel_margin.bottom > panels.bottom_panel_margin.bottom);
         assert!(controls.main_panel_margin.left > panels.main_panel_margin.left);
-        assert_eq!(morph.top_panel_title, "Morph spacing");
+        assert_eq!(morph.top_panel_title, "Morph: Near");
     }
 
     #[test]
     fn standalone_native_glass_controls_and_readability_modes_set_scene_purpose() {
-        let panels = native_liquid_glass_visual_scene(NativeDemoVisualMode::Panels);
-        let controls = native_liquid_glass_visual_scene(NativeDemoVisualMode::Controls);
-        let readability = native_liquid_glass_visual_scene(NativeDemoVisualMode::Readability);
+        let panels = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Panels,
+            NativeDemoMorphState::Near,
+        );
+        let controls = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+        );
+        let readability = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Readability,
+            NativeDemoMorphState::Near,
+        );
 
         assert!(!panels.native_control_visible);
         assert!(controls.native_control_visible);
         assert!(!readability.native_control_visible);
         assert!(readability.top_panel_line_1.contains("contrast"));
+    }
+
+    #[test]
+    fn standalone_native_glass_morph_states_have_distinct_scene_layouts() {
+        let near = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Morph,
+            NativeDemoMorphState::Near,
+        );
+        let far = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Morph,
+            NativeDemoMorphState::Far,
+        );
+        let overlap = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Morph,
+            NativeDemoMorphState::Overlap,
+        );
+
+        assert_ne!(near.top_panel_margin.top, far.top_panel_margin.top);
+        assert_ne!(near.bottom_panel_margin.bottom, overlap.bottom_panel_margin.bottom);
+        assert_eq!(far.bottom_left_label, "Far");
+        assert_eq!(overlap.bottom_left_label, "Overlap");
+    }
+
+    #[test]
+    fn standalone_native_glass_morph_overlap_state_places_panels_in_overlap_zone() {
+        let overlap = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Morph,
+            NativeDemoMorphState::Overlap,
+        );
+        let top_bottom = overlap.top_panel_margin.top + overlap.top_panel_height;
+        let bottom_top = 560.0 - overlap.bottom_panel_margin.bottom - overlap.bottom_panel_height;
+
+        assert!(bottom_top < top_bottom);
     }
 
     #[test]

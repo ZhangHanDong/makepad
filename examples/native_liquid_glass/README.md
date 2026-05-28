@@ -30,6 +30,10 @@ On macOS 26, the expected visual result is:
 The in-window controls update the native descriptors at runtime:
 
 - `Clear` / `Regular` switches the large panel and bottom capsule style.
+- `Panels` / `Morph` / `Controls` / `Readability` switch between focused
+  validation scenes.
+- In `Morph`, `Near` / `Far` / `Overlap` move the native panels through
+  container-spacing merge, separated, and mixed-style overlap states.
 - `Tint -` / `Tint +` changes the native tint alpha.
 - `Spacing -` / `Spacing +` changes `GlassContainer.spacing`.
 - `Radius -` / `Radius +` changes the large rounded-rect radius.
