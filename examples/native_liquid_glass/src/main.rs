@@ -335,9 +335,9 @@ script_mod! {
                             spacing: 14
                             align: Align{x: 0.5 y: 0.5}
 
-                            PanelLabel{text: "Clear"}
+                            bottom_left_label := PanelLabel{text: "Clear"}
                             spacing_caption := CaptionText{text: "container spacing 28"}
-                            PanelLabel{text: "Regular"}
+                            bottom_right_label := PanelLabel{text: "Regular"}
                             native_control_status := CaptionText{text: "native button 0"}
                         }
                     }
@@ -348,7 +348,7 @@ script_mod! {
                         flow: Overlay
                         align: Align{x: 1.0 y: 0.0}
 
-                        View{
+                        top_panel_copy_card := View{
                             width: 282
                             height: 88
                             margin: Inset{top: 54 right: 56}
@@ -357,9 +357,9 @@ script_mod! {
                             padding: Inset{left: 22 top: 18 right: 22 bottom: 16}
                             draw_bg.color: #00000000
 
-                            TopPanelLabel{text: "Native panels"}
-                            TopPanelText{text: "NSGlassEffectView descriptors"}
-                            TopPanelText{text: "Metal layer stays transparent"}
+                            top_panel_title := TopPanelLabel{text: "Native panels"}
+                            top_panel_line_1 := TopPanelText{text: "NSGlassEffectView descriptors"}
+                            top_panel_line_2 := TopPanelText{text: "Metal layer stays transparent"}
                         }
                     }
 
@@ -438,6 +438,134 @@ impl NativeDemoVisualMode {
             Self::Controls => "Controls",
             Self::Readability => "Readability",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoInset {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl NativeDemoInset {
+    const fn all(value: f64) -> Self {
+        Self {
+            left: value,
+            top: value,
+            right: value,
+            bottom: value,
+        }
+    }
+
+    const fn top_right(top: f64, right: f64) -> Self {
+        Self {
+            left: 0.0,
+            top,
+            right,
+            bottom: 0.0,
+        }
+    }
+
+    const fn bottom(bottom: f64) -> Self {
+        Self {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            bottom,
+        }
+    }
+
+    fn to_inset(self) -> Inset {
+        Inset {
+            left: self.left,
+            top: self.top,
+            right: self.right,
+            bottom: self.bottom,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoVisualScene {
+    main_panel_margin: NativeDemoInset,
+    top_panel_width: f64,
+    top_panel_height: f64,
+    top_panel_margin: NativeDemoInset,
+    bottom_panel_width: f64,
+    bottom_panel_height: f64,
+    bottom_panel_margin: NativeDemoInset,
+    top_panel_title: &'static str,
+    top_panel_line_1: &'static str,
+    top_panel_line_2: &'static str,
+    bottom_left_label: &'static str,
+    bottom_right_label: &'static str,
+    native_control_visible: bool,
+}
+
+fn native_liquid_glass_visual_scene(mode: NativeDemoVisualMode) -> NativeDemoVisualScene {
+    match mode {
+        NativeDemoVisualMode::Panels => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(28.0),
+            top_panel_width: 282.0,
+            top_panel_height: 88.0,
+            top_panel_margin: NativeDemoInset::top_right(54.0, 56.0),
+            bottom_panel_width: 360.0,
+            bottom_panel_height: 64.0,
+            bottom_panel_margin: NativeDemoInset::bottom(58.0),
+            top_panel_title: "Native panels",
+            top_panel_line_1: "NSGlassEffectView descriptors",
+            top_panel_line_2: "Metal layer stays transparent",
+            bottom_left_label: "Clear",
+            bottom_right_label: "Regular",
+            native_control_visible: false,
+        },
+        NativeDemoVisualMode::Morph => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(64.0),
+            top_panel_width: 330.0,
+            top_panel_height: 96.0,
+            top_panel_margin: NativeDemoInset::top_right(118.0, 134.0),
+            bottom_panel_width: 340.0,
+            bottom_panel_height: 86.0,
+            bottom_panel_margin: NativeDemoInset::bottom(250.0),
+            top_panel_title: "Morph spacing",
+            top_panel_line_1: "near edges share one container",
+            top_panel_line_2: "spacing changes should update in place",
+            bottom_left_label: "Near",
+            bottom_right_label: "Overlap",
+            native_control_visible: false,
+        },
+        NativeDemoVisualMode::Controls => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(72.0),
+            top_panel_width: 278.0,
+            top_panel_height: 86.0,
+            top_panel_margin: NativeDemoInset::top_right(62.0, 62.0),
+            bottom_panel_width: 420.0,
+            bottom_panel_height: 72.0,
+            bottom_panel_margin: NativeDemoInset::bottom(80.0),
+            top_panel_title: "Native controls",
+            top_panel_line_1: "AppKit button installed above Metal",
+            top_panel_line_2: "action routes back to Makepad",
+            bottom_left_label: "Button",
+            bottom_right_label: "Action",
+            native_control_visible: true,
+        },
+        NativeDemoVisualMode::Readability => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(44.0),
+            top_panel_width: 360.0,
+            top_panel_height: 120.0,
+            top_panel_margin: NativeDemoInset::top_right(74.0, 68.0),
+            bottom_panel_width: 480.0,
+            bottom_panel_height: 76.0,
+            bottom_panel_margin: NativeDemoInset::bottom(70.0),
+            top_panel_title: "Readability",
+            top_panel_line_1: "contrast tokens stay above native glass",
+            top_panel_line_2: "bright and dark wallpaper check",
+            bottom_left_label: "Bright",
+            bottom_right_label: "Dark",
+            native_control_visible: false,
+        },
     }
 }
 
@@ -663,6 +791,7 @@ impl App {
     fn configure_native_panels(&mut self, cx: &mut Cx) {
         let rounded_rect = makepad_widgets::glass_panel::GlassNativeShape::RoundedRect;
         let capsule = makepad_widgets::glass_panel::GlassNativeShape::Capsule;
+        let scene = native_liquid_glass_visual_scene(self.demo_mode);
         let main_style = self.style_mode.style();
         let top_style = self.style_mode.opposite_style();
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
@@ -689,6 +818,9 @@ impl App {
         let container_spacing = effective_spacing;
         let main_radius = effective_radius;
         let top_radius = clamp_native_demo_radius(main_radius * 0.68).min(34.0);
+        let main_panel_margin = scene.main_panel_margin.to_inset();
+        let top_panel_margin = scene.top_panel_margin.to_inset();
+        let bottom_panel_margin = scene.bottom_panel_margin.to_inset();
 
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
@@ -703,6 +835,7 @@ impl App {
             native_shape: #(rounded_rect)
             native_radius: #(main_radius)
             native_tint: #(main_tint)
+            margin: #(main_panel_margin)
             draw_bg +: {
                 corner_radius: #(main_radius)
             }
@@ -710,6 +843,9 @@ impl App {
 
         let mut top_panel = self.ui.view(cx, ids!(top_panel));
         script_apply_eval!(cx, top_panel, {
+            width: #(scene.top_panel_width)
+            height: #(scene.top_panel_height)
+            margin: #(top_panel_margin)
             native: true
             native_style: #(top_style)
             native_shape: #(rounded_rect)
@@ -722,18 +858,33 @@ impl App {
 
         let mut bottom_pill = self.ui.view(cx, ids!(bottom_pill));
         script_apply_eval!(cx, bottom_pill, {
+            width: #(scene.bottom_panel_width)
+            height: #(scene.bottom_panel_height)
+            margin: #(bottom_panel_margin)
             native: true
             native_style: #(main_style)
             native_shape: #(capsule)
             native_tint: #(main_tint)
         });
+
+        let mut top_panel_copy_card = self.ui.view(cx, ids!(top_panel_copy_card));
+        script_apply_eval!(cx, top_panel_copy_card, {
+            width: #(scene.top_panel_width)
+            height: #(scene.top_panel_height)
+            margin: #(top_panel_margin)
+        });
     }
 
     fn configure_native_controls(&mut self, cx: &mut Cx) {
+        let visible = native_liquid_glass_visual_scene(self.demo_mode).native_control_visible;
         let role = makepad_widgets::button::ButtonNativeGlassRole::Primary;
+        self.ui
+            .view(cx, ids!(native_control_host))
+            .set_visible(cx, visible);
         let mut native_action_button = self.ui.widget(cx, ids!(native_action_button));
         script_apply_eval!(cx, native_action_button, {
-            native_control: true
+            visible: #(visible)
+            native_control: #(visible)
             native_control_role: #(role)
         });
     }
@@ -777,6 +928,7 @@ impl App {
     }
 
     fn update_tuning_labels(&mut self, cx: &mut Cx) {
+        let scene = native_liquid_glass_visual_scene(self.demo_mode);
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
             self.demo_mode,
             self.tint_alpha,
@@ -796,6 +948,21 @@ impl App {
         self.ui
             .label(cx, ids!(spacing_caption))
             .set_text(cx, &format!("container spacing {:.0}", mode_spacing));
+        self.ui
+            .label(cx, ids!(top_panel_title))
+            .set_text(cx, scene.top_panel_title);
+        self.ui
+            .label(cx, ids!(top_panel_line_1))
+            .set_text(cx, scene.top_panel_line_1);
+        self.ui
+            .label(cx, ids!(top_panel_line_2))
+            .set_text(cx, scene.top_panel_line_2);
+        self.ui
+            .label(cx, ids!(bottom_left_label))
+            .set_text(cx, scene.bottom_left_label);
+        self.ui
+            .label(cx, ids!(bottom_right_label))
+            .set_text(cx, scene.bottom_right_label);
         self.ui.label(cx, ids!(native_control_status)).set_text(
             cx,
             &native_liquid_glass_control_status_text(
@@ -1081,6 +1248,30 @@ mod tests {
         assert!(morph.1 > panels.1);
         assert!(morph.2 > panels.2);
         assert!(readability.0 > panels.0);
+    }
+
+    #[test]
+    fn standalone_native_glass_visual_modes_have_distinct_scene_layouts() {
+        let panels = native_liquid_glass_visual_scene(NativeDemoVisualMode::Panels);
+        let morph = native_liquid_glass_visual_scene(NativeDemoVisualMode::Morph);
+        let controls = native_liquid_glass_visual_scene(NativeDemoVisualMode::Controls);
+
+        assert_ne!(panels.top_panel_width, morph.top_panel_width);
+        assert!(morph.bottom_panel_margin.bottom > panels.bottom_panel_margin.bottom);
+        assert!(controls.main_panel_margin.left > panels.main_panel_margin.left);
+        assert_eq!(morph.top_panel_title, "Morph spacing");
+    }
+
+    #[test]
+    fn standalone_native_glass_controls_and_readability_modes_set_scene_purpose() {
+        let panels = native_liquid_glass_visual_scene(NativeDemoVisualMode::Panels);
+        let controls = native_liquid_glass_visual_scene(NativeDemoVisualMode::Controls);
+        let readability = native_liquid_glass_visual_scene(NativeDemoVisualMode::Readability);
+
+        assert!(!panels.native_control_visible);
+        assert!(controls.native_control_visible);
+        assert!(!readability.native_control_visible);
+        assert!(readability.top_panel_line_1.contains("contrast"));
     }
 
     #[test]
