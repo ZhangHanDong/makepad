@@ -1,5 +1,6 @@
 pub use makepad_widgets;
 
+use makepad_widgets::button::ButtonNativeGlassRole;
 use makepad_widgets::*;
 
 app_main!(App);
@@ -73,6 +74,29 @@ script_mod! {
             color_focus: #x24354DEE
             border_color: #xFFFFFF36
             border_color_hover: #xFFFFFF5C
+            border_radius: 10.0
+            border_size: 1.0
+        }
+    }
+
+    let NativeRoleButton = GlassButton{
+        width: 112
+        height: 34
+        padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+        draw_text +: {
+            color: #x101722E8
+            color_hover: #x07101AF0
+            color_down: #x07101AF0
+            color_focus: #x07101AF0
+            text_style +: {font_size: 11}
+        }
+        draw_bg +: {
+            color: #xFFFFFF2A
+            color_hover: #xFFFFFF42
+            color_down: #xDCE7F35C
+            color_focus: #xFFFFFF4C
+            border_color: #xFFFFFF72
+            border_color_hover: #xFFFFFFA0
             border_radius: 10.0
             border_size: 1.0
         }
@@ -174,24 +198,36 @@ script_mod! {
                             align: Align{x: 1.0 y: 1.0}
                             draw_bg.color: #00000000
 
-                            native_action_button := GlassButton{
-                                width: 168
-                                height: 34
-                                margin: Inset{right: 64 bottom: 104}
-                                text: "Native Press"
-                                draw_text +: {
-                                    color: #x101722E8
-                                    color_hover: #x07101AF0
-                                    color_down: #x07101AF0
-                                    color_focus: #x07101AF0
+                            native_control_matrix := View{
+                                width: Fit
+                                height: Fit
+                                margin: Inset{right: 64 bottom: 88}
+                                flow: Down
+                                spacing: 8
+                                align: Align{x: 1.0 y: 1.0}
+                                draw_bg.color: #00000000
+
+                                native_control_row_1 := View{
+                                    width: Fit
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 8
+                                    draw_bg.color: #00000000
+
+                                    native_default_button := NativeRoleButton{text: "Default"}
+                                    native_primary_button := NativeRoleButton{text: "Primary"}
                                 }
-                                draw_bg +: {
-                                    color: #xFFFFFF2A
-                                    color_hover: #xFFFFFF42
-                                    color_down: #xDCE7F35C
-                                    color_focus: #xFFFFFF4C
-                                    border_color: #xFFFFFF72
-                                    border_color_hover: #xFFFFFFA0
+
+                                native_control_row_2 := View{
+                                    width: Fit
+                                    height: Fit
+                                    flow: Right
+                                    spacing: 8
+                                    draw_bg.color: #00000000
+
+                                    native_utility_button := NativeRoleButton{text: "Utility"}
+                                    native_icon_button := NativeRoleButton{text: "Icon"}
+                                    native_nav_button := NativeRoleButton{text: "Nav"}
                                 }
                             }
                         }
@@ -536,6 +572,46 @@ struct NativeDemoVisualScene {
     bottom_left_label: &'static str,
     bottom_right_label: &'static str,
     native_control_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeDemoControlRoleSpec {
+    label: &'static str,
+    role: ButtonNativeGlassRole,
+}
+
+fn native_liquid_glass_control_role_matrix() -> [NativeDemoControlRoleSpec; 5] {
+    [
+        NativeDemoControlRoleSpec {
+            label: "Default",
+            role: ButtonNativeGlassRole::Default,
+        },
+        NativeDemoControlRoleSpec {
+            label: "Primary",
+            role: ButtonNativeGlassRole::Primary,
+        },
+        NativeDemoControlRoleSpec {
+            label: "Utility",
+            role: ButtonNativeGlassRole::Utility,
+        },
+        NativeDemoControlRoleSpec {
+            label: "Icon",
+            role: ButtonNativeGlassRole::Icon,
+        },
+        NativeDemoControlRoleSpec {
+            label: "Nav",
+            role: ButtonNativeGlassRole::Nav,
+        },
+    ]
+}
+
+#[cfg(test)]
+fn native_liquid_glass_visible_control_count(scene: NativeDemoVisualScene) -> usize {
+    if scene.native_control_visible {
+        native_liquid_glass_control_role_matrix().len()
+    } else {
+        0
+    }
 }
 
 fn native_liquid_glass_visual_scene(
@@ -953,15 +1029,40 @@ impl App {
     fn configure_native_controls(&mut self, cx: &mut Cx) {
         let visible = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state)
             .native_control_visible;
-        let role = makepad_widgets::button::ButtonNativeGlassRole::Primary;
         self.ui
             .view(cx, ids!(native_control_host))
             .set_visible(cx, visible);
-        let mut native_action_button = self.ui.widget(cx, ids!(native_action_button));
-        script_apply_eval!(cx, native_action_button, {
+        let matrix = native_liquid_glass_control_role_matrix();
+
+        let mut native_default_button = self.ui.widget(cx, ids!(native_default_button));
+        script_apply_eval!(cx, native_default_button, {
             visible: #(visible)
             native_control: #(visible)
-            native_control_role: #(role)
+            native_control_role: #(matrix[0].role)
+        });
+        let mut native_primary_button = self.ui.widget(cx, ids!(native_primary_button));
+        script_apply_eval!(cx, native_primary_button, {
+            visible: #(visible)
+            native_control: #(visible)
+            native_control_role: #(matrix[1].role)
+        });
+        let mut native_utility_button = self.ui.widget(cx, ids!(native_utility_button));
+        script_apply_eval!(cx, native_utility_button, {
+            visible: #(visible)
+            native_control: #(visible)
+            native_control_role: #(matrix[2].role)
+        });
+        let mut native_icon_button = self.ui.widget(cx, ids!(native_icon_button));
+        script_apply_eval!(cx, native_icon_button, {
+            visible: #(visible)
+            native_control: #(visible)
+            native_control_role: #(matrix[3].role)
+        });
+        let mut native_nav_button = self.ui.widget(cx, ids!(native_nav_button));
+        script_apply_eval!(cx, native_nav_button, {
+            visible: #(visible)
+            native_control: #(visible)
+            native_control_role: #(matrix[4].role)
         });
     }
 
@@ -981,6 +1082,16 @@ impl App {
             self.native_button_activations
         );
         self.configure_native_liquid_glass(cx);
+    }
+
+    fn register_native_control_activation(&mut self, cx: &mut Cx, label: &'static str) {
+        self.native_button_activations = self.native_button_activations.saturating_add(1);
+        log!(
+            "[liquid-glass] standalone-native-example native-control activated label={} count={}",
+            label,
+            self.native_button_activations
+        );
+        self.start_native_press_pulse(cx);
     }
 
     fn update_native_press_pulse(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
@@ -1098,15 +1209,30 @@ impl MatchEvent for App {
 
         if self
             .ui
-            .button(cx, ids!(native_action_button))
+            .button(cx, ids!(native_default_button))
             .clicked(actions)
         {
-            self.native_button_activations = self.native_button_activations.saturating_add(1);
-            log!(
-                "[liquid-glass] standalone-native-example native-control activated count={}",
-                self.native_button_activations
-            );
-            self.start_native_press_pulse(cx);
+            self.register_native_control_activation(cx, "Default");
+        }
+        if self
+            .ui
+            .button(cx, ids!(native_primary_button))
+            .clicked(actions)
+        {
+            self.register_native_control_activation(cx, "Primary");
+        }
+        if self
+            .ui
+            .button(cx, ids!(native_utility_button))
+            .clicked(actions)
+        {
+            self.register_native_control_activation(cx, "Utility");
+        }
+        if self.ui.button(cx, ids!(native_icon_button)).clicked(actions) {
+            self.register_native_control_activation(cx, "Icon");
+        }
+        if self.ui.button(cx, ids!(native_nav_button)).clicked(actions) {
+            self.register_native_control_activation(cx, "Nav");
         }
 
         if self
@@ -1396,6 +1522,34 @@ mod tests {
         assert!(controls.native_control_visible);
         assert!(!readability.native_control_visible);
         assert!(readability.top_panel_line_1.contains("contrast"));
+    }
+
+    #[test]
+    fn standalone_native_glass_control_role_matrix_has_all_public_roles() {
+        let matrix = native_liquid_glass_control_role_matrix();
+
+        assert_eq!(matrix.len(), 5);
+        assert_eq!(matrix[0].label, "Default");
+        assert_eq!(matrix[0].role, ButtonNativeGlassRole::Default);
+        assert_eq!(matrix[1].label, "Primary");
+        assert_eq!(matrix[1].role, ButtonNativeGlassRole::Primary);
+        assert_eq!(matrix[2].label, "Utility");
+        assert_eq!(matrix[2].role, ButtonNativeGlassRole::Utility);
+        assert_eq!(matrix[3].label, "Icon");
+        assert_eq!(matrix[3].role, ButtonNativeGlassRole::Icon);
+        assert_eq!(matrix[4].label, "Nav");
+        assert_eq!(matrix[4].role, ButtonNativeGlassRole::Nav);
+    }
+
+    #[test]
+    fn standalone_native_glass_controls_scene_exposes_role_matrix() {
+        let scene = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+        );
+
+        assert!(scene.native_control_visible);
+        assert_eq!(native_liquid_glass_visible_control_count(scene), 5);
     }
 
     #[test]
