@@ -40,6 +40,9 @@ The in-window controls update the native descriptors at runtime:
 - `Radius -` / `Radius +` changes the large rounded-rect radius.
 - `Reset` restores the default visual tuning.
 - `Hide` collapses the controls for visual inspection; `Tune` expands them again.
+- In `Controls`, `Disable Primary` / `Enable Primary` toggles the native
+  `Primary` button's enabled descriptor while keeping it installed for AppKit
+  state validation.
 - In `Controls`, pressing any native role button triggers a slow multi-second
   native descriptor pulse by temporarily increasing container spacing, panel
   radius, and tint alpha. This validates the Apple native morph/update path; it
@@ -56,6 +59,13 @@ After switching to `Controls`, the native control install log should include:
 
 ```text
 [liquid-glass] backend=apple-native-controls state=Installed reason=installed-appkit-buttons controls_total=5 controls_visible=5
+```
+
+After clicking `Disable Primary`, the `Primary` native control frame log should
+remain visible but report `enabled=false`:
+
+```text
+[liquid-glass] native-control-frame ... label="Primary" ... enabled=false visible=true
 ```
 
 For resize validation:

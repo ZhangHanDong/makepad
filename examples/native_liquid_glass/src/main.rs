@@ -324,6 +324,18 @@ script_mod! {
                                 morph_overlap_button := ControlButton{text: "Overlap"}
                             }
 
+                            native_control_state_row := View{
+                                visible: false
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{x: 0.0 y: 0.5}
+                                draw_bg.color: #00000000
+
+                                primary_enabled_toggle_button := ControlButton{text: "Disable Primary"}
+                            }
+
                             control_row_1 := View{
                                 width: Fill
                                 height: Fit
@@ -462,6 +474,8 @@ pub struct App {
     #[rust]
     controls_visible: bool,
     #[rust]
+    native_primary_control_enabled: bool,
+    #[rust]
     native_button_activations: u32,
     #[rust]
     native_press_pulse_next_frame: NextFrame,
@@ -572,6 +586,7 @@ struct NativeDemoVisualScene {
     bottom_left_label: &'static str,
     bottom_right_label: &'static str,
     native_control_visible: bool,
+    primary_control_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -603,6 +618,14 @@ fn native_liquid_glass_control_role_matrix() -> [NativeDemoControlRoleSpec; 5] {
             role: ButtonNativeGlassRole::Nav,
         },
     ]
+}
+
+fn native_liquid_glass_primary_enabled_toggle_text(enabled: bool) -> &'static str {
+    if enabled {
+        "Disable Primary"
+    } else {
+        "Enable Primary"
+    }
 }
 
 #[cfg(test)]
@@ -642,6 +665,7 @@ fn native_liquid_glass_visual_scene(
             bottom_left_label: "Clear",
             bottom_right_label: "Regular",
             native_control_visible: false,
+            primary_control_enabled: false,
         },
         NativeDemoVisualMode::Morph => match morph_state {
             NativeDemoMorphState::Near => NativeDemoVisualScene {
@@ -658,6 +682,7 @@ fn native_liquid_glass_visual_scene(
                 bottom_left_label: "Near",
                 bottom_right_label: "Gap",
                 native_control_visible: false,
+                primary_control_enabled: false,
             },
             NativeDemoMorphState::Far => NativeDemoVisualScene {
                 main_panel_margin: NativeDemoInset::all(64.0),
@@ -673,6 +698,7 @@ fn native_liquid_glass_visual_scene(
                 bottom_left_label: "Far",
                 bottom_right_label: "Separate",
                 native_control_visible: false,
+                primary_control_enabled: false,
             },
             NativeDemoMorphState::Overlap => NativeDemoVisualScene {
                 main_panel_margin: NativeDemoInset::all(64.0),
@@ -688,6 +714,7 @@ fn native_liquid_glass_visual_scene(
                 bottom_left_label: "Overlap",
                 bottom_right_label: "Mixed",
                 native_control_visible: false,
+                primary_control_enabled: false,
             },
         },
         NativeDemoVisualMode::Controls => NativeDemoVisualScene {
@@ -704,6 +731,7 @@ fn native_liquid_glass_visual_scene(
             bottom_left_label: "Button",
             bottom_right_label: "Action",
             native_control_visible: true,
+            primary_control_enabled: true,
         },
         NativeDemoVisualMode::Readability => NativeDemoVisualScene {
             main_panel_margin: NativeDemoInset::all(44.0),
@@ -719,6 +747,7 @@ fn native_liquid_glass_visual_scene(
             bottom_left_label: "Bright",
             bottom_right_label: "Dark",
             native_control_visible: false,
+            primary_control_enabled: false,
         },
     }
 }
@@ -1038,6 +1067,7 @@ impl App {
     fn configure_native_controls(&mut self, cx: &mut Cx) {
         let visible = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state)
             .native_control_visible;
+        let primary_enabled = visible && self.native_primary_control_enabled;
         self.ui
             .view(cx, ids!(native_control_host))
             .set_visible(cx, visible);
@@ -1052,6 +1082,7 @@ impl App {
         let mut native_primary_button = self.ui.widget(cx, ids!(native_primary_button));
         script_apply_eval!(cx, native_primary_button, {
             visible: #(visible)
+            enabled: #(primary_enabled)
             native_control: #(visible)
             native_control_role: #(matrix[1].role)
         });
@@ -1079,6 +1110,13 @@ impl App {
         self.ui
             .view(cx, ids!(morph_row))
             .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Morph);
+        self.ui
+            .view(cx, ids!(native_control_state_row))
+            .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Controls);
+        self.ui.widget(cx, ids!(primary_enabled_toggle_button)).set_text(
+            cx,
+            native_liquid_glass_primary_enabled_toggle_text(self.native_primary_control_enabled),
+        );
     }
 
     fn start_native_press_pulse(&mut self, cx: &mut Cx) {
@@ -1188,6 +1226,7 @@ impl App {
         self.tint_alpha = DEFAULT_CLEAR_TINT_ALPHA;
         self.container_spacing = DEFAULT_CONTAINER_SPACING;
         self.main_radius = DEFAULT_MAIN_RADIUS;
+        self.native_primary_control_enabled = true;
     }
 
     fn step_tint(&mut self, delta: f32) {
@@ -1208,6 +1247,7 @@ impl MatchEvent for App {
         if !self.configured {
             self.configured = true;
             self.controls_visible = true;
+            self.native_primary_control_enabled = true;
             self.configure_native_liquid_glass(cx);
             log!("[liquid-glass] standalone-native-example configured=true panels=3");
         }
@@ -1270,6 +1310,19 @@ impl MatchEvent for App {
             .clicked(actions)
         {
             self.demo_mode = NativeDemoVisualMode::Readability;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(primary_enabled_toggle_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Controls;
+            self.native_primary_control_enabled = !self.native_primary_control_enabled;
+            log!(
+                "[liquid-glass] standalone-native-example native-control-state label=Primary enabled={}",
+                self.native_primary_control_enabled
+            );
             changed = true;
         }
 
@@ -1563,6 +1616,19 @@ mod tests {
 
         assert!(scene.native_control_visible);
         assert_eq!(native_liquid_glass_visible_control_count(scene), 5);
+        assert!(scene.primary_control_enabled);
+    }
+
+    #[test]
+    fn standalone_native_glass_primary_enabled_toggle_text_tracks_state() {
+        assert_eq!(
+            native_liquid_glass_primary_enabled_toggle_text(true),
+            "Disable Primary"
+        );
+        assert_eq!(
+            native_liquid_glass_primary_enabled_toggle_text(false),
+            "Enable Primary"
+        );
     }
 
     #[test]
