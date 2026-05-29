@@ -58,6 +58,15 @@ After switching to `Controls`, the native control install log should include:
 [liquid-glass] backend=apple-native-controls state=Installed reason=installed-appkit-buttons controls_total=5 controls_visible=5
 ```
 
+For resize validation:
+
+- In `Controls`, resizing the window should keep reinstalling native controls
+  with `controls_total=5 controls_visible=5`.
+- In `Panels`, `Morph`, or `Readability`, resizing should keep native controls
+  intentionally hidden with `controls_total=0 controls_visible=0`.
+- Mode switches log `control-resize-validation ...` so those two cases can be
+  distinguished from an actual disappearance bug.
+
 The action probe should additionally emit a native control activation path:
 
 ```text

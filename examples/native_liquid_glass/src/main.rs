@@ -614,6 +614,15 @@ fn native_liquid_glass_visible_control_count(scene: NativeDemoVisualScene) -> us
     }
 }
 
+fn native_liquid_glass_control_resize_validation_text(
+    visual_mode: NativeDemoVisualMode,
+) -> &'static str {
+    match visual_mode {
+        NativeDemoVisualMode::Controls => "resize keeps 5 native controls",
+        _ => "resize keeps native controls hidden outside Controls",
+    }
+}
+
 fn native_liquid_glass_visual_scene(
     mode: NativeDemoVisualMode,
     morph_state: NativeDemoMorphState,
@@ -1368,6 +1377,10 @@ impl MatchEvent for App {
                     mode_radius
                 )
             );
+            log!(
+                "[liquid-glass] standalone-native-example control-resize-validation {}",
+                native_liquid_glass_control_resize_validation_text(self.demo_mode)
+            );
             self.configure_native_liquid_glass(cx);
         }
     }
@@ -1550,6 +1563,18 @@ mod tests {
 
         assert!(scene.native_control_visible);
         assert_eq!(native_liquid_glass_visible_control_count(scene), 5);
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_validation_text_distinguishes_controls_mode() {
+        assert_eq!(
+            native_liquid_glass_control_resize_validation_text(NativeDemoVisualMode::Controls),
+            "resize keeps 5 native controls"
+        );
+        assert_eq!(
+            native_liquid_glass_control_resize_validation_text(NativeDemoVisualMode::Panels),
+            "resize keeps native controls hidden outside Controls"
+        );
     }
 
     #[test]
