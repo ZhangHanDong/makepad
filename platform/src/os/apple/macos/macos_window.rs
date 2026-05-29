@@ -1072,7 +1072,7 @@ impl MacosWindow {
         control_frame: NSRect,
     ) -> String {
         format!(
-            "[liquid-glass] native-control-frame control={:?} kind={:?} label={:?} makepad=({:.1},{:.1},{:.1},{:.1}) appkit=({:.1},{:.1},{:.1},{:.1}) z_order={} visible={}",
+            "[liquid-glass] native-control-frame control={:?} kind={:?} label={:?} makepad=({:.1},{:.1},{:.1},{:.1}) appkit=({:.1},{:.1},{:.1},{:.1}) z_order={} enabled={} visible={}",
             control.id,
             control.kind,
             control.label,
@@ -1085,6 +1085,7 @@ impl MacosWindow {
             control_frame.size.width,
             control_frame.size.height,
             control.z_order,
+            control.enabled,
             control.visible
         )
     }
@@ -3168,6 +3169,7 @@ mod tests {
         assert!(line.contains("makepad=(120.0,70.0,100.0,40.0)"));
         assert!(line.contains("appkit=(120.0,190.0,100.0,40.0)"));
         assert!(line.contains("z_order=4"));
+        assert!(line.contains("enabled=true"));
         assert!(line.contains("visible=true"));
     }
 
