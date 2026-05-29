@@ -1107,6 +1107,28 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_hit_test_probe_enabled_from_values(
+        makepad_value: Option<&str>,
+        aichat_value: Option<&str>,
+    ) -> bool {
+        matches!(
+            makepad_value,
+            Some("1" | "true" | "on" | "buttons" | "hit-test" | "all")
+        ) || matches!(
+            aichat_value,
+            Some("1" | "true" | "on" | "buttons")
+        )
+    }
+
+    fn native_glass_control_hit_test_probe_enabled() -> bool {
+        Self::native_glass_control_hit_test_probe_enabled_from_values(
+            std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_PROBE")
+                .ok()
+                .as_deref(),
+            std::env::var("AICHAT_NATIVE_CONTROL_PROBE").ok().as_deref(),
+        )
+    }
+
     fn native_glass_control_perform_click_probe_matches_value(
         value: Option<&str>,
         control: &NativeGlassControlDescriptor,
@@ -1257,6 +1279,9 @@ impl MacosWindow {
         control_view: ObjcId,
         control_frame: NSRect,
     ) {
+        if !Self::native_glass_control_hit_test_probe_enabled() {
+            return;
+        }
         let point = NSPoint {
             x: control_frame.origin.x + control_frame.size.width * 0.5,
             y: control_frame.origin.y + control_frame.size.height * 0.5,
@@ -3205,6 +3230,21 @@ mod tests {
         assert!(line.contains("point=(30.0,32.0)"));
         assert!(line.contains("result_class=NativeGlassButton"));
         assert!(line.contains("matches_control=true"));
+    }
+
+    #[test]
+    fn native_glass_control_hit_test_probe_env_defaults_off_and_accepts_makepad_alias() {
+        assert!(!MacosWindow::native_glass_control_hit_test_probe_enabled_from_values(
+            None, None
+        ));
+        assert!(MacosWindow::native_glass_control_hit_test_probe_enabled_from_values(
+            Some("1"),
+            None
+        ));
+        assert!(MacosWindow::native_glass_control_hit_test_probe_enabled_from_values(
+            None,
+            Some("buttons")
+        ));
     }
 
     #[test]

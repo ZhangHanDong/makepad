@@ -105,10 +105,25 @@ pub fn define_menu_target_class() -> *const Class {
     return decl.register();
 }
 
-fn native_glass_control_probe_enabled() -> bool {
+fn native_glass_control_probe_enabled_from_values(
+    makepad_value: Option<&str>,
+    aichat_value: Option<&str>,
+) -> bool {
     matches!(
-        std::env::var("AICHAT_NATIVE_CONTROL_PROBE").ok().as_deref(),
+        makepad_value,
+        Some("1" | "true" | "on" | "buttons" | "all")
+    ) || matches!(
+        aichat_value,
         Some("1" | "true" | "on" | "buttons")
+    )
+}
+
+fn native_glass_control_probe_enabled() -> bool {
+    native_glass_control_probe_enabled_from_values(
+        std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_PROBE")
+            .ok()
+            .as_deref(),
+        std::env::var("AICHAT_NATIVE_CONTROL_PROBE").ok().as_deref(),
     )
 }
 
@@ -155,7 +170,9 @@ pub fn define_native_glass_control_target_class() -> *const Class {
 
 pub fn define_native_glass_button_class() -> *const Class {
     extern "C" fn accepts_first_mouse(_this: &Object, _sel: Sel, _event: ObjcId) -> BOOL {
-        crate::log!("[liquid-glass] backend=apple-native-controls event=accepts-first-mouse");
+        if native_glass_control_probe_enabled() {
+            crate::log!("[liquid-glass] backend=apple-native-controls event=accepts-first-mouse");
+        }
         YES
     }
 
@@ -163,12 +180,14 @@ pub fn define_native_glass_button_class() -> *const Class {
         unsafe {
             let superclass = superclass(this);
             let hit: ObjcId = msg_send![super (this, superclass), hitTest: point];
-            crate::log!(
-                "[liquid-glass] backend=apple-native-controls event=button-hit-test point=({:.1},{:.1}) result={}",
-                point.x,
-                point.y,
-                objc_class_name(hit)
-            );
+            if native_glass_control_probe_enabled() {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=button-hit-test point=({:.1},{:.1}) result={}",
+                    point.x,
+                    point.y,
+                    objc_class_name(hit)
+                );
+            }
             hit
         }
     }
@@ -176,11 +195,13 @@ pub fn define_native_glass_button_class() -> *const Class {
     extern "C" fn mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
         unsafe {
             let window_point: NSPoint = msg_send![event, locationInWindow];
-            crate::log!(
-                "[liquid-glass] backend=apple-native-controls event=button-mouse-down window_point=({:.1},{:.1})",
-                window_point.x,
-                window_point.y
-            );
+            if native_glass_control_probe_enabled() {
+                crate::log!(
+                    "[liquid-glass] backend=apple-native-controls event=button-mouse-down window_point=({:.1},{:.1})",
+                    window_point.x,
+                    window_point.y
+                );
+            }
             let superclass = superclass(this);
             let () = msg_send![super (this, superclass), mouseDown: event];
         }
@@ -1271,4 +1292,22 @@ pub fn define_cocoa_view_class() -> *const Class {
     decl.add_protocol(&Protocol::get("NSTextInputClient").unwrap());
     decl.add_protocol(&Protocol::get("CALayerDelegate").unwrap());
     return decl.register();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_glass_control_probe_env_defaults_off_and_accepts_makepad_alias() {
+        assert!(!native_glass_control_probe_enabled_from_values(None, None));
+        assert!(native_glass_control_probe_enabled_from_values(
+            Some("1"),
+            None
+        ));
+        assert!(native_glass_control_probe_enabled_from_values(
+            None,
+            Some("buttons")
+        ));
+    }
 }
