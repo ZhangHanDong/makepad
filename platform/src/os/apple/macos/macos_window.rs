@@ -138,6 +138,7 @@ pub struct MacosWindow {
     pub(crate) native_glass_control_targets: Vec<ObjcId>,
     pub(crate) last_native_glass_control_batch: Option<NativeGlassControlBatch>,
     pub(crate) native_glass_perform_click_probe_fired_controls: Vec<(LiveId, Rect)>,
+    pub(crate) native_glass_focus_probe_fired_controls: Vec<(LiveId, Rect)>,
     pub(crate) native_glass_accessibility_press_probe_fired_controls: Vec<(LiveId, Rect)>,
     pub(crate) native_glass_mouse_event_probe_fired_controls: Vec<(LiveId, Rect)>,
     pub(crate) native_glass_cg_event_probe_fired_controls: Vec<(LiveId, Rect)>,
@@ -1162,6 +1163,22 @@ impl MacosWindow {
         )
     }
 
+    fn native_glass_control_focus_probe_matches_value(
+        value: Option<&str>,
+        control: &NativeGlassControlDescriptor,
+    ) -> bool {
+        Self::native_glass_control_perform_click_probe_matches_value(value, control)
+    }
+
+    fn native_glass_control_focus_probe_matches(control: &NativeGlassControlDescriptor) -> bool {
+        Self::native_glass_control_focus_probe_matches_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_CONTROL_FOCUS_PROBE")
+                .ok()
+                .as_deref(),
+            control,
+        )
+    }
+
     fn native_glass_button_bezel_style_raw_from_value(value: Option<&str>) -> i64 {
         value
             .and_then(|value| value.trim().parse::<i64>().ok())
@@ -1199,6 +1216,22 @@ impl MacosWindow {
         format!(
             "[liquid-glass] backend=apple-native-controls accessibility-label control={:?} label={:?}",
             control.id, control.label
+        )
+    }
+
+    fn native_glass_control_focus_probe_result_line(
+        control: &NativeGlassControlDescriptor,
+        accepts_first_responder: bool,
+        make_first_responder: bool,
+        is_first_responder: bool,
+    ) -> String {
+        format!(
+            "[liquid-glass] backend=apple-native-controls event=focus-probe-result control={:?} label={:?} accepts_first_responder={} make_first_responder={} is_first_responder={}",
+            control.id,
+            control.label,
+            accepts_first_responder,
+            make_first_responder,
+            is_first_responder
         )
     }
 
@@ -1354,6 +1387,46 @@ impl MacosWindow {
         let () = msg_send![ns_app, postEvent: mouse_up atStart: NO];
     }
 
+    unsafe fn run_native_glass_control_focus_probe(
+        &mut self,
+        control: &NativeGlassControlDescriptor,
+        button: ObjcId,
+    ) {
+        if !Self::native_glass_control_focus_probe_matches(control)
+            || Self::native_glass_control_probe_already_fired(
+                &self.native_glass_focus_probe_fired_controls,
+                control,
+            )
+        {
+            return;
+        }
+        self.native_glass_focus_probe_fired_controls
+            .push(Self::native_glass_control_probe_key(control));
+        let accepts_first_responder_sel = sel!(acceptsFirstResponder);
+        let can_query_accepts_first_responder: BOOL =
+            msg_send![button, respondsToSelector: accepts_first_responder_sel];
+        if can_query_accepts_first_responder != YES {
+            crate::log!(
+                "[liquid-glass] backend=apple-native-controls event=focus-probe-result control={:?} label={:?} state=Unsupported reason=acceptsFirstResponder-missing",
+                control.id,
+                control.label
+            );
+            return;
+        }
+        let accepts_first_responder: BOOL = msg_send![button, acceptsFirstResponder];
+        let make_first_responder: BOOL = msg_send![self.window, makeFirstResponder: button];
+        let first_responder: ObjcId = msg_send![self.window, firstResponder];
+        crate::log!(
+            "{}",
+            Self::native_glass_control_focus_probe_result_line(
+                control,
+                accepts_first_responder == YES,
+                make_first_responder == YES,
+                first_responder == button,
+            )
+        );
+    }
+
     unsafe fn run_native_glass_control_cg_event_probe(
         &mut self,
         control: &NativeGlassControlDescriptor,
@@ -1435,6 +1508,12 @@ impl MacosWindow {
         let () = msg_send![button, setEnabled: if control.enabled { YES } else { NO }];
         let () = msg_send![button, setHidden: if control.visible { NO } else { YES }];
         let () = msg_send![button, setWantsLayer: YES];
+        let set_refuses_first_responder_sel = sel!(setRefusesFirstResponder:);
+        let can_set_refuses_first_responder: BOOL =
+            msg_send![button, respondsToSelector: set_refuses_first_responder_sel];
+        if can_set_refuses_first_responder == YES {
+            let () = msg_send![button, setRefusesFirstResponder: NO];
+        }
         let set_bezel_style_sel = sel!(setBezelStyle:);
         let can_set_bezel_style: BOOL = msg_send![button, respondsToSelector: set_bezel_style_sel];
         if can_set_bezel_style == YES {
@@ -1483,6 +1562,7 @@ impl MacosWindow {
             relativeTo: nil
         ];
         self.log_native_glass_control_hit_test_probe(control, button, button_frame);
+        self.run_native_glass_control_focus_probe(control, button);
         self.run_native_glass_control_cg_event_probe(control, button_frame);
         self.run_native_glass_control_mouse_event_probe(control, button_frame);
         if Self::native_glass_control_accessibility_press_probe_matches(control)
@@ -2066,6 +2146,7 @@ impl MacosWindow {
                 native_glass_control_targets: Vec::new(),
                 last_native_glass_control_batch: None,
                 native_glass_perform_click_probe_fired_controls: Vec::new(),
+                native_glass_focus_probe_fired_controls: Vec::new(),
                 native_glass_accessibility_press_probe_fired_controls: Vec::new(),
                 native_glass_mouse_event_probe_fired_controls: Vec::new(),
                 native_glass_cg_event_probe_fired_controls: Vec::new(),
@@ -3293,6 +3374,74 @@ mod tests {
         assert!(
             !MacosWindow::native_glass_control_perform_click_probe_matches_value(None, &control)
         );
+    }
+
+    #[test]
+    fn native_glass_control_focus_probe_matches_explicit_label() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(14),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Primary,
+            },
+            label: "Primary".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        assert!(MacosWindow::native_glass_control_focus_probe_matches_value(
+            Some("Primary"),
+            &control
+        ));
+        assert!(MacosWindow::native_glass_control_focus_probe_matches_value(
+            Some("primary"),
+            &control
+        ));
+        assert!(MacosWindow::native_glass_control_focus_probe_matches_value(
+            Some("all"),
+            &control
+        ));
+        assert!(!MacosWindow::native_glass_control_focus_probe_matches_value(
+            Some("Default"),
+            &control
+        ));
+    }
+
+    #[test]
+    fn native_glass_control_focus_probe_result_line_records_focus_state() {
+        let control = NativeGlassControlDescriptor {
+            id: LiveId(15),
+            rect: Rect {
+                pos: Vec2d { x: 10.0, y: 20.0 },
+                size: Vec2d { x: 40.0, y: 24.0 },
+            },
+            kind: NativeGlassControlKind::Button {
+                role: NativeGlassButtonRole::Primary,
+            },
+            label: "Primary".to_string(),
+            style: NativeGlassStyle::Clear,
+            tint: None,
+            z_order: 0,
+            enabled: true,
+            visible: true,
+        };
+
+        let line = MacosWindow::native_glass_control_focus_probe_result_line(
+            &control, true, true, true,
+        );
+
+        assert!(line.contains("event=focus-probe-result"));
+        assert!(line.contains("control=000000000000000f"));
+        assert!(line.contains("label=\"Primary\""));
+        assert!(line.contains("accepts_first_responder=true"));
+        assert!(line.contains("make_first_responder=true"));
+        assert!(line.contains("is_first_responder=true"));
     }
 
     #[test]

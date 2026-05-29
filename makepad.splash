@@ -45,7 +45,9 @@ let RunStudioRelease = RunItem{
 
 let RunNativeLiquidGlass = RunItem{
     package_name: "makepad-example-native-liquid-glass"
+    start_mode: ""
     native_control_action_probe: ""
+    native_control_focus_probe: ""
     on_run: fn(id){
         hub.run(
             {
@@ -53,7 +55,9 @@ let RunNativeLiquidGlass = RunItem{
                 "STUDIO_BUILD": id.to_string()
                 "STUDIO_CRATE": self.name
                 "MAKEPAD_MACOS_TRANSPARENT_WINDOW_BACKGROUND": "ghostty-floor"
+                "MAKEPAD_NATIVE_LIQUID_GLASS_START_MODE": self.start_mode
                 "MAKEPAD_NATIVE_GLASS_CONTROL_PERFORM_CLICK_PROBE": self.native_control_action_probe
+                "MAKEPAD_NATIVE_GLASS_CONTROL_FOCUS_PROBE": self.native_control_focus_probe
             },
             "cargo",
             ["run" "-p" self.package_name "--release" "--message-format=json" "--" "--message-format=json"],
@@ -160,7 +164,8 @@ hub.set_run_items([
     RunStudioRelease{name: "makepad-example-todo"}
     RunStudioRelease{name: "makepad-example-aichat"}
     RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass"}
-    RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass-control-action-probe", native_control_action_probe: "Native Press"}
+    RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass-control-action-probe", start_mode: "controls", native_control_action_probe: "Primary"}
+    RunNativeLiquidGlass{name: "makepad-example-native-liquid-glass-control-focus-probe", start_mode: "controls", native_control_focus_probe: "Primary"}
     RunRelease{name: "makepad-example-aichat-native", run: "makepad-example-aichat"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-proof", backend: "shader-backdrop-proof"}
     RunAichatMacosGlass{name: "makepad-example-aichat-shader-backdrop-blur-proof", backend: "shader-backdrop-blur-proof"}

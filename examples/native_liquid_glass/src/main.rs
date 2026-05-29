@@ -507,6 +507,25 @@ impl NativeDemoVisualMode {
     }
 }
 
+fn native_liquid_glass_start_mode_from_env_value(
+    value: Option<&str>,
+) -> NativeDemoVisualMode {
+    match value.map(str::trim).unwrap_or_default().to_ascii_lowercase().as_str() {
+        "morph" => NativeDemoVisualMode::Morph,
+        "control" | "controls" => NativeDemoVisualMode::Controls,
+        "readability" => NativeDemoVisualMode::Readability,
+        _ => NativeDemoVisualMode::Panels,
+    }
+}
+
+fn native_liquid_glass_start_mode_from_env() -> NativeDemoVisualMode {
+    native_liquid_glass_start_mode_from_env_value(
+        std::env::var("MAKEPAD_NATIVE_LIQUID_GLASS_START_MODE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum NativeDemoMorphState {
     #[default]
@@ -1247,9 +1266,13 @@ impl MatchEvent for App {
         if !self.configured {
             self.configured = true;
             self.controls_visible = true;
+            self.demo_mode = native_liquid_glass_start_mode_from_env();
             self.native_primary_control_enabled = true;
             self.configure_native_liquid_glass(cx);
-            log!("[liquid-glass] standalone-native-example configured=true panels=3");
+            log!(
+                "[liquid-glass] standalone-native-example configured=true panels=3 mode={}",
+                self.demo_mode.label()
+            );
         }
     }
 
@@ -1527,6 +1550,26 @@ mod tests {
         assert_eq!(NativeDemoVisualMode::Morph.label(), "Morph");
         assert_eq!(NativeDemoVisualMode::Controls.label(), "Controls");
         assert_eq!(NativeDemoVisualMode::Readability.label(), "Readability");
+    }
+
+    #[test]
+    fn standalone_native_glass_start_mode_env_supports_controls_probe() {
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("controls")),
+            NativeDemoVisualMode::Controls
+        );
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("readability")),
+            NativeDemoVisualMode::Readability
+        );
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("unknown")),
+            NativeDemoVisualMode::Panels
+        );
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(None),
+            NativeDemoVisualMode::Panels
+        );
     }
 
     #[test]

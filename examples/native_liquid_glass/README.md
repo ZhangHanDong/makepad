@@ -17,6 +17,12 @@ The native button action probe can be run separately as:
 makepad-example-native-liquid-glass-control-action-probe
 ```
 
+The native button focus probe can be run separately as:
+
+```text
+makepad-example-native-liquid-glass-control-focus-probe
+```
+
 On macOS 26, the expected visual result is:
 
 - One transparent borderless window.
@@ -80,10 +86,18 @@ For resize validation:
 The action probe should additionally emit a native control activation path:
 
 ```text
+[liquid-glass] standalone-native-example configured=true panels=3 mode=Controls
 [liquid-glass] backend=apple-native-controls event=perform-click-probe control=... label="Primary"
 [liquid-glass] backend=apple-native-controls event=button-action control_id=...
 [liquid-glass] standalone-native-example native-control activated label=Primary count=1
 [liquid-glass] standalone-native-example native-control pulse=start count=1
+```
+
+The focus probe should additionally emit:
+
+```text
+[liquid-glass] standalone-native-example configured=true panels=3 mode=Controls
+[liquid-glass] backend=apple-native-controls event=focus-probe-result control=... label="Primary" accepts_first_responder=true make_first_responder=true is_first_responder=true
 ```
 
 Studio `Screenshot` captures only the Metal framebuffer, so it will not show
