@@ -23,6 +23,9 @@ const NATIVE_PRESS_PULSE_HOLD: f64 = 0.35;
 const NATIVE_PRESS_PULSE_SPACING_BOOST: f64 = 20.0;
 const NATIVE_PRESS_PULSE_RADIUS_BOOST: f64 = 16.0;
 const NATIVE_PRESS_PULSE_TINT_BOOST: f32 = 0.10;
+const GOLD_GLINT_EDGE_WIDTH: f32 = 2.2;
+const GOLD_GLINT_BASE_STRENGTH: f32 = 0.28;
+const GOLD_GLINT_PULSE_BOOST: f32 = 0.68;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -107,6 +110,56 @@ script_mod! {
         height: Fit
         draw_text.color: #x111722E6
         draw_text.text_style.font_size: 11
+    }
+
+    let GoldGlintEdge = View{
+        show_bg: true
+        draw_bg +: {
+            edge_radius: instance(44.0)
+            edge_width: instance(2.2)
+            glint_strength: instance(0.28)
+            pulse: instance(0.0)
+            color: instance(#xD79A28E0)
+            hot_color: instance(#xFFF2B8FF)
+
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                let inset = self.edge_width * 0.5
+                let w = max(1.0, self.rect_size.x - inset * 2.0)
+                let h = max(1.0, self.rect_size.y - inset * 2.0)
+                let radius = min(max(0.0, self.edge_radius - inset), max(0.0, min(w, h) * 0.5 - 0.5))
+
+                sdf.box(inset, inset, w, h, radius)
+
+                let phase = self.pos.x * 1.35 + self.pos.y * 0.55 + self.draw_pass.time * 0.20
+                let runner = 1.0 - abs(fract(phase) - 0.5) * 2.0
+                let runner_peak = runner * runner * runner * runner * runner
+                let phase2 = self.pos.x * -0.75 + self.pos.y * 1.15 + self.draw_pass.time * 0.13 + 0.37
+                let runner2 = 1.0 - abs(fract(phase2) - 0.5) * 2.0
+                let runner2_peak = runner2 * runner2 * runner2 * runner2 * runner2
+                let sparkle = Math.random_2d(
+                    self.pos * self.rect_size
+                    + vec2(self.draw_pass.time * 31.0, self.draw_pass.time * 17.0)
+                )
+                let sparkle_hot = max(0.0, sparkle - 0.74) * 3.8
+                let glint_peak = clamp(
+                    runner_peak * 0.78 + runner2_peak * 0.58 + sparkle_hot * 0.18,
+                    0.0,
+                    1.0
+                )
+                let hot = clamp(glint_peak * self.glint_strength * 1.85 + self.pulse * 0.42, 0.0, 1.0)
+                let alpha = clamp(
+                    0.015 + self.glint_strength * (0.04 + glint_peak * 0.96) + self.pulse * 0.16,
+                    0.0,
+                    0.92
+                )
+                let rgb = mix(self.color.rgb, self.hot_color.rgb, hot)
+
+                sdf.stroke(vec4(rgb, alpha), self.edge_width)
+                sdf.glow(vec4(self.hot_color.rgb, alpha * 0.42), self.edge_width * 3.2)
+                return sdf.result
+            }
+        }
     }
 
     startup() do #(App::script_component(vm)){
@@ -233,6 +286,50 @@ script_mod! {
                         }
                     }
 
+                    gold_edge_layer := View{
+                        width: Fill
+                        height: Fill
+                        flow: Overlay
+                        draw_bg.color: #00000000
+
+                        main_gold_edge := GoldGlintEdge{
+                            width: Fill
+                            height: Fill
+                            margin: Inset{left: 28 top: 28 right: 28 bottom: 28}
+                        }
+
+                        top_gold_edge_host := View{
+                            width: Fill
+                            height: Fill
+                            flow: Overlay
+                            align: Align{x: 1.0 y: 0.0}
+                            draw_bg.color: #00000000
+
+                            top_gold_edge := GoldGlintEdge{
+                                width: 282
+                                height: 88
+                                margin: Inset{top: 54 right: 56}
+                            }
+                        }
+
+                        bottom_gold_edge_host := View{
+                            width: Fill
+                            height: Fill
+                            flow: Overlay
+                            align: Align{x: 0.5 y: 1.0}
+                            draw_bg.color: #00000000
+
+                            bottom_gold_edge := GoldGlintEdge{
+                                width: 360
+                                height: 64
+                                margin: Inset{bottom: 58}
+                                draw_bg +: {
+                                    edge_radius: 32.0
+                                }
+                            }
+                        }
+                    }
+
                     foreground := View{
                         width: Fill
                         height: Fill
@@ -346,6 +443,7 @@ script_mod! {
 
                                 style_clear_button := ControlButton{text: "Clear"}
                                 style_regular_button := ControlButton{text: "Regular"}
+                                tone_button := ControlButton{text: "Tone: Arctic"}
                                 reset_button := ControlButton{text: "Reset"}
                                 hide_controls_button := ControlButton{text: "Hide"}
                             }
@@ -466,6 +564,8 @@ pub struct App {
     #[rust]
     style_mode: NativeDemoStyleMode,
     #[rust]
+    tone_mode: NativeDemoColorTone,
+    #[rust]
     tint_alpha: f32,
     #[rust]
     container_spacing: f64,
@@ -479,6 +579,8 @@ pub struct App {
     native_button_activations: u32,
     #[rust]
     native_press_pulse_next_frame: NextFrame,
+    #[rust]
+    gold_glint_next_frame: NextFrame,
     #[rust]
     native_press_pulse_start_time: f64,
     #[rust]
@@ -801,6 +903,153 @@ impl NativeDemoStyleMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativeDemoColorTone {
+    #[default]
+    Arctic,
+    Emerald,
+    Rose,
+    Violet,
+    Aijiro,
+    Usuao,
+    Sorairo,
+    Mizuhanada,
+    Usuhanada,
+    Asahanada,
+    Kokihanada,
+    Shinbashi,
+    Shirahana,
+    Hanaasagi,
+    Mizuasagi,
+    Sabiasagi,
+    Minatonezumi,
+    Kamenozoki,
+    Seiran,
+    Hisokuiro,
+    Usuhanairo,
+    Usuhanazakura,
+}
+
+impl NativeDemoColorTone {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Arctic => "Arctic",
+            Self::Emerald => "Emerald",
+            Self::Rose => "Rose",
+            Self::Violet => "Violet",
+            Self::Aijiro => "Aijiro",
+            Self::Usuao => "Usuao",
+            Self::Sorairo => "Sorairo",
+            Self::Mizuhanada => "Mizuhanada",
+            Self::Usuhanada => "Usuhanada",
+            Self::Asahanada => "Asahanada",
+            Self::Kokihanada => "Kokihanada",
+            Self::Shinbashi => "Shinbashi",
+            Self::Shirahana => "Shirahana",
+            Self::Hanaasagi => "Hanaasagi",
+            Self::Mizuasagi => "Mizuasagi",
+            Self::Sabiasagi => "Sabiasagi",
+            Self::Minatonezumi => "Minatonezumi",
+            Self::Kamenozoki => "Kamenozoki",
+            Self::Seiran => "Seiran",
+            Self::Hisokuiro => "Hisokuiro",
+            Self::Usuhanairo => "Usuhanairo",
+            Self::Usuhanazakura => "Usuhanazakura",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Arctic => Self::Emerald,
+            Self::Emerald => Self::Rose,
+            Self::Rose => Self::Violet,
+            Self::Violet => Self::Aijiro,
+            Self::Aijiro => Self::Usuao,
+            Self::Usuao => Self::Sorairo,
+            Self::Sorairo => Self::Mizuhanada,
+            Self::Mizuhanada => Self::Usuhanada,
+            Self::Usuhanada => Self::Asahanada,
+            Self::Asahanada => Self::Kokihanada,
+            Self::Kokihanada => Self::Shinbashi,
+            Self::Shinbashi => Self::Shirahana,
+            Self::Shirahana => Self::Hanaasagi,
+            Self::Hanaasagi => Self::Mizuasagi,
+            Self::Mizuasagi => Self::Sabiasagi,
+            Self::Sabiasagi => Self::Minatonezumi,
+            Self::Minatonezumi => Self::Kamenozoki,
+            Self::Kamenozoki => Self::Seiran,
+            Self::Seiran => Self::Hisokuiro,
+            Self::Hisokuiro => Self::Usuhanairo,
+            Self::Usuhanairo => Self::Usuhanazakura,
+            Self::Usuhanazakura => Self::Arctic,
+        }
+    }
+
+    #[cfg(test)]
+    fn japanese_blue_palette() -> [Self; 18] {
+        [
+            Self::Aijiro,
+            Self::Usuao,
+            Self::Sorairo,
+            Self::Mizuhanada,
+            Self::Usuhanada,
+            Self::Asahanada,
+            Self::Kokihanada,
+            Self::Shinbashi,
+            Self::Shirahana,
+            Self::Hanaasagi,
+            Self::Mizuasagi,
+            Self::Sabiasagi,
+            Self::Minatonezumi,
+            Self::Kamenozoki,
+            Self::Seiran,
+            Self::Hisokuiro,
+            Self::Usuhanairo,
+            Self::Usuhanazakura,
+        ]
+    }
+
+    fn clear_tint_rgb(self) -> (f32, f32, f32) {
+        match self {
+            Self::Arctic => (0.90, 0.96, 1.0),
+            Self::Emerald => (0.74, 1.0, 0.88),
+            Self::Rose => (1.0, 0.84, 0.92),
+            Self::Violet => (0.88, 0.84, 1.0),
+            Self::Aijiro => (0.85, 0.91, 0.92),
+            Self::Usuao => (0.23, 0.55, 0.69),
+            Self::Sorairo => (0.55, 0.76, 0.82),
+            Self::Mizuhanada => (0.61, 0.79, 0.82),
+            Self::Usuhanada => (0.31, 0.47, 0.60),
+            Self::Asahanada => (0.47, 0.67, 0.71),
+            Self::Kokihanada => (0.20, 0.29, 0.48),
+            Self::Shinbashi => (0.34, 0.66, 0.68),
+            Self::Shirahana => (0.42, 0.52, 0.56),
+            Self::Hanaasagi => (0.20, 0.53, 0.61),
+            Self::Mizuasagi => (0.48, 0.64, 0.64),
+            Self::Sabiasagi => (0.36, 0.55, 0.54),
+            Self::Minatonezumi => (0.50, 0.59, 0.62),
+            Self::Kamenozoki => (0.53, 0.77, 0.77),
+            Self::Seiran => (0.68, 0.83, 0.84),
+            Self::Hisokuiro => (0.61, 0.75, 0.78),
+            Self::Usuhanairo => (0.37, 0.51, 0.64),
+            Self::Usuhanazakura => (0.33, 0.46, 0.66),
+        }
+    }
+
+    fn regular_tint_rgb(self) -> (f32, f32, f32) {
+        match self {
+            Self::Arctic => (1.0, 1.0, 1.0),
+            Self::Emerald => (0.88, 1.0, 0.94),
+            Self::Rose => (1.0, 0.93, 0.96),
+            Self::Violet => (0.95, 0.92, 1.0),
+            _ => {
+                let (r, g, b) = self.clear_tint_rgb();
+                (0.52 + r * 0.48, 0.52 + g * 0.48, 0.52 + b * 0.48)
+            }
+        }
+    }
+}
+
 fn clamp_native_demo_tint_alpha(value: f32) -> f32 {
     value.clamp(MIN_TINT_ALPHA, MAX_TINT_ALPHA)
 }
@@ -813,18 +1062,30 @@ fn clamp_native_demo_radius(value: f64) -> f64 {
     value.clamp(MIN_MAIN_RADIUS, MAX_MAIN_RADIUS)
 }
 
-fn native_liquid_glass_clear_tint_with_alpha(alpha: f32) -> Option<Vec4f> {
-    Some(vec4(0.90, 0.96, 1.0, clamp_native_demo_tint_alpha(alpha)))
+fn native_liquid_glass_clear_tint_for_tone(
+    tone: NativeDemoColorTone,
+    alpha: f32,
+) -> Option<Vec4f> {
+    let (r, g, b) = tone.clear_tint_rgb();
+    Some(vec4(r, g, b, clamp_native_demo_tint_alpha(alpha)))
 }
 
-fn native_liquid_glass_regular_tint_with_alpha(alpha: f32) -> Option<Vec4f> {
-    Some(vec4(1.0, 1.0, 1.0, clamp_native_demo_tint_alpha(alpha)))
+fn native_liquid_glass_regular_tint_for_tone(
+    tone: NativeDemoColorTone,
+    alpha: f32,
+) -> Option<Vec4f> {
+    let (r, g, b) = tone.regular_tint_rgb();
+    Some(vec4(r, g, b, clamp_native_demo_tint_alpha(alpha)))
 }
 
-fn native_liquid_glass_tint_for_mode(mode: NativeDemoStyleMode, alpha: f32) -> Option<Vec4f> {
+fn native_liquid_glass_tint_for_mode(
+    mode: NativeDemoStyleMode,
+    tone: NativeDemoColorTone,
+    alpha: f32,
+) -> Option<Vec4f> {
     match mode {
-        NativeDemoStyleMode::Clear => native_liquid_glass_clear_tint_with_alpha(alpha),
-        NativeDemoStyleMode::Regular => native_liquid_glass_regular_tint_with_alpha(alpha),
+        NativeDemoStyleMode::Clear => native_liquid_glass_clear_tint_for_tone(tone, alpha),
+        NativeDemoStyleMode::Regular => native_liquid_glass_regular_tint_for_tone(tone, alpha),
     }
 }
 
@@ -891,6 +1152,25 @@ fn native_liquid_glass_effective_tuning(
         clamp_native_demo_spacing(spacing + pulse * NATIVE_PRESS_PULSE_SPACING_BOOST),
         clamp_native_demo_radius(radius + pulse * NATIVE_PRESS_PULSE_RADIUS_BOOST),
     )
+}
+
+fn native_liquid_glass_gold_glint_edge_width() -> f32 {
+    GOLD_GLINT_EDGE_WIDTH
+}
+
+#[cfg(test)]
+fn native_liquid_glass_gold_glint_center_inset(edge_width: f32) -> f32 {
+    edge_width.max(0.0) * 0.5
+}
+
+#[cfg(test)]
+fn native_liquid_glass_gold_glint_center_radius(edge_radius: f32, edge_width: f32) -> f32 {
+    (edge_radius - native_liquid_glass_gold_glint_center_inset(edge_width)).max(0.0)
+}
+
+fn native_liquid_glass_gold_glint_strength(pulse: f64) -> f32 {
+    let pulse = pulse.clamp(0.0, 1.0) as f32;
+    (GOLD_GLINT_BASE_STRENGTH + pulse * GOLD_GLINT_PULSE_BOOST).clamp(0.0, 1.0)
 }
 
 fn native_liquid_glass_control_status_text(activations: u32, pulse: f64) -> String {
@@ -1015,12 +1295,14 @@ impl App {
                 mode_radius,
                 self.native_press_pulse_amount,
             );
-        let main_tint = native_liquid_glass_tint_for_mode(self.style_mode, effective_tint_alpha);
+        let main_tint =
+            native_liquid_glass_tint_for_mode(self.style_mode, self.tone_mode, effective_tint_alpha);
         let top_tint = native_liquid_glass_tint_for_mode(
             match self.style_mode {
                 NativeDemoStyleMode::Clear => NativeDemoStyleMode::Regular,
                 NativeDemoStyleMode::Regular => NativeDemoStyleMode::Clear,
             },
+            self.tone_mode,
             (effective_tint_alpha * 0.82).max(MIN_TINT_ALPHA),
         );
         let container_spacing = effective_spacing;
@@ -1029,6 +1311,10 @@ impl App {
         let main_panel_margin = scene.main_panel_margin.to_inset();
         let top_panel_margin = scene.top_panel_margin.to_inset();
         let bottom_panel_margin = scene.bottom_panel_margin.to_inset();
+        let gold_edge_width = native_liquid_glass_gold_glint_edge_width();
+        let gold_glint_strength =
+            native_liquid_glass_gold_glint_strength(self.native_press_pulse_amount);
+        let gold_pulse = self.native_press_pulse_amount.clamp(0.0, 1.0) as f32;
 
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
@@ -1080,6 +1366,43 @@ impl App {
             width: #(scene.top_panel_width)
             height: #(scene.top_panel_height)
             margin: #(top_panel_margin)
+        });
+
+        let mut main_gold_edge = self.ui.view(cx, ids!(main_gold_edge));
+        script_apply_eval!(cx, main_gold_edge, {
+            margin: #(main_panel_margin)
+            draw_bg +: {
+                edge_radius: #(main_radius as f32)
+                edge_width: #(gold_edge_width)
+                glint_strength: #(gold_glint_strength)
+                pulse: #(gold_pulse)
+            }
+        });
+
+        let mut top_gold_edge = self.ui.view(cx, ids!(top_gold_edge));
+        script_apply_eval!(cx, top_gold_edge, {
+            width: #(scene.top_panel_width)
+            height: #(scene.top_panel_height)
+            margin: #(top_panel_margin)
+            draw_bg +: {
+                edge_radius: #(top_radius as f32)
+                edge_width: #(gold_edge_width)
+                glint_strength: #(gold_glint_strength)
+                pulse: #(gold_pulse)
+            }
+        });
+
+        let mut bottom_gold_edge = self.ui.view(cx, ids!(bottom_gold_edge));
+        script_apply_eval!(cx, bottom_gold_edge, {
+            width: #(scene.bottom_panel_width)
+            height: #(scene.bottom_panel_height)
+            margin: #(bottom_panel_margin)
+            draw_bg +: {
+                edge_radius: #((scene.bottom_panel_height * 0.5) as f32)
+                edge_width: #(gold_edge_width)
+                glint_strength: #(gold_glint_strength)
+                pulse: #(gold_pulse)
+            }
         });
     }
 
@@ -1186,6 +1509,18 @@ impl App {
         }
     }
 
+    fn start_gold_glint_animation(&mut self, cx: &mut Cx) {
+        self.gold_glint_next_frame = cx.new_next_frame();
+    }
+
+    fn update_gold_glint_animation(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
+        if !event.set.contains(&self.gold_glint_next_frame) {
+            return;
+        }
+        self.ui.view(cx, ids!(gold_edge_layer)).redraw(cx);
+        self.gold_glint_next_frame = cx.new_next_frame();
+    }
+
     fn update_tuning_labels(&mut self, cx: &mut Cx) {
         let scene = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state);
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
@@ -1231,6 +1566,9 @@ impl App {
             ),
         );
         self.ui
+            .widget(cx, ids!(tone_button))
+            .set_text(cx, &format!("Tone: {}", self.tone_mode.label()));
+        self.ui
             .view(cx, ids!(controls))
             .set_visible(cx, self.controls_visible);
         self.ui
@@ -1242,6 +1580,7 @@ impl App {
         self.demo_mode = NativeDemoVisualMode::Panels;
         self.morph_state = NativeDemoMorphState::Near;
         self.style_mode = NativeDemoStyleMode::Clear;
+        self.tone_mode = NativeDemoColorTone::Arctic;
         self.tint_alpha = DEFAULT_CLEAR_TINT_ALPHA;
         self.container_spacing = DEFAULT_CONTAINER_SPACING;
         self.main_radius = DEFAULT_MAIN_RADIUS;
@@ -1268,7 +1607,9 @@ impl MatchEvent for App {
             self.controls_visible = true;
             self.demo_mode = native_liquid_glass_start_mode_from_env();
             self.native_primary_control_enabled = true;
+            self.tone_mode = NativeDemoColorTone::Arctic;
             self.configure_native_liquid_glass(cx);
+            self.start_gold_glint_animation(cx);
             log!(
                 "[liquid-glass] standalone-native-example configured=true panels=3 mode={}",
                 self.demo_mode.label()
@@ -1385,6 +1726,10 @@ impl MatchEvent for App {
             self.style_mode = NativeDemoStyleMode::Regular;
             changed = true;
         }
+        if self.ui.button(cx, ids!(tone_button)).clicked(actions) {
+            self.tone_mode = self.tone_mode.next();
+            changed = true;
+        }
         if self.ui.button(cx, ids!(reset_button)).clicked(actions) {
             self.reset_tuning();
             changed = true;
@@ -1462,6 +1807,7 @@ impl MatchEvent for App {
     }
 
     fn handle_next_frame(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
+        self.update_gold_glint_animation(cx, event);
         self.update_native_press_pulse(cx, event);
     }
 }
@@ -1512,11 +1858,58 @@ mod tests {
 
     #[test]
     fn standalone_native_glass_clear_tint_remains_translucent() {
-        let tint = native_liquid_glass_clear_tint_with_alpha(DEFAULT_CLEAR_TINT_ALPHA)
-            .expect("clear tint should be present");
+        let tint = native_liquid_glass_clear_tint_for_tone(
+            NativeDemoColorTone::Arctic,
+            DEFAULT_CLEAR_TINT_ALPHA,
+        )
+        .expect("clear tint should be present");
 
         assert!(tint.w > 0.0);
         assert!(tint.w < 0.35);
+    }
+
+    #[test]
+    fn standalone_native_glass_color_tones_change_tint_rgb_without_alpha_shift() {
+        let arctic = native_liquid_glass_tint_for_mode(
+            NativeDemoStyleMode::Clear,
+            NativeDemoColorTone::Arctic,
+            DEFAULT_CLEAR_TINT_ALPHA,
+        )
+        .expect("default tone tint should be present");
+        let emerald = native_liquid_glass_tint_for_mode(
+            NativeDemoStyleMode::Clear,
+            NativeDemoColorTone::Emerald,
+            DEFAULT_CLEAR_TINT_ALPHA,
+        )
+        .expect("emerald tone tint should be present");
+
+        assert_ne!(arctic.x, emerald.x);
+        assert_eq!(arctic.w, emerald.w);
+        assert_eq!(NativeDemoColorTone::Arctic.next(), NativeDemoColorTone::Emerald);
+        assert_eq!(NativeDemoColorTone::Violet.next(), NativeDemoColorTone::Aijiro);
+        assert_eq!(NativeDemoColorTone::Usuhanazakura.next(), NativeDemoColorTone::Arctic);
+    }
+
+    #[test]
+    fn standalone_native_glass_includes_japanese_blue_palette_tones() {
+        let blues = NativeDemoColorTone::japanese_blue_palette();
+
+        assert_eq!(blues.len(), 18);
+        assert_eq!(blues[0], NativeDemoColorTone::Aijiro);
+        assert_eq!(blues[1], NativeDemoColorTone::Usuao);
+        assert_eq!(blues[2], NativeDemoColorTone::Sorairo);
+        assert_eq!(blues[17], NativeDemoColorTone::Usuhanazakura);
+
+        for tone in blues {
+            let tint = native_liquid_glass_tint_for_mode(
+                NativeDemoStyleMode::Clear,
+                tone,
+                DEFAULT_CLEAR_TINT_ALPHA,
+            )
+            .expect("japanese blue tone tint should be present");
+            assert_eq!(tint.w, DEFAULT_CLEAR_TINT_ALPHA);
+            assert!(tone.label().len() <= 14);
+        }
     }
 
     #[test]
@@ -1784,5 +2177,30 @@ mod tests {
         assert!(!should_start_window_drag(dvec2(4.0, 24.0), size));
         assert!(!should_start_window_drag(dvec2(120.0, 4.0), size));
         assert!(!should_start_window_drag(dvec2(816.0, 24.0), size));
+    }
+
+    #[test]
+    fn standalone_native_glass_gold_glint_is_panel_edge_not_window_frame() {
+        assert!(native_liquid_glass_gold_glint_edge_width() < 4.0);
+        assert!(
+            native_liquid_glass_gold_glint_strength(1.0)
+                > native_liquid_glass_gold_glint_strength(0.0)
+        );
+        assert_eq!(
+            native_liquid_glass_gold_glint_strength(9.0),
+            native_liquid_glass_gold_glint_strength(1.0)
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_gold_glint_path_tracks_panel_edge() {
+        let edge_width = native_liquid_glass_gold_glint_edge_width();
+        let center_inset = native_liquid_glass_gold_glint_center_inset(edge_width);
+
+        assert_eq!(center_inset, edge_width * 0.5);
+        assert_eq!(
+            native_liquid_glass_gold_glint_center_radius(44.0, edge_width),
+            44.0 - center_inset
+        );
     }
 }
