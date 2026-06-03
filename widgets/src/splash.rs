@@ -146,16 +146,31 @@ impl Splash {
             }
         );
 
-        let mut replaced = false;
-        cx.with_vm(|vm| {
-            let value = vm.eval_with_append_source(script_mod, &code, NIL.into());
+        // Evaluate in THIS Splash's own isolated vm and inject a `ui` global
+        // rooted at this Splash (self.uid). That scopes `ui.<id>` to this
+        // Splash's subtree (find_flood), so ids like `display` don't collide
+        // with other Splash apps in the same chat. Then register the widgets
+        // under this vm and mark the tree dirty so lookups can resolve them.
+        let vm_id = self.vm_id;
+        let self_uid = self.uid;
+        let new_view = cx.with_script_vm_id(vm_id, |vm| {
+            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
+            let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
+                vm.eval_with_append_source(script_mod, &code, NIL.into())
+            });
             if !value.is_err() && !value.is_nil() {
-                self.view = View::script_from_value(vm, value);
-                replaced = true;
+                Some(View::script_from_value(vm, value))
+            } else {
+                None
             }
         });
-        if replaced {
+
+        if let Some(view) = new_view {
+            self.unregister_view_owners(cx);
+            self.view = view;
             self.view.set_visible(cx, true);
+            self.register_view_owners(cx);
+            cx.widget_tree_mark_dirty(self.uid);
         }
 
         // If the Splash code defines fn tick(), auto-start a 1s interval
@@ -171,8 +186,9 @@ impl Splash {
             return;
         }
 
-        cx.with_vm(|vm| {
+        cx.with_script_vm_id(self.vm_id, |vm| {
             // Find the body by matching the unique_id we used during eval
+            // (body lives in this Splash's isolated vm, same as eval_body).
             let scope_obj = {
                 let bodies = vm.bx.code.bodies.borrow();
                 let mut found = None;
@@ -242,7 +258,9 @@ impl Splash {
         };
 
         let vm_id = self.vm_id;
+        let self_uid = self.uid;
         let new_view = cx.with_script_vm_id(vm_id, |vm| {
+            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
             let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
                 vm.eval_with_append_source(script_mod, &code, NIL.into())
             });

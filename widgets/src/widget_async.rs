@@ -353,6 +353,17 @@ pub(crate) fn update_global_ui_handle(cx: &mut Cx, root_uid: WidgetUid) {
     });
 }
 
+/// Inject a `ui` global into the *current* script vm, scoped so that
+/// `ui.<id>` resolves within `root_uid`'s subtree first (see `find_flood`).
+///
+/// Used by `Splash` so each isolated Splash vm gets its own `ui` rooted at
+/// that Splash's widget, preventing id collisions (e.g. two `display`s) across
+/// multiple concurrently-rendered Splash apps.
+pub fn inject_scoped_ui_global(vm: &mut ScriptVm, root_uid: WidgetUid) {
+    let ui_handle = vm.build_ui_handle_for_uid(root_uid);
+    vm.set_injected_global(id!(ui), ui_handle);
+}
+
 trait WidgetToScriptCallExt {
     fn build_ui_handle_for_uid(&mut self, target_uid: WidgetUid) -> ScriptValue;
 
