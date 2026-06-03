@@ -134,9 +134,10 @@ impl X11Cx {
                     .iter_mut()
                     .find(|w| w.window_id == re.window_id)
                 {
-                    if let Some(dpi_override) = cx.windows[re.window_id].dpi_override {
-                        re.new_geom.inner_size *= re.new_geom.dpi_factor / dpi_override;
-                        re.new_geom.dpi_factor = dpi_override;
+                    {
+                        let cx_window = &mut cx.windows[re.window_id];
+                        cx_window.os_dpi_factor = Some(re.new_geom.dpi_factor);
+                        re.new_geom = cx_window.native_window_geom_to_layout(re.new_geom);
                     }
 
                     window.window_geom = re.new_geom.clone();
@@ -194,14 +195,16 @@ impl X11Cx {
 
                 self.handle_repaint(opengl_windows);
             }
-            XlibEvent::MouseDown(e) => {
+            XlibEvent::MouseDown(mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, e.window_id);
                 cx.fingers.process_tap_count(e.abs, e.time);
                 cx.fingers.mouse_down(e.button, e.window_id);
                 cx.call_event_handler(&Event::MouseDown(e.into()))
             }
-            XlibEvent::MouseMove(e) => {
+            XlibEvent::MouseMove(mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, e.window_id);
                 let abs = e.abs;
                 let modifiers = e.modifiers;
                 cx.call_event_handler(&Event::MouseMove(e.into()));
@@ -218,8 +221,9 @@ impl X11Cx {
                 cx.fingers.cycle_hover_area(live_id!(mouse).into());
                 cx.fingers.switch_captures();
             }
-            XlibEvent::MouseUp(e) => {
+            XlibEvent::MouseUp(mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, e.window_id);
                 let button = e.button;
                 let abs = e.abs;
                 let modifiers = e.modifiers;
@@ -240,12 +244,14 @@ impl X11Cx {
                     }
                 }
             }
-            XlibEvent::Scroll(e) => {
+            XlibEvent::Scroll(mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, e.window_id);
                 cx.call_event_handler(&Event::Scroll(e.into()))
             }
-            XlibEvent::WindowDragQuery(e) => {
+            XlibEvent::WindowDragQuery(mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, e.window_id);
                 cx.call_event_handler(&Event::WindowDragQuery(e))
             }
             XlibEvent::WindowCloseRequested(e) => {
@@ -302,6 +308,7 @@ impl X11Cx {
                 let mut cx = self.cx.borrow_mut();
                 if e.timer_id == 0 {
                     if SignalToUI::check_and_clear_ui_signal() {
+                        cx.handle_termination_signal();
                         cx.handle_media_signals();
                         cx.handle_script_signals();
                         cx.call_event_handler(&Event::Signal);
@@ -700,6 +707,8 @@ impl X11Cx {
                 }
                 CxOsOp::ShowTextIME(area, pos, _config) => {
                     let pos = area.clipped_rect(&cx).pos + pos;
+                    let window_id = cx.get_window_id_of(&area).unwrap_or(CxWindowPool::id_zero());
+                    let pos = cx.windows[window_id].layout_vec2d_to_native_points(pos);
                     opengl_windows.iter_mut().for_each(|w| {
                         w.xlib_window.set_ime_spot(pos);
                         w.xlib_window.set_ime_active(true);

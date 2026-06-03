@@ -22,12 +22,16 @@ use {
 // UIKeyboardType
 pub const UI_KEYBOARD_TYPE_DEFAULT: i64 = 0;
 pub const UI_KEYBOARD_TYPE_ASCII_CAPABLE: i64 = 1;
+pub const UI_KEYBOARD_TYPE_NUMBERS_AND_PUNCTUATION: i64 = 2;
 pub const UI_KEYBOARD_TYPE_URL: i64 = 3;
 pub const UI_KEYBOARD_TYPE_NUMBER_PAD: i64 = 4;
 pub const UI_KEYBOARD_TYPE_PHONE_PAD: i64 = 5;
+pub const UI_KEYBOARD_TYPE_NAME_PHONE_PAD: i64 = 6;
 pub const UI_KEYBOARD_TYPE_EMAIL_ADDRESS: i64 = 7;
 pub const UI_KEYBOARD_TYPE_DECIMAL_PAD: i64 = 8;
+pub const UI_KEYBOARD_TYPE_TWITTER: i64 = 9;
 pub const UI_KEYBOARD_TYPE_WEB_SEARCH: i64 = 10;
+pub const UI_KEYBOARD_TYPE_ASCII_CAPABLE_NUMBER_PAD: i64 = 11;
 
 // UITextAutocapitalizationType
 pub const UI_TEXT_AUTOCAPITALIZATION_NONE: i64 = 0;
@@ -43,9 +47,16 @@ pub const UI_TEXT_AUTOCORRECTION_YES: i64 = 2;
 // UIReturnKeyType
 pub const UI_RETURN_KEY_DEFAULT: i64 = 0;
 pub const UI_RETURN_KEY_GO: i64 = 1;
+pub const UI_RETURN_KEY_GOOGLE: i64 = 2;
+pub const UI_RETURN_KEY_JOIN: i64 = 3;
+pub const UI_RETURN_KEY_NEXT: i64 = 4;
+pub const UI_RETURN_KEY_ROUTE: i64 = 5;
 pub const UI_RETURN_KEY_SEARCH: i64 = 6;
 pub const UI_RETURN_KEY_SEND: i64 = 7;
+pub const UI_RETURN_KEY_YAHOO: i64 = 8;
 pub const UI_RETURN_KEY_DONE: i64 = 9;
+pub const UI_RETURN_KEY_EMERGENCY_CALL: i64 = 10;
+pub const UI_RETURN_KEY_CONTINUE: i64 = 11;
 
 // this value will be fetched from multiple threads (post signal uses it)
 pub static mut IOS_CLASSES: *const IosClasses = 0 as *const _;
@@ -126,6 +137,8 @@ pub enum IosTextInputEvent {
     TextInput(String, bool),
     /// Range replacement for autocorrect (start, end, text)
     RangeReplace(usize, usize, String),
+    /// Selection update from UIKit (text, start, end)
+    SelectionChanged(String, usize, usize),
     /// Key event (e.g., Backspace, Return)
     KeyEvent(KeyCode),
 }
@@ -250,6 +263,8 @@ impl IosApp {
             let view_ctrl_obj: ObjcId = msg_send![view_ctrl_obj, init];
             (*view_ctrl_obj).set_ivar::<BOOL>("_prefersStatusBarHidden", NO);
             (*view_ctrl_obj).set_ivar::<BOOL>("_prefersHomeIndicatorAutoHidden", NO);
+            // 0 = UIStatusBarStyleDefault (system-managed light/dark).
+            (*view_ctrl_obj).set_ivar::<i64>("_preferredStatusBarStyle", 0);
 
             let () = msg_send![view_ctrl_obj, setView: mtk_view_obj];
 
@@ -683,6 +698,7 @@ impl IosApp {
                         let view = if let Some(text_input_view) = app.text_input_view {
                             unsafe {
                                 let kb_type: i64 = match config.soft_keyboard.input_mode {
+                                    InputMode::None => UI_KEYBOARD_TYPE_DEFAULT,
                                     InputMode::Text => UI_KEYBOARD_TYPE_DEFAULT,
                                     InputMode::Ascii => UI_KEYBOARD_TYPE_ASCII_CAPABLE,
                                     InputMode::Url => UI_KEYBOARD_TYPE_URL,
@@ -702,19 +718,27 @@ impl IosApp {
                                     AutoCapitalize::AllCharacters => UI_TEXT_AUTOCAPITALIZATION_ALL,
                                 };
 
-                                let autocorrect_type: i64 =
-                                    match config.soft_keyboard.autocorrect {
-                                        AutoCorrect::Default => -1,
-                                        AutoCorrect::Disabled => UI_TEXT_AUTOCORRECTION_NO,
-                                        AutoCorrect::Enabled => UI_TEXT_AUTOCORRECTION_YES,
-                                    };
+                                let autocorrect_type: i64 = match config.soft_keyboard.autocorrect {
+                                    AutoCorrect::Default => -1,
+                                    AutoCorrect::Disabled => UI_TEXT_AUTOCORRECTION_NO,
+                                    AutoCorrect::Enabled => UI_TEXT_AUTOCORRECTION_YES,
+                                };
 
                                 let return_type: i64 = match config.soft_keyboard.return_key_type {
                                     ReturnKeyType::Default => UI_RETURN_KEY_DEFAULT,
+                                    ReturnKeyType::None => UI_RETURN_KEY_DEFAULT,
                                     ReturnKeyType::Go => UI_RETURN_KEY_GO,
+                                    ReturnKeyType::Google => UI_RETURN_KEY_GOOGLE,
+                                    ReturnKeyType::Join => UI_RETURN_KEY_JOIN,
+                                    ReturnKeyType::Next => UI_RETURN_KEY_NEXT,
+                                    ReturnKeyType::Route => UI_RETURN_KEY_ROUTE,
                                     ReturnKeyType::Search => UI_RETURN_KEY_SEARCH,
                                     ReturnKeyType::Send => UI_RETURN_KEY_SEND,
+                                    ReturnKeyType::Yahoo => UI_RETURN_KEY_YAHOO,
                                     ReturnKeyType::Done => UI_RETURN_KEY_DONE,
+                                    ReturnKeyType::EmergencyCall => UI_RETURN_KEY_EMERGENCY_CALL,
+                                    ReturnKeyType::Continue => UI_RETURN_KEY_CONTINUE,
+                                    ReturnKeyType::Previous => UI_RETURN_KEY_DEFAULT,
                                 };
 
                                 (*text_input_view).set_ivar::<i64>("_keyboard_type", kb_type);
@@ -722,8 +746,7 @@ impl IosApp {
                                     .set_ivar::<i64>("_autocapitalization_type", autocap_type);
                                 (*text_input_view)
                                     .set_ivar::<i64>("_autocorrection_type", autocorrect_type);
-                                (*text_input_view)
-                                    .set_ivar::<i64>("_return_key_type", return_type);
+                                (*text_input_view).set_ivar::<i64>("_return_key_type", return_type);
                                 (*text_input_view)
                                     .set_ivar::<bool>("_secure_text_entry", config.is_secure);
                             }
@@ -804,9 +827,18 @@ impl IosApp {
         });
     }
 
-    pub fn set_ime_text(text: String, cursor: usize) {
-        // Convert character cursor index to UTF-16 code units for NSString indexing.
-        let cursor_utf16_pos: usize = text.chars().take(cursor).map(|c| c.len_utf16()).sum();
+    pub fn set_ime_text(text: String, selection_start: usize, selection_end: usize) {
+        // Convert character selection indices to UTF-16 code units for NSString indexing.
+        let selection_start_utf16: usize = text
+            .chars()
+            .take(selection_start)
+            .map(|c| c.len_utf16())
+            .sum();
+        let selection_end_utf16: usize = text
+            .chars()
+            .take(selection_end)
+            .map(|c| c.len_utf16())
+            .sum();
 
         // Extract the view pointer inside the borrow, then do ALL UIKit/ObjC
         // messaging outside the borrow. The inputDelegate notifications
@@ -861,10 +893,17 @@ impl IosApp {
             let ns_text = str_to_nsstring(&text);
             let () = msg_send![buffer, appendString: ns_text];
 
-            // Set cursor position and selection (UTF-16 index)
-            (*text_input_view).set_ivar("cursorPosition", cursor_utf16_pos as i64);
-            (*text_input_view).set_ivar("selectionStart", cursor_utf16_pos as i64);
-            (*text_input_view).set_ivar("selectionEnd", cursor_utf16_pos as i64);
+            // Set cursor position and selection (UTF-16 indices)
+            (*text_input_view).set_ivar("cursorPosition", selection_end_utf16 as i64);
+            (*text_input_view).set_ivar("selectionStart", selection_start_utf16 as i64);
+            (*text_input_view).set_ivar("selectionEnd", selection_end_utf16 as i64);
+            (*text_input_view).set_ivar("markedTextStart", 0i64);
+            let marked_text: ObjcId = *(*text_input_view).get_ivar("markedText");
+            if marked_text != nil {
+                let mutable_string: ObjcId = msg_send![marked_text, mutableString];
+                let empty = str_to_nsstring("");
+                let () = msg_send![mutable_string, setString: empty];
+            }
 
             // Notify AFTER changes (CRITICAL for autocorrect positioning)
             if input_delegate != nil {
@@ -959,6 +998,17 @@ impl IosApp {
         });
     }
 
+    pub fn send_text_selection_changed(text: String, start: usize, end: usize) {
+        let _ = IOS_APP.try_with(|app| {
+            if let Ok(mut app_ref) = app.try_borrow_mut() {
+                if let Some(ref mut app) = *app_ref {
+                    app.queued_text_events
+                        .push(IosTextInputEvent::SelectionChanged(text, start, end));
+                }
+            }
+        });
+    }
+
     pub fn send_backspace() {
         // Queue backspace key event
         // This avoids re-entrancy issues from UITextInput delegate callbacks
@@ -1026,6 +1076,31 @@ impl IosApp {
                 (*vc).set_ivar::<BOOL>("_prefersHomeIndicatorAutoHidden", val);
                 let () = msg_send![vc, setNeedsStatusBarAppearanceUpdate];
                 let () = msg_send![vc, setNeedsUpdateOfHomeIndicatorAutoHidden];
+            }
+        }
+    }
+
+    /// Sets the iOS status bar icon/text tint: `true` requests dark icons
+    /// (for light backgrounds), `false` requests light icons (for dark
+    /// backgrounds). iOS has no separate navigation bar.
+    pub fn set_status_bar_dark_icons(dark_icons: bool) {
+        // Same re-entrancy guard as set_fullscreen: borrow briefly to grab the
+        // view controller, then make UIKit calls outside the borrow.
+        let vc = IOS_APP
+            .try_with(|app| {
+                app.try_borrow()
+                    .ok()
+                    .and_then(|app_ref| app_ref.as_ref()?.view_controller)
+            })
+            .ok()
+            .flatten();
+
+        if let Some(vc) = vc {
+            // UIStatusBarStyleDarkContent = 3 (iOS 13+), UIStatusBarStyleLightContent = 1.
+            let style: i64 = if dark_icons { 3 } else { 1 };
+            unsafe {
+                (*vc).set_ivar::<i64>("_preferredStatusBarStyle", style);
+                let () = msg_send![vc, setNeedsStatusBarAppearanceUpdate];
             }
         }
     }
@@ -1175,10 +1250,8 @@ impl IosApp {
             (*text_input_view).set_ivar::<f64>("selection_handle_start_y", start.y);
             (*text_input_view).set_ivar::<f64>("selection_handle_end_x", end.x);
             (*text_input_view).set_ivar::<f64>("selection_handle_end_y", end.y);
-            (*text_input_view).set_ivar::<BOOL>(
-                "selection_handles_visible",
-                if visible { YES } else { NO },
-            );
+            (*text_input_view)
+                .set_ivar::<BOOL>("selection_handles_visible", if visible { YES } else { NO });
 
             // UITextSelectionDisplayInteraction listens via the input delegate.
             let input_delegate: ObjcId = *(*text_input_view).get_ivar("_inputDelegate");
@@ -1215,12 +1288,13 @@ impl IosApp {
         // bringSubviewToFront can trigger layout callbacks that re-enter IOS_APP.
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1255,12 +1329,13 @@ impl IosApp {
         Self::update_native_selection_display(start, end, true);
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1279,12 +1354,13 @@ impl IosApp {
         Self::update_native_selection_display(dvec2(0.0, 0.0), dvec2(0.0, 0.0), false);
         let views = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        let app = app_ref.as_ref()?;
-                        Some((app.selection_handle_start_view, app.selection_handle_end_view))
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    let app = app_ref.as_ref()?;
+                    Some((
+                        app.selection_handle_start_view,
+                        app.selection_handle_end_view,
+                    ))
+                })
             })
             .ok()
             .flatten();
@@ -1393,11 +1469,13 @@ impl IosApp {
         // operations outside — setFrame/setHidden can trigger layout callbacks.
         let layer = IOS_APP
             .try_with(|app| {
-                app.try_borrow()
-                    .ok()
-                    .and_then(|app_ref| {
-                        app_ref.as_ref()?.camera_preview_layers.get(&video_id).copied()
-                    })
+                app.try_borrow().ok().and_then(|app_ref| {
+                    app_ref
+                        .as_ref()?
+                        .camera_preview_layers
+                        .get(&video_id)
+                        .copied()
+                })
             })
             .ok()
             .flatten();

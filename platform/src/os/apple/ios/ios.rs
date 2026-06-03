@@ -4,14 +4,15 @@ use {
         cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
         draw_pass::CxDrawPassParent,
         event::{
+            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
+            keyboard::{CharOffset, FullTextState},
             video_playback::{
                 CameraPreviewMode, VideoBufferedRangesEvent, VideoDecodingErrorEvent,
                 VideoPlaybackPreparedEvent, VideoPlaybackResourcesReleasedEvent,
                 VideoSeekableRangesEvent, VideoSource, VideoTextureUpdatedEvent,
                 VideoYuvTexturesReady,
             },
-            drag_drop::{DragEvent, DragItem, DragResponse, DropEvent},
-            Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent,
+            Event, KeyEvent, TextInputEvent, TextRangeReplaceEvent, VirtualKeyboardEvent,
         },
         makepad_live_id::*,
         makepad_objc_sys::objc_block,
@@ -451,21 +452,27 @@ impl Cx {
             }
         }
 
-        let timestamp_ns = self
-            .os
-            .start_time
-            .map(|start| Instant::now().duration_since(start).as_nanos() as u64)
-            .unwrap_or(0);
-        for index in 0..MAX_VIDEO_DEVICE_INDEX {
-            if let Err(err) = self.video_encoder_capture_texture_frame(index, timestamp_ns) {
-                if err != crate::video::VideoEncodeError::UnsupportedSource
-                    && err != crate::video::VideoEncodeError::EncoderNotStarted
-                {
-                    crate::error!(
-                        "ios video texture capture failed on slot {}: {:?}",
-                        index,
-                        err
-                    );
+        // Only sweep encoder slots if an encoder's actually been set up.
+        // Otherwise we'd burn 32 mutex locks per frame on every iOS app,
+        // and the very first call would lazy-init AvCaptureAccess and
+        // trigger the camera permission prompt for apps that never use it.
+        if self.os.media.av_capture.is_some() {
+            let timestamp_ns = self
+                .os
+                .start_time
+                .map(|start| Instant::now().duration_since(start).as_nanos() as u64)
+                .unwrap_or(0);
+            for index in 0..MAX_VIDEO_DEVICE_INDEX {
+                if let Err(err) = self.video_encoder_capture_texture_frame(index, timestamp_ns) {
+                    if err != crate::video::VideoEncodeError::UnsupportedSource
+                        && err != crate::video::VideoEncodeError::EncoderNotStarted
+                    {
+                        crate::error!(
+                            "ios video texture capture failed on slot {}: {:?}",
+                            index,
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -493,6 +500,28 @@ impl Cx {
                 if te.timer_id == 0 {
                     let vk = with_ios_app(|app| app.virtual_keyboard_event.take());
                     if let Some(vk) = vk {
+                        let window_id = CxWindowPool::id_zero();
+                        let vk =
+                            self.windows[window_id].native_virtual_keyboard_event_to_layout(vk);
+                        // When the keyboard is going away (user pressed iOS's
+                        // "hide keyboard" button, an external keyboard was
+                        // attached, an inputAccessoryView triggered hide,
+                        // etc.), mark the IME as dismissed so the focused
+                        // TextInput's next `show_text_ime_with_config` call
+                        // is a no-op. Without this, the input still has key
+                        // focus, redraws on the same frame, calls
+                        // `show_text_ime`, and the keyboard pops back up
+                        // (sometimes flipping to whatever language was
+                        // selected last). The flag is cleared automatically
+                        // the next time the user taps a field - see
+                        // `CxKeyboard::set_key_focus`.
+                        if matches!(
+                            vk,
+                            VirtualKeyboardEvent::WillHide { .. }
+                                | VirtualKeyboardEvent::DidHide { .. }
+                        ) {
+                            self.keyboard.set_text_ime_dismissed();
+                        }
                         self.call_event_handler(&Event::VirtualKeyboard(vk));
                     }
                     // Drain iOS text events as one batch to avoid re-entrancy from UITextInput callbacks.
@@ -513,6 +542,16 @@ impl Cx {
                                 self.call_event_handler(&Event::TextRangeReplace(
                                     TextRangeReplaceEvent { start, end, text },
                                 ));
+                            }
+                            ios_app::IosTextInputEvent::SelectionChanged(text, start, end) => {
+                                self.call_event_handler(&Event::TextInput(TextInputEvent {
+                                    full_state_sync: Some(FullTextState {
+                                        text,
+                                        selection: CharOffset(start)..CharOffset(end),
+                                        composition: None,
+                                    }),
+                                    ..Default::default()
+                                }));
                             }
                             ios_app::IosTextInputEvent::KeyEvent(key_code) => {
                                 self.call_event_handler(&Event::KeyDown(KeyEvent {
@@ -563,7 +602,26 @@ impl Cx {
                 self.display_context.safe_area_insets = geom.safe_area_insets;
                 self.update_safe_inset_script_values(geom.safe_area_insets);
                 self.call_event_handler(&Event::Startup);
+                self.call_event_handler(&Event::Foreground);
                 self.redraw_all();
+            }
+            IosEvent::Foreground => {
+                self.call_event_handler(&Event::Foreground);
+                self.redraw_all();
+            }
+            IosEvent::Background => {
+                self.call_event_handler(&Event::Background);
+            }
+            IosEvent::Pause => {
+                self.call_event_handler(&Event::Pause);
+            }
+            IosEvent::Resume => {
+                self.call_event_handler(&Event::Resume);
+                self.redraw_all();
+            }
+            IosEvent::Shutdown => {
+                self.call_event_handler(&Event::Shutdown);
+                return EventFlow::Exit;
             }
             IosEvent::WindowGotFocus(window_id) => {
                 // repaint all window passes. Metal sometimes doesnt flip buffers when hidden/no focus
@@ -573,9 +631,11 @@ impl Cx {
             IosEvent::WindowLostFocus(window_id) => {
                 self.call_event_handler(&Event::WindowLostFocus(window_id));
             }
-            IosEvent::WindowGeomChange(re) => {
+            IosEvent::WindowGeomChange(mut re) => {
                 let window_id = CxWindowPool::id_zero();
                 let window = &mut self.windows[window_id];
+                window.os_dpi_factor = Some(re.new_geom.dpi_factor);
+                re.new_geom = window.native_window_geom_to_layout(re.new_geom);
                 window.window_geom = re.new_geom.clone();
                 self.call_event_handler(&Event::WindowGeomChange(re));
                 self.redraw_all();
@@ -722,7 +782,12 @@ impl Cx {
                 // ok here we send out to all our childprocesses
                 self.handle_repaint(metal_cx);
             }
-            IosEvent::TouchUpdate(e) => {
+            IosEvent::TouchUpdate(mut e) => {
+                let window = &self.windows[e.window_id];
+                for touch in e.touches.iter_mut() {
+                    touch.abs = window.native_vec2d_to_layout(touch.abs);
+                    touch.radius = window.native_vec2d_to_layout(touch.radius);
+                }
                 // Check for outside-click popup dismiss on touch start
                 if e.touches
                     .iter()
@@ -746,9 +811,11 @@ impl Cx {
 
                 // Synthesize internal drag-and-drop events from touch gestures.
                 if self.os.internal_drag_items.is_some() {
-                    if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Stop
-                    }) {
+                    if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Stop)
+                    {
                         if let Some(items) = self.os.internal_drag_items.take() {
                             self.call_event_handler(&Event::Drop(DropEvent {
                                 modifiers: e.modifiers.clone(),
@@ -760,9 +827,11 @@ impl Cx {
                             self.call_event_handler(&Event::DragEnd);
                             self.drag_drop.cycle_drag();
                         }
-                    } else if let Some(touch) = e.touches.iter().find(|t| {
-                        t.state == crate::event::TouchState::Move
-                    }) {
+                    } else if let Some(touch) = e
+                        .touches
+                        .iter()
+                        .find(|t| t.state == crate::event::TouchState::Move)
+                    {
                         if let Some(items) = self.os.internal_drag_items.as_ref() {
                             self.call_event_handler(&Event::Drag(DragEvent {
                                 modifiers: e.modifiers.clone(),
@@ -778,10 +847,12 @@ impl Cx {
 
                 self.fingers.process_touch_update_end(&e.touches);
             }
-            IosEvent::LongPress(e) => {
+            IosEvent::LongPress(mut e) => {
+                e.abs = self.windows[e.window_id].native_vec2d_to_layout(e.abs);
                 self.call_event_handler(&Event::LongPress(e.into()));
             }
-            IosEvent::MouseDown(e) => {
+            IosEvent::MouseDown(mut e) => {
+                e.abs = self.windows[e.window_id].native_vec2d_to_layout(e.abs);
                 // Check for outside-click popup dismiss
                 if let Some(popup_window_id) = self.find_popup_to_dismiss_on_mouse(e.abs) {
                     self.dismiss_popup_window(
@@ -793,21 +864,27 @@ impl Cx {
                 self.fingers.mouse_down(e.button, e.window_id);
                 self.call_event_handler(&Event::MouseDown(e.into()))
             }
-            IosEvent::MouseMove(e) => {
+            IosEvent::MouseMove(mut e) => {
+                e.abs = self.windows[e.window_id].native_vec2d_to_layout(e.abs);
                 self.call_event_handler(&Event::MouseMove(e.into()));
                 self.fingers.cycle_hover_area(live_id!(mouse).into());
                 self.fingers.switch_captures();
             }
-            IosEvent::MouseUp(e) => {
+            IosEvent::MouseUp(mut e) => {
+                e.abs = self.windows[e.window_id].native_vec2d_to_layout(e.abs);
                 let button = e.button;
                 self.call_event_handler(&Event::MouseUp(e.into()));
                 self.fingers.mouse_up(button);
                 self.fingers.cycle_hover_area(live_id!(mouse).into());
             }
-            IosEvent::Scroll(e) => self.call_event_handler(&Event::Scroll(e.into())),
+            IosEvent::Scroll(mut e) => {
+                e.abs = self.windows[e.window_id].native_vec2d_to_layout(e.abs);
+                self.call_event_handler(&Event::Scroll(e.into()));
+            }
             IosEvent::TextInput(e) => self.call_event_handler(&Event::TextInput(e)),
             IosEvent::TextRangeReplace(e) => self.call_event_handler(&Event::TextRangeReplace(e)),
-            IosEvent::SelectionHandleDrag(e) => {
+            IosEvent::SelectionHandleDrag(mut e) => {
+                e.abs = self.windows[CxWindowPool::id_zero()].native_vec2d_to_layout(e.abs);
                 self.call_event_handler(&Event::SelectionHandleDrag(e))
             }
 
@@ -885,6 +962,8 @@ impl Cx {
                     window.is_created = true;
                 }
                 CxOsOp::ShowTextIME(_area, pos, config) => {
+                    let window_id = CxWindowPool::id_zero();
+                    let pos = self.windows[window_id].layout_vec2d_to_native_points(pos);
                     IosApp::set_ime_position(pos);
                     IosApp::configure_keyboard(&config);
                     IosApp::show_keyboard();
@@ -897,7 +976,7 @@ impl Cx {
                     selection,
                     composition: _,
                 } => {
-                    IosApp::set_ime_text(text, selection.end.0);
+                    IosApp::set_ime_text(text, selection.start.0, selection.end.0);
                 }
                 CxOsOp::StartTimer {
                     timer_id,
@@ -935,6 +1014,10 @@ impl Cx {
                     rect,
                     keyboard_shift,
                 } => {
+                    let window_id = CxWindowPool::id_zero();
+                    let window = &self.windows[window_id];
+                    let rect = window.layout_rect_to_native_points(rect);
+                    let keyboard_shift = window.layout_points_to_native_points(keyboard_shift);
                     IosApp::show_clipboard_actions(has_selection, rect, keyboard_shift);
                 }
                 CxOsOp::HideClipboardActions => {
@@ -945,9 +1028,17 @@ impl Cx {
                 }
                 CxOsOp::SetPrimarySelection(_) => {}
                 CxOsOp::ShowSelectionHandles { start, end } => {
+                    let window_id = CxWindowPool::id_zero();
+                    let window = &self.windows[window_id];
+                    let start = window.layout_vec2d_to_native_points(start);
+                    let end = window.layout_vec2d_to_native_points(end);
                     IosApp::show_selection_handles(start, end);
                 }
                 CxOsOp::UpdateSelectionHandles { start, end } => {
+                    let window_id = CxWindowPool::id_zero();
+                    let window = &self.windows[window_id];
+                    let start = window.layout_vec2d_to_native_points(start);
+                    let end = window.layout_vec2d_to_native_points(end);
                     IosApp::update_selection_handles(start, end);
                 }
                 CxOsOp::HideSelectionHandles => {
@@ -1008,9 +1099,7 @@ impl Cx {
                     if let Some(mtk_view) = mtk_view {
                         let host_view: ObjcId = unsafe { msg_send![mtk_view, superview] };
                         if host_view != nil {
-                            if let Some(browser) =
-                                self.os.system_browsers.get_mut(&browser_id)
-                            {
+                            if let Some(browser) = self.os.system_browsers.get_mut(&browser_id) {
                                 browser.update(host_view, rect, visible);
                             }
                         }
@@ -1287,6 +1376,9 @@ impl Cx {
                 }
                 CxOsOp::StartDragging(items) => {
                     self.os.internal_drag_items = Some(Arc::new(items));
+                }
+                CxOsOp::SetSystemBarDarkIcons(dark_icons) => {
+                    IosApp::set_status_bar_dark_icons(dark_icons);
                 }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);

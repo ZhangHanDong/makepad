@@ -1,4 +1,11 @@
-use crate::{makepad_derive_widget::*, makepad_draw::*, view::View, widget::*};
+use crate::{
+    makepad_derive_widget::*,
+    makepad_draw::*,
+    view::View,
+    widget::*,
+    widget_async::{CxSplashVmExt, SplashVmId, MAIN_SPLASH_VM_ID},
+    widget_tree::CxWidgetExt,
+};
 
 #[derive(Clone, Debug, Default)]
 pub enum SplashAction {
@@ -44,8 +51,10 @@ script_mod! {
     }
 }
 
-#[derive(Script, ScriptHook, Widget)]
+#[derive(Script, ScriptHook, WidgetRef, WidgetRegister)]
 pub struct Splash {
+    #[uid]
+    uid: WidgetUid,
     #[source]
     source: ScriptObjectRef,
     #[deref]
@@ -59,12 +68,16 @@ pub struct Splash {
     /// The unique_id used for the last full eval, so tick() runs in the same scope.
     #[rust]
     last_unique_id: usize,
+    /// This Splash's own VM, allocated on first eval (upstream isolation model).
+    #[rust]
+    vm_id: SplashVmId,
 }
 
 /// Prefix for View-children mode: wraps code inside a View
 const SPLASH_PREFIX_VIEW: &str = "use mod.prelude.widgets.*View{height:Fit, ";
 /// Prefix for full-script mode: just imports, code must evaluate to a widget
 const SPLASH_PREFIX_SCRIPT: &str = "use mod.prelude.widgets.*\n";
+const SPLASH_EVAL_INSTRUCTION_LIMIT: usize = 200_000;
 
 /// Detect whether Splash code is a full script (starts with `let`, `fn`,
 /// or a widget constructor like `View{`, `SolidView{`) vs View children
@@ -91,6 +104,12 @@ impl Splash {
 
         // Stop any previous tick timer
         cx.stop_timer(self.tick_timer);
+
+        // Allocate this Splash's own VM on first eval so streaming
+        // (stream_append) evaluates in an isolated scope.
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            self.vm_id = cx.alloc_splash_vm();
+        }
 
         // Use a unique generation counter so that full content replacements
         // get a fresh VM body instead of hitting the broken content_changed
@@ -222,14 +241,82 @@ impl Splash {
             values: vec![],
         };
 
-        cx.with_vm(|vm| {
-            let value = vm.eval_with_append_source(script_mod, &code, NIL.into());
+        let vm_id = self.vm_id;
+        let new_view = cx.with_script_vm_id(vm_id, |vm| {
+            let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
+                vm.eval_with_append_source(script_mod, &code, NIL.into())
+            });
             if !value.is_err() && !value.is_nil() {
-                self.view = View::script_from_value(vm, value);
+                Some(View::script_from_value(vm, value))
+            } else {
+                None
             }
         });
 
-        cx.redraw_all();
+        if let Some(view) = new_view {
+            self.unregister_view_owners(cx);
+            self.view = view;
+            self.register_view_owners(cx);
+            cx.widget_tree_mark_dirty(self.uid);
+        }
+    }
+
+    fn register_view_owners(&self, cx: &mut Cx) {
+        Self::register_view_owner(cx, &self.view, self.vm_id);
+        self.view.children(&mut |_, child| {
+            Self::register_widget_ref_owner(cx, &child, self.vm_id);
+        });
+    }
+
+    fn unregister_view_owners(&self, cx: &mut Cx) {
+        Self::unregister_view_owner(cx, &self.view);
+        self.view.children(&mut |_, child| {
+            Self::unregister_widget_ref_owner(cx, &child);
+        });
+    }
+
+    fn register_view_owner(cx: &mut Cx, view: &View, vm_id: SplashVmId) {
+        cx.register_widget_vm_id(view.widget_uid(), vm_id);
+    }
+
+    fn unregister_view_owner(cx: &mut Cx, view: &View) {
+        cx.unregister_widget_vm_id(view.widget_uid());
+    }
+
+    fn register_widget_ref_owner(cx: &mut Cx, widget: &WidgetRef, vm_id: SplashVmId) {
+        cx.register_widget_vm_id(widget.widget_uid(), vm_id);
+        widget.children(&mut |_, child| {
+            Self::register_widget_ref_owner(cx, &child, vm_id);
+        });
+    }
+
+    fn unregister_widget_ref_owner(cx: &mut Cx, widget: &WidgetRef) {
+        cx.unregister_widget_vm_id(widget.widget_uid());
+        widget.children(&mut |_, child| {
+            Self::unregister_widget_ref_owner(cx, &child);
+        });
+    }
+}
+
+impl WidgetNode for Splash {
+    fn widget_uid(&self) -> WidgetUid {
+        self.uid
+    }
+
+    fn walk(&mut self, cx: &mut Cx) -> Walk {
+        self.view.walk(cx)
+    }
+
+    fn area(&self) -> Area {
+        self.view.area()
+    }
+
+    fn redraw(&mut self, cx: &mut Cx) {
+        self.view.redraw(cx);
+    }
+
+    fn children(&self, visit: &mut dyn FnMut(LiveId, WidgetRef)) {
+        self.view.children(visit);
     }
 }
 
