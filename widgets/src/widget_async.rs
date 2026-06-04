@@ -202,16 +202,22 @@ impl CxSplashVmExt for Cx {
     }
 
     fn with_script_vm_id<R>(&mut self, vm_id: SplashVmId, f: impl FnOnce(&mut ScriptVm) -> R) -> R {
-        if vm_id == MAIN_SPLASH_VM_ID {
+        // Run on the already-active vm for the main vm OR a re-entrant call into
+        // the currently-active isolated vm (e.g. a Splash `fn tick()` / callback
+        // running in this vm re-enters here via a `ui.<id>.*` call). Removing an
+        // already-removed vm would hit the panic below and — inside an
+        // `extern "C"` NSTimer callback — abort the whole app.
+        if vm_id == MAIN_SPLASH_VM_ID || self.global::<CxWidgetAsync>().current_vm_id == vm_id {
             return self.with_vm(f);
         }
 
-        let mut isolated = self
-            .global::<CxWidgetAsync>()
-            .isolated_vms
-            .vms
-            .remove(&vm_id)
-            .unwrap_or_else(|| panic!("missing Splash VM {:?}", vm_id));
+        let Some(mut isolated) = self.global::<CxWidgetAsync>().isolated_vms.vms.remove(&vm_id)
+        else {
+            // VM no longer exists (Splash gone / not yet allocated). Do NOT panic
+            // (that would abort from a timer/async callback); fall back to the
+            // main vm — a harmless no-op for body/callback lookups.
+            return self.with_vm(f);
+        };
 
         let previous_vm_id = self.global::<CxWidgetAsync>().current_vm_id;
         self.global::<CxWidgetAsync>().current_vm_id = vm_id;
@@ -250,16 +256,14 @@ impl CxSplashVmExt for Cx {
         thread_id: ScriptThreadId,
         f: impl FnOnce(&mut ScriptVm) -> R,
     ) -> R {
-        if vm_id == MAIN_SPLASH_VM_ID {
+        if vm_id == MAIN_SPLASH_VM_ID || self.global::<CxWidgetAsync>().current_vm_id == vm_id {
             return self.with_vm_thread(thread_id, f);
         }
 
-        let mut isolated = self
-            .global::<CxWidgetAsync>()
-            .isolated_vms
-            .vms
-            .remove(&vm_id)
-            .unwrap_or_else(|| panic!("missing Splash VM {:?}", vm_id));
+        let Some(mut isolated) = self.global::<CxWidgetAsync>().isolated_vms.vms.remove(&vm_id)
+        else {
+            return self.with_vm_thread(thread_id, f);
+        };
 
         let previous_vm_id = self.global::<CxWidgetAsync>().current_vm_id;
         self.global::<CxWidgetAsync>().current_vm_id = vm_id;
