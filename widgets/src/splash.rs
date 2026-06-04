@@ -105,14 +105,11 @@ impl Splash {
         // Stop any previous tick timer
         cx.stop_timer(self.tick_timer);
 
-        // NOTE: deliberately keep vm_id == MAIN_SPLASH_VM_ID (do NOT allocate an
-        // isolated vm). Isolated vms have their own heap, but async std callbacks
-        // (e.g. net.http_request on_response) resume on the MAIN vm — a closure
-        // defined in an isolated vm then crashes the app when the http response
-        // calls it cross-heap. Eval on the MAIN vm so all closures share one heap.
-        // Trade-off: ui.<id> is not per-instance scoped, so multiple apps reusing
-        // the same id degrade to "not found" (no crash). Per-instance scoping is
-        // tracked as a follow-up that must not reintroduce the cross-heap crash.
+        // Allocate this Splash's own VM on first eval so streaming
+        // (stream_append) evaluates in an isolated scope.
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            self.vm_id = cx.alloc_splash_vm();
+        }
 
         // Use a unique generation counter so that full content replacements
         // get a fresh VM body instead of hitting the broken content_changed
@@ -149,21 +146,16 @@ impl Splash {
             }
         );
 
-        let mut new_view = None;
+        let mut replaced = false;
         cx.with_vm(|vm| {
             let value = vm.eval_with_append_source(script_mod, &code, NIL.into());
             if !value.is_err() && !value.is_nil() {
-                new_view = Some(View::script_from_value(vm, value));
+                self.view = View::script_from_value(vm, value);
+                replaced = true;
             }
         });
-        if let Some(view) = new_view {
-            self.unregister_view_owners(cx);
-            self.view = view;
+        if replaced {
             self.view.set_visible(cx, true);
-            // Register widgets + mark the tree dirty so ui.<id> lookups resolve
-            // (this is what makes single interactive apps work).
-            self.register_view_owners(cx);
-            cx.widget_tree_mark_dirty(self.uid);
         }
 
         // If the Splash code defines fn tick(), auto-start a 1s interval
