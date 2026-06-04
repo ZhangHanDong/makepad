@@ -105,11 +105,14 @@ impl Splash {
         // Stop any previous tick timer
         cx.stop_timer(self.tick_timer);
 
-        // Allocate this Splash's own VM on first eval so streaming
-        // (stream_append) evaluates in an isolated scope.
-        if self.vm_id == MAIN_SPLASH_VM_ID {
-            self.vm_id = cx.alloc_splash_vm();
-        }
+        // NOTE: deliberately keep vm_id == MAIN_SPLASH_VM_ID (do NOT allocate an
+        // isolated vm). Isolated vms have their own heap, but async std callbacks
+        // (e.g. net.http_request on_response) resume on the MAIN vm — a closure
+        // defined in an isolated vm then crashes the app when the http response
+        // calls it cross-heap. Eval on the MAIN vm so all closures share one heap.
+        // Trade-off: ui.<id> is not per-instance scoped, so multiple apps reusing
+        // the same id degrade to "not found" (no crash). Per-instance scoping is
+        // tracked as a follow-up that must not reintroduce the cross-heap crash.
 
         // Use a unique generation counter so that full content replacements
         // get a fresh VM body instead of hitting the broken content_changed
@@ -146,29 +149,19 @@ impl Splash {
             }
         );
 
-        // Evaluate in THIS Splash's own isolated vm and inject a `ui` global
-        // rooted at this Splash (self.uid). That scopes `ui.<id>` to this
-        // Splash's subtree (find_flood), so ids like `display` don't collide
-        // with other Splash apps in the same chat. Then register the widgets
-        // under this vm and mark the tree dirty so lookups can resolve them.
-        let vm_id = self.vm_id;
-        let self_uid = self.uid;
-        let new_view = cx.with_script_vm_id(vm_id, |vm| {
-            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
-            let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
-                vm.eval_with_append_source(script_mod, &code, NIL.into())
-            });
+        let mut new_view = None;
+        cx.with_vm(|vm| {
+            let value = vm.eval_with_append_source(script_mod, &code, NIL.into());
             if !value.is_err() && !value.is_nil() {
-                Some(View::script_from_value(vm, value))
-            } else {
-                None
+                new_view = Some(View::script_from_value(vm, value));
             }
         });
-
         if let Some(view) = new_view {
             self.unregister_view_owners(cx);
             self.view = view;
             self.view.set_visible(cx, true);
+            // Register widgets + mark the tree dirty so ui.<id> lookups resolve
+            // (this is what makes single interactive apps work).
             self.register_view_owners(cx);
             cx.widget_tree_mark_dirty(self.uid);
         }
@@ -186,9 +179,8 @@ impl Splash {
             return;
         }
 
-        cx.with_script_vm_id(self.vm_id, |vm| {
+        cx.with_vm(|vm| {
             // Find the body by matching the unique_id we used during eval
-            // (body lives in this Splash's isolated vm, same as eval_body).
             let scope_obj = {
                 let bodies = vm.bx.code.bodies.borrow();
                 let mut found = None;
@@ -258,9 +250,7 @@ impl Splash {
         };
 
         let vm_id = self.vm_id;
-        let self_uid = self.uid;
         let new_view = cx.with_script_vm_id(vm_id, |vm| {
-            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
             let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
                 vm.eval_with_append_source(script_mod, &code, NIL.into())
             });
