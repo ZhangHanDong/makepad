@@ -13,7 +13,8 @@
 ## Current State
 
 - `examples/native_liquid_glass/src/main.rs` is the primary standalone validation surface.
-- Existing modes cover `Panels`, `Morph`, `Controls`, and `Readability`.
+- Existing modes cover `Panels`, `Geometry`, `Morph`, `Container`, `Debug`,
+  `Controls`, and `Readability`.
 - The example launches as a transparent borderless macOS window and installs three native glass panels.
 - Native state logging already reports container and panel install results, including the v1 compatibility line `state=4 substrate=macos-native style=clear`.
 - The demo includes tint/tone cycling, pulse-driven spacing/radius/tint changes, native control role probes, and a Makepad-rendered dynamic gold glint overlay.
@@ -23,7 +24,8 @@
 
 - `examples/native_liquid_glass/src/main.rs`: standalone app, modes, controls, pure helpers, tests, and visual demo overlay.
 - `widgets/src/glass_panel.rs`: inspect when descriptor fields or script-facing native glass properties need extension.
-- `widgets/src/glass_container.rs`: inspect when container spacing, panel collection, or traversal behavior changes.
+- `widgets/src/glass_panel.rs`: also contains `GlassContainer`; inspect it when
+  container spacing, panel collection, or traversal behavior changes.
 - `platform/src/os/apple/macos/macos_window.rs`: native AppKit backend, `NSGlassEffectView` installation, container creation, hit-test policy, state logging.
 - `docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md`: this roadmap.
 
@@ -38,9 +40,12 @@
 
 **Files:**
 - Modify: `examples/native_liquid_glass/src/main.rs`
-- Create: `docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md`
+- Modify: `examples/native_liquid_glass/README.md`
+- Modify: `docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md`
+- Create: `docs/research/native-liquid-glass-standalone-notes.md`
+- Create: `docs/research/native-liquid-glass-studio-checklist.md`
 
-- [ ] **Step 1: Verify release tests**
+- [x] **Step 1: Verify release tests**
 
 Run:
 
@@ -50,7 +55,7 @@ cargo test -p makepad-example-native-liquid-glass --release
 
 Expected: all standalone tests pass.
 
-- [ ] **Step 2: Verify formatting cleanliness**
+- [x] **Step 2: Verify formatting cleanliness**
 
 Run:
 
@@ -60,13 +65,17 @@ git diff --check
 
 Expected: no whitespace errors.
 
-- [ ] **Step 3: Commit only relevant files**
+- [x] **Step 3: Commit only relevant files**
 
 Run:
 
 ```bash
-git add examples/native_liquid_glass/src/main.rs docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md
-git commit -m "docs: add native liquid glass standalone roadmap"
+git add examples/native_liquid_glass/src/main.rs \
+  examples/native_liquid_glass/README.md \
+  docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md \
+  docs/research/native-liquid-glass-standalone-notes.md \
+  docs/research/native-liquid-glass-studio-checklist.md
+git commit -m "feat: expand native liquid glass standalone bench"
 ```
 
 Do not add `.makepad/`.
@@ -78,11 +87,11 @@ Do not add `.makepad/`.
 **Files:**
 - Modify: `examples/native_liquid_glass/src/main.rs`
 
-- [ ] **Step 1: Add failing tests**
+- [x] **Step 1: Add failing tests**
 
 Add tests that require `NativeDemoVisualMode::Geometry`, a stable label, and a distinct scene layout from `Panels`.
 
-- [ ] **Step 2: Implement `Geometry` mode**
+- [x] **Step 2: Implement `Geometry` mode**
 
 Add `Geometry` to `NativeDemoVisualMode`, include it in mode switching, and configure scene values that emphasize:
 
@@ -91,11 +100,11 @@ Add `Geometry` to `NativeDemoVisualMode`, include it in mode switching, and conf
 - top-right rounded rect
 - resize-safe margins
 
-- [ ] **Step 3: Add UI control**
+- [x] **Step 3: Add UI control**
 
 Add a `Geometry` button near `Panels / Morph / Controls / Readability`.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -111,22 +120,22 @@ Then launch via Studio `RunItem` and resize the window. Expected: all native pan
 
 **Files:**
 - Modify: `examples/native_liquid_glass/src/main.rs`
-- Inspect: `widgets/src/glass_container.rs`
+- Inspect: `widgets/src/glass_panel.rs`
 - Inspect: `platform/src/os/apple/macos/macos_window.rs`
 
-- [ ] **Step 1: Add failing tests**
+- [x] **Step 1: Add failing tests**
 
 Require a `Container` mode with at least three spacing presets: near, threshold, far.
 
-- [ ] **Step 2: Implement mode state**
+- [x] **Step 2: Implement mode state**
 
 Add a small enum for container spacing probes, or reuse existing morph state if it remains clear.
 
-- [ ] **Step 3: Wire controls**
+- [x] **Step 3: Wire controls**
 
 Add controls for `Near`, `Threshold`, and `Far`. The scene should place panels so the Apple container spacing behavior is visually obvious.
 
-- [ ] **Step 4: Verify Studio logs**
+- [x] **Step 4: Verify Studio logs**
 
 Run via Studio and confirm logs include:
 
@@ -143,7 +152,7 @@ Run via Studio and confirm logs include:
 - Modify: `examples/native_liquid_glass/src/main.rs`
 - Inspect: `platform/src/os/apple/macos/macos_window.rs`
 
-- [ ] **Step 1: Add pure debug summary helper**
+- [x] **Step 1: Add pure debug summary helper**
 
 Add a helper that formats:
 
@@ -156,15 +165,15 @@ Add a helper that formats:
 - panel count
 - current expected `z_order`
 
-- [ ] **Step 2: Add failing tests**
+- [x] **Step 2: Add failing tests**
 
 Test the summary helper includes mode, style, spacing, radius, and panel count.
 
-- [ ] **Step 3: Add Debug mode UI**
+- [x] **Step 3: Add Debug mode UI**
 
 Show a compact text block that mirrors the expected descriptor batch. Keep it Makepad-rendered and readable over native glass.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run release tests and Studio screenshot. Expected: debug text is readable and does not cover the primary panel edges.
 
@@ -176,19 +185,19 @@ Run release tests and Studio screenshot. Expected: debug text is readable and do
 - Modify: `examples/native_liquid_glass/src/main.rs`
 - Inspect: `platform/src/os/apple/macos/macos_window.rs`
 
-- [ ] **Step 1: Add contrast token helper**
+- [x] **Step 1: Add contrast token helper**
 
 Add pure helper values for bright-background foreground text, dark-background foreground text, and separator colors.
 
-- [ ] **Step 2: Add failing tests**
+- [x] **Step 2: Add failing tests**
 
 Test that bright and dark contrast tokens differ and keep alpha high enough for text.
 
-- [ ] **Step 3: Extend Readability mode**
+- [x] **Step 3: Extend Readability mode**
 
 Add a simple toggle between bright, dark, and mixed visual backgrounds. Keep panel tint alpha within the native translucency range.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run release tests and Studio screenshots for bright and dark states.
 
@@ -200,19 +209,19 @@ Run release tests and Studio screenshots for bright and dark states.
 - Modify: `examples/native_liquid_glass/src/main.rs`
 - Modify or create: `docs/research/native-liquid-glass-standalone-notes.md`
 
-- [ ] **Step 1: Rename or label overlay code**
+- [x] **Step 1: Rename or label overlay code**
 
 Keep `GoldGlintEdge`, but ensure in-code names and docs call it a Makepad demo overlay.
 
-- [ ] **Step 2: Add a visibility toggle**
+- [x] **Step 2: Add a visibility toggle**
 
 Add `Glint On/Off` so native glass can be inspected without shader decoration.
 
-- [ ] **Step 3: Add tests**
+- [x] **Step 3: Add tests**
 
 Test the glint toggle state and status text.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run Studio screenshots with glint on and off. Expected: native glass remains visible without the overlay.
 
@@ -222,9 +231,15 @@ Run Studio screenshots with glint on and off. Expected: native glass remains vis
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-06-04-native-liquid-glass-standalone-roadmap.md`
-- Optionally create: `docs/research/native-liquid-glass-studio-checklist.md`
+- Create: `docs/research/native-liquid-glass-studio-checklist.md`
 
-- [ ] **Step 1: Document Studio flow**
+Checklist artifact:
+
+- `docs/research/native-liquid-glass-studio-checklist.md` records the required
+  Studio remote launch flow, state=4 log evidence, visual acceptance, and
+  non-acceptance criteria for demo overlays and Studio screenshots.
+
+- [x] **Step 1: Document Studio flow**
 
 Record the exact flow:
 
@@ -239,7 +254,7 @@ Click Tone / Morph / Controls / Debug
 Screenshot again
 ```
 
-- [ ] **Step 2: Define visual acceptance**
+- [x] **Step 2: Define visual acceptance**
 
 Expected:
 
@@ -256,11 +271,11 @@ Expected:
 
 **Files:**
 - Modify as needed: `widgets/src/glass_panel.rs`
-- Modify as needed: `widgets/src/glass_container.rs`
+- Modify as needed: `widgets/src/glass_panel.rs`
 - Modify as needed: `platform/src/os/apple/macos/macos_window.rs`
 - Modify: `examples/native_liquid_glass/src/main.rs`
 
-- [ ] **Step 1: Audit descriptor fields**
+- [x] **Step 1: Audit descriptor fields**
 
 Confirm standalone can express all v4.1 fields:
 
@@ -272,15 +287,15 @@ Confirm standalone can express all v4.1 fields:
 - hit_test passthrough
 - container spacing
 
-- [ ] **Step 2: Add missing script-facing knobs**
+- [x] **Step 2: Add missing script-facing knobs**
 
 Only add fields that map to real descriptor/backend behavior.
 
-- [ ] **Step 3: Add tests**
+- [x] **Step 3: Add tests**
 
 Use pure helper tests for descriptor defaults and scene mapping; use Studio for runtime native install verification.
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run:
 
@@ -293,9 +308,9 @@ Then run standalone through Studio and confirm `state=4`.
 
 ## Acceptance Checklist
 
-- [ ] Current standalone checkpoint is committed without `.makepad/`.
-- [ ] Standalone has modes dedicated to geometry, container spacing, debug state, controls, readability, and demo overlays.
-- [ ] Every mode has release unit tests for pure state/scene behavior.
-- [ ] Studio validation reaches `state=4 substrate=macos-native`.
-- [ ] Native glass behavior can be inspected with demo overlays disabled.
-- [ ] Documentation clearly separates Apple native API behavior from Makepad shader overlays.
+- [x] Current standalone checkpoint is committed without `.makepad/`.
+- [x] Standalone has modes dedicated to geometry, container spacing, debug state, controls, readability, and demo overlays.
+- [x] Every mode has release unit tests for pure state/scene behavior.
+- [x] Studio validation reaches `state=4 substrate=macos-native`.
+- [x] Native glass behavior can be inspected with demo overlays disabled.
+- [x] Documentation clearly separates Apple native API behavior from Makepad shader overlays.

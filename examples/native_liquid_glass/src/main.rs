@@ -26,6 +26,7 @@ const NATIVE_PRESS_PULSE_TINT_BOOST: f32 = 0.10;
 const GOLD_GLINT_EDGE_WIDTH: f32 = 2.2;
 const GOLD_GLINT_BASE_STRENGTH: f32 = 0.28;
 const GOLD_GLINT_PULSE_BOOST: f32 = 0.68;
+const NATIVE_DEMO_PANEL_COUNT: usize = 3;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -109,6 +110,13 @@ script_mod! {
         width: Fit
         height: Fit
         draw_text.color: #x111722E6
+        draw_text.text_style.font_size: 11
+    }
+
+    let DebugValue = Label{
+        width: Fit
+        height: Fit
+        draw_text.color: #xF7F8FFE8
         draw_text.text_style.font_size: 11
     }
 
@@ -402,7 +410,10 @@ script_mod! {
                                 draw_bg.color: #00000000
 
                                 mode_panels_button := ControlButton{text: "Panels"}
+                                mode_geometry_button := ControlButton{text: "Geometry"}
                                 mode_morph_button := ControlButton{text: "Morph"}
+                                mode_container_button := ControlButton{text: "Container"}
+                                mode_debug_button := ControlButton{text: "Debug"}
                                 mode_controls_button := ControlButton{text: "Controls"}
                                 mode_readability_button := ControlButton{text: "Readability"}
                             }
@@ -419,6 +430,34 @@ script_mod! {
                                 morph_near_button := ControlButton{text: "Near"}
                                 morph_far_button := ControlButton{text: "Far"}
                                 morph_overlap_button := ControlButton{text: "Overlap"}
+                            }
+
+                            container_row := View{
+                                visible: false
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{x: 0.0 y: 0.5}
+                                draw_bg.color: #00000000
+
+                                container_near_button := ControlButton{text: "Near"}
+                                container_threshold_button := ControlButton{text: "Threshold"}
+                                container_far_button := ControlButton{text: "Far"}
+                            }
+
+                            readability_row := View{
+                                visible: false
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{x: 0.0 y: 0.5}
+                                draw_bg.color: #00000000
+
+                                readability_mixed_button := ControlButton{text: "Mixed"}
+                                readability_bright_button := ControlButton{text: "Bright"}
+                                readability_dark_button := ControlButton{text: "Dark"}
                             }
 
                             native_control_state_row := View{
@@ -446,6 +485,7 @@ script_mod! {
                                 tone_button := ControlButton{text: "Tone: Arctic"}
                                 reset_button := ControlButton{text: "Reset"}
                                 hide_controls_button := ControlButton{text: "Hide"}
+                                glint_toggle_button := ControlButton{text: "Glint Off"}
                             }
 
                             control_row_2 := View{
@@ -465,7 +505,34 @@ script_mod! {
                             }
 
                             status_readout := ControlValue{
-                                text: "Panels  Clear  tint 22%  spacing 28  radius 44"
+                                text: "Panels  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on"
+                            }
+                            debug_readout_1 := DebugValue{
+                                visible: false
+                                text: "mode=Panels style=Clear tone=Arctic panels=3 z=0/1/2"
+                            }
+                            debug_readout_2 := DebugValue{
+                                visible: false
+                                text: "tint=22% spacing=28 radius=44 hit=passthrough makepad-glint:on"
+                            }
+                            readability_probe_box := View{
+                                visible: false
+                                width: Fit
+                                height: Fit
+                                flow: Down
+                                spacing: 4
+                                padding: Inset{left: 10 top: 7 right: 10 bottom: 7}
+                                show_bg: true
+                                draw_bg +: {
+                                    color: #xFFFFFF40
+                                }
+
+                                readability_probe_title := DebugValue{
+                                    text: "Mixed wallpaper probe"
+                                }
+                                readability_probe_detail := DebugValue{
+                                    text: "foreground and separator tokens"
+                                }
                             }
                         }
 
@@ -562,6 +629,10 @@ pub struct App {
     #[rust]
     morph_state: NativeDemoMorphState,
     #[rust]
+    container_preset: NativeDemoContainerPreset,
+    #[rust]
+    readability_probe: NativeDemoReadabilityProbe,
+    #[rust]
     style_mode: NativeDemoStyleMode,
     #[rust]
     tone_mode: NativeDemoColorTone,
@@ -573,6 +644,8 @@ pub struct App {
     main_radius: f64,
     #[rust]
     controls_visible: bool,
+    #[rust]
+    makepad_demo_glint_visible: bool,
     #[rust]
     native_primary_control_enabled: bool,
     #[rust]
@@ -593,7 +666,10 @@ pub struct App {
 enum NativeDemoVisualMode {
     #[default]
     Panels,
+    Geometry,
     Morph,
+    Container,
+    Debug,
     Controls,
     Readability,
 }
@@ -602,17 +678,26 @@ impl NativeDemoVisualMode {
     fn label(self) -> &'static str {
         match self {
             Self::Panels => "Panels",
+            Self::Geometry => "Geometry",
             Self::Morph => "Morph",
+            Self::Container => "Container",
+            Self::Debug => "Debug",
             Self::Controls => "Controls",
             Self::Readability => "Readability",
         }
     }
 }
 
-fn native_liquid_glass_start_mode_from_env_value(
-    value: Option<&str>,
-) -> NativeDemoVisualMode {
-    match value.map(str::trim).unwrap_or_default().to_ascii_lowercase().as_str() {
+fn native_liquid_glass_start_mode_from_env_value(value: Option<&str>) -> NativeDemoVisualMode {
+    match value
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "debug" => NativeDemoVisualMode::Debug,
+        "container" => NativeDemoVisualMode::Container,
+        "geometry" => NativeDemoVisualMode::Geometry,
         "morph" => NativeDemoVisualMode::Morph,
         "control" | "controls" => NativeDemoVisualMode::Controls,
         "readability" => NativeDemoVisualMode::Readability,
@@ -642,6 +727,50 @@ impl NativeDemoMorphState {
             Self::Near => "Near",
             Self::Far => "Far",
             Self::Overlap => "Overlap",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativeDemoContainerPreset {
+    Near,
+    #[default]
+    Threshold,
+    Far,
+}
+
+impl NativeDemoContainerPreset {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Near => "Near",
+            Self::Threshold => "Threshold",
+            Self::Far => "Far",
+        }
+    }
+
+    fn spacing(self) -> f64 {
+        match self {
+            Self::Near => MIN_CONTAINER_SPACING + 2.0,
+            Self::Threshold => DEFAULT_CONTAINER_SPACING,
+            Self::Far => MAX_CONTAINER_SPACING,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativeDemoReadabilityProbe {
+    #[default]
+    Mixed,
+    Bright,
+    Dark,
+}
+
+impl NativeDemoReadabilityProbe {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mixed => "Mixed",
+            Self::Bright => "Bright",
+            Self::Dark => "Dark",
         }
     }
 }
@@ -710,6 +839,32 @@ struct NativeDemoVisualScene {
     primary_control_enabled: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeDemoDebugSummary {
+    line_1: String,
+    line_2: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoReadabilityTokens {
+    foreground: Vec4f,
+    secondary: Vec4f,
+    separator: Vec4f,
+    probe_background: Vec4f,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeDemoV41DescriptorCoverage {
+    style: bool,
+    tint: bool,
+    shape: bool,
+    radius: bool,
+    z_order: bool,
+    hit_test_passthrough: bool,
+    container_spacing: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NativeDemoControlRoleSpec {
     label: &'static str,
@@ -750,6 +905,19 @@ fn native_liquid_glass_primary_enabled_toggle_text(enabled: bool) -> &'static st
 }
 
 #[cfg(test)]
+fn native_liquid_glass_v4_1_descriptor_coverage() -> NativeDemoV41DescriptorCoverage {
+    NativeDemoV41DescriptorCoverage {
+        style: true,
+        tint: true,
+        shape: true,
+        radius: true,
+        z_order: true,
+        hit_test_passthrough: true,
+        container_spacing: true,
+    }
+}
+
+#[cfg(test)]
 fn native_liquid_glass_visible_control_count(scene: NativeDemoVisualScene) -> usize {
     if scene.native_control_visible {
         native_liquid_glass_control_role_matrix().len()
@@ -785,6 +953,22 @@ fn native_liquid_glass_visual_scene(
             top_panel_line_2: "Metal layer stays transparent",
             bottom_left_label: "Clear",
             bottom_right_label: "Regular",
+            native_control_visible: false,
+            primary_control_enabled: false,
+        },
+        NativeDemoVisualMode::Geometry => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(42.0),
+            top_panel_width: 220.0,
+            top_panel_height: 112.0,
+            top_panel_margin: NativeDemoInset::top_right(44.0, 64.0),
+            bottom_panel_width: 240.0,
+            bottom_panel_height: 48.0,
+            bottom_panel_margin: NativeDemoInset::bottom(78.0),
+            top_panel_title: "Geometry",
+            top_panel_line_1: "rounded rect",
+            top_panel_line_2: "capsule edge tracking",
+            bottom_left_label: "Capsule",
+            bottom_right_label: "Radius",
             native_control_visible: false,
             primary_control_enabled: false,
         },
@@ -837,6 +1021,38 @@ fn native_liquid_glass_visual_scene(
                 native_control_visible: false,
                 primary_control_enabled: false,
             },
+        },
+        NativeDemoVisualMode::Container => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(58.0),
+            top_panel_width: 200.0,
+            top_panel_height: 120.0,
+            top_panel_margin: NativeDemoInset::top_right(54.0, 40.0),
+            bottom_panel_width: 260.0,
+            bottom_panel_height: 64.0,
+            bottom_panel_margin: NativeDemoInset::bottom(312.0),
+            top_panel_title: "Container",
+            top_panel_line_1: "spacing threshold",
+            top_panel_line_2: "native setSpacing probe",
+            bottom_left_label: "Preset",
+            bottom_right_label: "Spacing",
+            native_control_visible: false,
+            primary_control_enabled: false,
+        },
+        NativeDemoVisualMode::Debug => NativeDemoVisualScene {
+            main_panel_margin: NativeDemoInset::all(50.0),
+            top_panel_width: 180.0,
+            top_panel_height: 112.0,
+            top_panel_margin: NativeDemoInset::top_right(54.0, 40.0),
+            bottom_panel_width: 420.0,
+            bottom_panel_height: 70.0,
+            bottom_panel_margin: NativeDemoInset::bottom(74.0),
+            top_panel_title: "Debug batch",
+            top_panel_line_1: "panel ids 0 / 1 / 2",
+            top_panel_line_2: "hit-test passthrough",
+            bottom_left_label: "Batch",
+            bottom_right_label: "State",
+            native_control_visible: false,
+            primary_control_enabled: false,
         },
         NativeDemoVisualMode::Controls => NativeDemoVisualScene {
             main_panel_margin: NativeDemoInset::all(72.0),
@@ -1062,10 +1278,7 @@ fn clamp_native_demo_radius(value: f64) -> f64 {
     value.clamp(MIN_MAIN_RADIUS, MAX_MAIN_RADIUS)
 }
 
-fn native_liquid_glass_clear_tint_for_tone(
-    tone: NativeDemoColorTone,
-    alpha: f32,
-) -> Option<Vec4f> {
+fn native_liquid_glass_clear_tint_for_tone(tone: NativeDemoColorTone, alpha: f32) -> Option<Vec4f> {
     let (r, g, b) = tone.clear_tint_rgb();
     Some(vec4(r, g, b, clamp_native_demo_tint_alpha(alpha)))
 }
@@ -1089,26 +1302,111 @@ fn native_liquid_glass_tint_for_mode(
     }
 }
 
+fn native_liquid_glass_readability_tokens(
+    probe: NativeDemoReadabilityProbe,
+) -> NativeDemoReadabilityTokens {
+    match probe {
+        NativeDemoReadabilityProbe::Bright => NativeDemoReadabilityTokens {
+            foreground: vec4(0.03, 0.05, 0.08, 0.94),
+            secondary: vec4(0.08, 0.12, 0.18, 0.72),
+            separator: vec4(0.06, 0.09, 0.13, 0.48),
+            probe_background: vec4(0.96, 0.98, 1.0, 0.46),
+        },
+        NativeDemoReadabilityProbe::Dark => NativeDemoReadabilityTokens {
+            foreground: vec4(0.97, 0.98, 1.0, 0.94),
+            secondary: vec4(0.82, 0.88, 0.96, 0.72),
+            separator: vec4(0.94, 0.97, 1.0, 0.48),
+            probe_background: vec4(0.02, 0.03, 0.05, 0.42),
+        },
+        NativeDemoReadabilityProbe::Mixed => NativeDemoReadabilityTokens {
+            foreground: vec4(0.97, 0.98, 1.0, 0.92),
+            secondary: vec4(0.72, 0.80, 0.92, 0.70),
+            separator: vec4(0.86, 0.92, 1.0, 0.44),
+            probe_background: vec4(0.14, 0.18, 0.24, 0.38),
+        },
+    }
+}
+
+fn native_liquid_glass_visual_status_label(
+    visual_mode: NativeDemoVisualMode,
+    morph_state: NativeDemoMorphState,
+    container_preset: NativeDemoContainerPreset,
+    readability_probe: NativeDemoReadabilityProbe,
+) -> String {
+    match visual_mode {
+        NativeDemoVisualMode::Morph => format!("{} {}", visual_mode.label(), morph_state.label()),
+        NativeDemoVisualMode::Container => {
+            format!("{}: {}", visual_mode.label(), container_preset.label())
+        }
+        NativeDemoVisualMode::Readability => {
+            format!("{}: {}", visual_mode.label(), readability_probe.label())
+        }
+        _ => visual_mode.label().to_string(),
+    }
+}
+
 fn native_liquid_glass_status_text(
     visual_mode: NativeDemoVisualMode,
     morph_state: NativeDemoMorphState,
+    container_preset: NativeDemoContainerPreset,
+    readability_probe: NativeDemoReadabilityProbe,
     mode: NativeDemoStyleMode,
     alpha: f32,
     spacing: f64,
     radius: f64,
+    makepad_demo_glint_visible: bool,
 ) -> String {
-    let visual_label = match visual_mode {
-        NativeDemoVisualMode::Morph => format!("{} {}", visual_mode.label(), morph_state.label()),
-        _ => visual_mode.label().to_string(),
-    };
+    let visual_label = native_liquid_glass_visual_status_label(
+        visual_mode,
+        morph_state,
+        container_preset,
+        readability_probe,
+    );
     format!(
-        "{}  {}  tint {:.0}%  spacing {:.0}  radius {:.0}",
+        "{}  {}  tint {:.0}%  spacing {:.0}  radius {:.0}  {}",
         visual_label,
         mode.label(),
         clamp_native_demo_tint_alpha(alpha) * 100.0,
         clamp_native_demo_spacing(spacing),
-        clamp_native_demo_radius(radius)
+        clamp_native_demo_radius(radius),
+        makepad_demo_glint_status_label(makepad_demo_glint_visible)
     )
+}
+
+fn native_liquid_glass_debug_summary(
+    visual_mode: NativeDemoVisualMode,
+    morph_state: NativeDemoMorphState,
+    container_preset: NativeDemoContainerPreset,
+    readability_probe: NativeDemoReadabilityProbe,
+    style_mode: NativeDemoStyleMode,
+    tone_mode: NativeDemoColorTone,
+    alpha: f32,
+    spacing: f64,
+    radius: f64,
+    panel_count: usize,
+    makepad_demo_glint_visible: bool,
+) -> NativeDemoDebugSummary {
+    NativeDemoDebugSummary {
+        line_1: format!(
+            "mode={} style={} tone={} panels={} z=0/1/2",
+            native_liquid_glass_visual_status_label(
+                visual_mode,
+                morph_state,
+                container_preset,
+                readability_probe,
+            ),
+            style_mode.label(),
+            tone_mode.label(),
+            panel_count
+        ),
+        line_2: format!(
+            "tint={:.0}% spacing={:.0} radius={:.0} hit=passthrough {}",
+            clamp_native_demo_tint_alpha(alpha) * 100.0,
+            clamp_native_demo_spacing(spacing),
+            clamp_native_demo_radius(radius),
+            makepad_demo_glint_status_label(makepad_demo_glint_visible)
+        ),
+    }
 }
 
 fn native_liquid_glass_press_pulse_amount(elapsed: f64) -> f64 {
@@ -1173,6 +1471,22 @@ fn native_liquid_glass_gold_glint_strength(pulse: f64) -> f32 {
     (GOLD_GLINT_BASE_STRENGTH + pulse * GOLD_GLINT_PULSE_BOOST).clamp(0.0, 1.0)
 }
 
+fn makepad_demo_glint_toggle_text(visible: bool) -> &'static str {
+    if visible {
+        "Glint Off"
+    } else {
+        "Glint On"
+    }
+}
+
+fn makepad_demo_glint_status_label(visible: bool) -> &'static str {
+    if visible {
+        "makepad-glint:on"
+    } else {
+        "makepad-glint:off"
+    }
+}
+
 fn native_liquid_glass_control_status_text(activations: u32, pulse: f64) -> String {
     if pulse > 0.01 {
         format!("native button {} pulse {:.0}%", activations, pulse * 100.0)
@@ -1183,6 +1497,7 @@ fn native_liquid_glass_control_status_text(activations: u32, pulse: f64) -> Stri
 
 fn native_liquid_glass_visual_mode_tuning(
     visual_mode: NativeDemoVisualMode,
+    container_preset: NativeDemoContainerPreset,
     alpha: f32,
     spacing: f64,
     radius: f64,
@@ -1193,10 +1508,25 @@ fn native_liquid_glass_visual_mode_tuning(
             clamp_native_demo_spacing(spacing),
             clamp_native_demo_radius(radius),
         ),
+        NativeDemoVisualMode::Geometry => (
+            clamp_native_demo_tint_alpha(alpha + 0.02),
+            clamp_native_demo_spacing(spacing),
+            clamp_native_demo_radius(radius + 18.0),
+        ),
         NativeDemoVisualMode::Morph => (
             clamp_native_demo_tint_alpha(alpha + 0.03),
             clamp_native_demo_spacing(spacing + 14.0),
             clamp_native_demo_radius(radius + 10.0),
+        ),
+        NativeDemoVisualMode::Container => (
+            clamp_native_demo_tint_alpha(alpha + 0.02),
+            clamp_native_demo_spacing(container_preset.spacing()),
+            clamp_native_demo_radius(radius + 4.0),
+        ),
+        NativeDemoVisualMode::Debug => (
+            clamp_native_demo_tint_alpha(alpha + 0.04),
+            clamp_native_demo_spacing(spacing),
+            clamp_native_demo_radius(radius),
         ),
         NativeDemoVisualMode::Controls => (
             clamp_native_demo_tint_alpha(alpha + 0.01),
@@ -1279,11 +1609,13 @@ impl App {
     fn configure_native_panels(&mut self, cx: &mut Cx) {
         let rounded_rect = makepad_widgets::glass_panel::GlassNativeShape::RoundedRect;
         let capsule = makepad_widgets::glass_panel::GlassNativeShape::Capsule;
+        let passthrough = makepad_widgets::glass_panel::GlassNativeHitTest::Passthrough;
         let scene = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state);
         let main_style = self.style_mode.style();
         let top_style = self.style_mode.opposite_style();
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
             self.demo_mode,
+            self.container_preset,
             self.tint_alpha,
             self.container_spacing,
             self.main_radius,
@@ -1295,8 +1627,11 @@ impl App {
                 mode_radius,
                 self.native_press_pulse_amount,
             );
-        let main_tint =
-            native_liquid_glass_tint_for_mode(self.style_mode, self.tone_mode, effective_tint_alpha);
+        let main_tint = native_liquid_glass_tint_for_mode(
+            self.style_mode,
+            self.tone_mode,
+            effective_tint_alpha,
+        );
         let top_tint = native_liquid_glass_tint_for_mode(
             match self.style_mode {
                 NativeDemoStyleMode::Clear => NativeDemoStyleMode::Regular,
@@ -1316,6 +1651,10 @@ impl App {
             native_liquid_glass_gold_glint_strength(self.native_press_pulse_amount);
         let gold_pulse = self.native_press_pulse_amount.clamp(0.0, 1.0) as f32;
 
+        self.ui
+            .view(cx, ids!(gold_edge_layer))
+            .set_visible(cx, self.makepad_demo_glint_visible);
+
         let mut glass_container = self.ui.widget(cx, ids!(glass_container));
         script_apply_eval!(cx, glass_container, {
             native: true
@@ -1329,6 +1668,7 @@ impl App {
             native_shape: #(rounded_rect)
             native_radius: #(main_radius)
             native_tint: #(main_tint)
+            native_hit_test: #(passthrough)
             margin: #(main_panel_margin)
             draw_bg +: {
                 corner_radius: #(main_radius)
@@ -1345,6 +1685,7 @@ impl App {
             native_shape: #(rounded_rect)
             native_radius: #(top_radius)
             native_tint: #(top_tint)
+            native_hit_test: #(passthrough)
             draw_bg +: {
                 corner_radius: #(top_radius)
             }
@@ -1359,6 +1700,7 @@ impl App {
             native_style: #(main_style)
             native_shape: #(capsule)
             native_tint: #(main_tint)
+            native_hit_test: #(passthrough)
         });
 
         let mut top_panel_copy_card = self.ui.view(cx, ids!(top_panel_copy_card));
@@ -1453,12 +1795,22 @@ impl App {
             .view(cx, ids!(morph_row))
             .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Morph);
         self.ui
+            .view(cx, ids!(container_row))
+            .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Container);
+        self.ui
+            .view(cx, ids!(readability_row))
+            .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Readability);
+        self.ui
             .view(cx, ids!(native_control_state_row))
             .set_visible(cx, self.demo_mode == NativeDemoVisualMode::Controls);
-        self.ui.widget(cx, ids!(primary_enabled_toggle_button)).set_text(
-            cx,
-            native_liquid_glass_primary_enabled_toggle_text(self.native_primary_control_enabled),
-        );
+        self.ui
+            .widget(cx, ids!(primary_enabled_toggle_button))
+            .set_text(
+                cx,
+                native_liquid_glass_primary_enabled_toggle_text(
+                    self.native_primary_control_enabled,
+                ),
+            );
     }
 
     fn start_native_press_pulse(&mut self, cx: &mut Cx) {
@@ -1514,6 +1866,9 @@ impl App {
     }
 
     fn update_gold_glint_animation(&mut self, cx: &mut Cx, event: &NextFrameEvent) {
+        if !self.makepad_demo_glint_visible {
+            return;
+        }
         if !event.set.contains(&self.gold_glint_next_frame) {
             return;
         }
@@ -1525,6 +1880,7 @@ impl App {
         let scene = native_liquid_glass_visual_scene(self.demo_mode, self.morph_state);
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
             self.demo_mode,
+            self.container_preset,
             self.tint_alpha,
             self.container_spacing,
             self.main_radius,
@@ -1532,14 +1888,71 @@ impl App {
         let status = native_liquid_glass_status_text(
             self.demo_mode,
             self.morph_state,
+            self.container_preset,
+            self.readability_probe,
             self.style_mode,
             mode_tint_alpha,
             mode_spacing,
             mode_radius,
+            self.makepad_demo_glint_visible,
         );
         self.ui
             .label(cx, ids!(status_readout))
             .set_text(cx, &status);
+        let debug_summary = native_liquid_glass_debug_summary(
+            self.demo_mode,
+            self.morph_state,
+            self.container_preset,
+            self.readability_probe,
+            self.style_mode,
+            self.tone_mode,
+            mode_tint_alpha,
+            mode_spacing,
+            mode_radius,
+            NATIVE_DEMO_PANEL_COUNT,
+            self.makepad_demo_glint_visible,
+        );
+        let debug_visible = self.demo_mode == NativeDemoVisualMode::Debug;
+        self.ui
+            .label(cx, ids!(debug_readout_1))
+            .set_text(cx, &debug_summary.line_1);
+        self.ui
+            .label(cx, ids!(debug_readout_2))
+            .set_text(cx, &debug_summary.line_2);
+        self.ui
+            .widget(cx, ids!(debug_readout_1))
+            .set_visible(cx, debug_visible);
+        self.ui
+            .widget(cx, ids!(debug_readout_2))
+            .set_visible(cx, debug_visible);
+        let readability_visible = self.demo_mode == NativeDemoVisualMode::Readability;
+        let readability_tokens = native_liquid_glass_readability_tokens(self.readability_probe);
+        self.ui.label(cx, ids!(readability_probe_title)).set_text(
+            cx,
+            &format!("{} wallpaper probe", self.readability_probe.label()),
+        );
+        self.ui
+            .label(cx, ids!(readability_probe_detail))
+            .set_text(cx, "foreground / separator tokens stay readable");
+        let mut readability_probe_box = self.ui.view(cx, ids!(readability_probe_box));
+        script_apply_eval!(cx, readability_probe_box, {
+            visible: #(readability_visible)
+            draw_bg +: {
+                color: #(readability_tokens.probe_background)
+            }
+        });
+        let mut readability_probe_title = self.ui.label(cx, ids!(readability_probe_title));
+        script_apply_eval!(cx, readability_probe_title, {
+            draw_text +: {
+                color: #(readability_tokens.foreground)
+            }
+        });
+        let mut readability_probe_detail = self.ui.label(cx, ids!(readability_probe_detail));
+        script_apply_eval!(cx, readability_probe_detail, {
+            draw_text +: {
+                color: #(readability_tokens.secondary)
+            }
+        });
         self.ui
             .label(cx, ids!(spacing_caption))
             .set_text(cx, &format!("container spacing {:.0}", mode_spacing));
@@ -1568,6 +1981,10 @@ impl App {
         self.ui
             .widget(cx, ids!(tone_button))
             .set_text(cx, &format!("Tone: {}", self.tone_mode.label()));
+        self.ui.widget(cx, ids!(glint_toggle_button)).set_text(
+            cx,
+            makepad_demo_glint_toggle_text(self.makepad_demo_glint_visible),
+        );
         self.ui
             .view(cx, ids!(controls))
             .set_visible(cx, self.controls_visible);
@@ -1579,11 +1996,14 @@ impl App {
     fn reset_tuning(&mut self) {
         self.demo_mode = NativeDemoVisualMode::Panels;
         self.morph_state = NativeDemoMorphState::Near;
+        self.container_preset = NativeDemoContainerPreset::Threshold;
+        self.readability_probe = NativeDemoReadabilityProbe::Mixed;
         self.style_mode = NativeDemoStyleMode::Clear;
         self.tone_mode = NativeDemoColorTone::Arctic;
         self.tint_alpha = DEFAULT_CLEAR_TINT_ALPHA;
         self.container_spacing = DEFAULT_CONTAINER_SPACING;
         self.main_radius = DEFAULT_MAIN_RADIUS;
+        self.makepad_demo_glint_visible = true;
         self.native_primary_control_enabled = true;
     }
 
@@ -1606,12 +2026,16 @@ impl MatchEvent for App {
             self.configured = true;
             self.controls_visible = true;
             self.demo_mode = native_liquid_glass_start_mode_from_env();
+            self.container_preset = NativeDemoContainerPreset::Threshold;
+            self.readability_probe = NativeDemoReadabilityProbe::Mixed;
+            self.makepad_demo_glint_visible = true;
             self.native_primary_control_enabled = true;
             self.tone_mode = NativeDemoColorTone::Arctic;
             self.configure_native_liquid_glass(cx);
             self.start_gold_glint_animation(cx);
             log!(
-                "[liquid-glass] standalone-native-example configured=true panels=3 mode={}",
+                "[liquid-glass] standalone-native-example configured=true panels={} mode={}",
+                NATIVE_DEMO_PANEL_COUNT,
                 self.demo_mode.label()
             );
         }
@@ -1641,7 +2065,11 @@ impl MatchEvent for App {
         {
             self.register_native_control_activation(cx, "Utility");
         }
-        if self.ui.button(cx, ids!(native_icon_button)).clicked(actions) {
+        if self
+            .ui
+            .button(cx, ids!(native_icon_button))
+            .clicked(actions)
+        {
             self.register_native_control_activation(cx, "Icon");
         }
         if self.ui.button(cx, ids!(native_nav_button)).clicked(actions) {
@@ -1656,8 +2084,29 @@ impl MatchEvent for App {
             self.demo_mode = NativeDemoVisualMode::Panels;
             changed = true;
         }
+        if self
+            .ui
+            .button(cx, ids!(mode_geometry_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Geometry;
+            changed = true;
+        }
         if self.ui.button(cx, ids!(mode_morph_button)).clicked(actions) {
             self.demo_mode = NativeDemoVisualMode::Morph;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(mode_container_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Container;
+            self.container_spacing = self.container_preset.spacing();
+            changed = true;
+        }
+        if self.ui.button(cx, ids!(mode_debug_button)).clicked(actions) {
+            self.demo_mode = NativeDemoVisualMode::Debug;
             changed = true;
         }
         if self
@@ -1712,6 +2161,65 @@ impl MatchEvent for App {
 
         if self
             .ui
+            .button(cx, ids!(container_near_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Container;
+            self.container_preset = NativeDemoContainerPreset::Near;
+            self.container_spacing = self.container_preset.spacing();
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(container_threshold_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Container;
+            self.container_preset = NativeDemoContainerPreset::Threshold;
+            self.container_spacing = self.container_preset.spacing();
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(container_far_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Container;
+            self.container_preset = NativeDemoContainerPreset::Far;
+            self.container_spacing = self.container_preset.spacing();
+            changed = true;
+        }
+
+        if self
+            .ui
+            .button(cx, ids!(readability_mixed_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Readability;
+            self.readability_probe = NativeDemoReadabilityProbe::Mixed;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(readability_bright_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Readability;
+            self.readability_probe = NativeDemoReadabilityProbe::Bright;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(readability_dark_button))
+            .clicked(actions)
+        {
+            self.demo_mode = NativeDemoVisualMode::Readability;
+            self.readability_probe = NativeDemoReadabilityProbe::Dark;
+            changed = true;
+        }
+
+        if self
+            .ui
             .button(cx, ids!(style_clear_button))
             .clicked(actions)
         {
@@ -1732,6 +2240,7 @@ impl MatchEvent for App {
         }
         if self.ui.button(cx, ids!(reset_button)).clicked(actions) {
             self.reset_tuning();
+            self.start_gold_glint_animation(cx);
             changed = true;
         }
         if self
@@ -1744,6 +2253,17 @@ impl MatchEvent for App {
         }
         if self.ui.button(cx, ids!(tune_button)).clicked(actions) {
             self.controls_visible = true;
+            changed = true;
+        }
+        if self
+            .ui
+            .button(cx, ids!(glint_toggle_button))
+            .clicked(actions)
+        {
+            self.makepad_demo_glint_visible = !self.makepad_demo_glint_visible;
+            if self.makepad_demo_glint_visible {
+                self.start_gold_glint_animation(cx);
+            }
             changed = true;
         }
         if self.ui.button(cx, ids!(tint_down_button)).clicked(actions) {
@@ -1783,6 +2303,7 @@ impl MatchEvent for App {
             let (mode_tint_alpha, mode_spacing, mode_radius) =
                 native_liquid_glass_visual_mode_tuning(
                     self.demo_mode,
+                    self.container_preset,
                     self.tint_alpha,
                     self.container_spacing,
                     self.main_radius,
@@ -1792,10 +2313,13 @@ impl MatchEvent for App {
                 native_liquid_glass_status_text(
                     self.demo_mode,
                     self.morph_state,
+                    self.container_preset,
+                    self.readability_probe,
                     self.style_mode,
                     mode_tint_alpha,
                     mode_spacing,
-                    mode_radius
+                    mode_radius,
+                    self.makepad_demo_glint_visible
                 )
             );
             log!(
@@ -1885,9 +2409,18 @@ mod tests {
 
         assert_ne!(arctic.x, emerald.x);
         assert_eq!(arctic.w, emerald.w);
-        assert_eq!(NativeDemoColorTone::Arctic.next(), NativeDemoColorTone::Emerald);
-        assert_eq!(NativeDemoColorTone::Violet.next(), NativeDemoColorTone::Aijiro);
-        assert_eq!(NativeDemoColorTone::Usuhanazakura.next(), NativeDemoColorTone::Arctic);
+        assert_eq!(
+            NativeDemoColorTone::Arctic.next(),
+            NativeDemoColorTone::Emerald
+        );
+        assert_eq!(
+            NativeDemoColorTone::Violet.next(),
+            NativeDemoColorTone::Aijiro
+        );
+        assert_eq!(
+            NativeDemoColorTone::Usuhanazakura.next(),
+            NativeDemoColorTone::Arctic
+        );
     }
 
     #[test]
@@ -1928,25 +2461,43 @@ mod tests {
             native_liquid_glass_status_text(
                 NativeDemoVisualMode::Panels,
                 NativeDemoMorphState::Near,
+                NativeDemoContainerPreset::Threshold,
+                NativeDemoReadabilityProbe::Mixed,
                 NativeDemoStyleMode::Clear,
                 0.22,
                 28.0,
-                44.0
+                44.0,
+                true,
             ),
-            "Panels  Clear  tint 22%  spacing 28  radius 44"
+            "Panels  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on"
         );
     }
 
     #[test]
     fn standalone_native_glass_visual_modes_have_stable_labels() {
         assert_eq!(NativeDemoVisualMode::Panels.label(), "Panels");
+        assert_eq!(NativeDemoVisualMode::Geometry.label(), "Geometry");
         assert_eq!(NativeDemoVisualMode::Morph.label(), "Morph");
+        assert_eq!(NativeDemoVisualMode::Container.label(), "Container");
+        assert_eq!(NativeDemoVisualMode::Debug.label(), "Debug");
         assert_eq!(NativeDemoVisualMode::Controls.label(), "Controls");
         assert_eq!(NativeDemoVisualMode::Readability.label(), "Readability");
     }
 
     #[test]
     fn standalone_native_glass_start_mode_env_supports_controls_probe() {
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("debug")),
+            NativeDemoVisualMode::Debug
+        );
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("container")),
+            NativeDemoVisualMode::Container
+        );
+        assert_eq!(
+            native_liquid_glass_start_mode_from_env_value(Some("geometry")),
+            NativeDemoVisualMode::Geometry
+        );
         assert_eq!(
             native_liquid_glass_start_mode_from_env_value(Some("controls")),
             NativeDemoVisualMode::Controls
@@ -1966,13 +2517,71 @@ mod tests {
     }
 
     #[test]
+    fn standalone_native_glass_container_presets_have_stable_spacing() {
+        assert_eq!(NativeDemoContainerPreset::Near.label(), "Near");
+        assert_eq!(NativeDemoContainerPreset::Threshold.label(), "Threshold");
+        assert_eq!(NativeDemoContainerPreset::Far.label(), "Far");
+        assert!(
+            NativeDemoContainerPreset::Near.spacing()
+                < NativeDemoContainerPreset::Threshold.spacing()
+        );
+        assert!(
+            NativeDemoContainerPreset::Threshold.spacing()
+                < NativeDemoContainerPreset::Far.spacing()
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_readability_probes_have_contrast_tokens() {
+        assert_eq!(NativeDemoReadabilityProbe::Mixed.label(), "Mixed");
+        assert_eq!(NativeDemoReadabilityProbe::Bright.label(), "Bright");
+        assert_eq!(NativeDemoReadabilityProbe::Dark.label(), "Dark");
+
+        let bright = native_liquid_glass_readability_tokens(NativeDemoReadabilityProbe::Bright);
+        let dark = native_liquid_glass_readability_tokens(NativeDemoReadabilityProbe::Dark);
+        let mixed = native_liquid_glass_readability_tokens(NativeDemoReadabilityProbe::Mixed);
+
+        assert_ne!(bright.foreground, dark.foreground);
+        assert_ne!(bright.separator, dark.separator);
+        assert!(bright.foreground.w >= 0.88);
+        assert!(dark.foreground.w >= 0.88);
+        assert!(mixed.separator.w >= 0.42);
+        assert!(mixed.probe_background.w < 1.0);
+    }
+
+    #[test]
     fn standalone_native_glass_visual_modes_adjust_effective_tuning() {
-        let panels =
-            native_liquid_glass_visual_mode_tuning(NativeDemoVisualMode::Panels, 0.22, 28.0, 44.0);
-        let morph =
-            native_liquid_glass_visual_mode_tuning(NativeDemoVisualMode::Morph, 0.22, 28.0, 44.0);
+        let panels = native_liquid_glass_visual_mode_tuning(
+            NativeDemoVisualMode::Panels,
+            NativeDemoContainerPreset::Threshold,
+            0.22,
+            28.0,
+            44.0,
+        );
+        let morph = native_liquid_glass_visual_mode_tuning(
+            NativeDemoVisualMode::Morph,
+            NativeDemoContainerPreset::Threshold,
+            0.22,
+            28.0,
+            44.0,
+        );
+        let geometry = native_liquid_glass_visual_mode_tuning(
+            NativeDemoVisualMode::Geometry,
+            NativeDemoContainerPreset::Threshold,
+            0.22,
+            28.0,
+            44.0,
+        );
+        let container = native_liquid_glass_visual_mode_tuning(
+            NativeDemoVisualMode::Container,
+            NativeDemoContainerPreset::Far,
+            0.22,
+            28.0,
+            44.0,
+        );
         let readability = native_liquid_glass_visual_mode_tuning(
             NativeDemoVisualMode::Readability,
+            NativeDemoContainerPreset::Threshold,
             0.22,
             28.0,
             44.0,
@@ -1981,6 +2590,9 @@ mod tests {
         assert_eq!(panels, (0.22, 28.0, 44.0));
         assert!(morph.1 > panels.1);
         assert!(morph.2 > panels.2);
+        assert_eq!(geometry.1, panels.1);
+        assert!(geometry.2 > panels.2);
+        assert_eq!(container.1, NativeDemoContainerPreset::Far.spacing());
         assert!(readability.0 > panels.0);
     }
 
@@ -1994,6 +2606,18 @@ mod tests {
             NativeDemoVisualMode::Morph,
             NativeDemoMorphState::Near,
         );
+        let geometry = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Geometry,
+            NativeDemoMorphState::Near,
+        );
+        let container = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Container,
+            NativeDemoMorphState::Near,
+        );
+        let debug = native_liquid_glass_visual_scene(
+            NativeDemoVisualMode::Debug,
+            NativeDemoMorphState::Near,
+        );
         let controls = native_liquid_glass_visual_scene(
             NativeDemoVisualMode::Controls,
             NativeDemoMorphState::Near,
@@ -2001,8 +2625,92 @@ mod tests {
 
         assert_ne!(panels.top_panel_width, morph.top_panel_width);
         assert!(morph.bottom_panel_margin.bottom > panels.bottom_panel_margin.bottom);
+        assert!(geometry.top_panel_width < panels.top_panel_width);
+        assert!(geometry.top_panel_height > panels.top_panel_height);
+        assert!(geometry.bottom_panel_width < panels.bottom_panel_width);
+        assert_eq!(geometry.top_panel_title, "Geometry");
+        assert_eq!(container.top_panel_title, "Container");
+        assert!(container.top_panel_height > panels.top_panel_height);
+        assert!(container.bottom_panel_margin.bottom > panels.bottom_panel_margin.bottom);
+        assert_eq!(debug.top_panel_title, "Debug batch");
         assert!(controls.main_panel_margin.left > panels.main_panel_margin.left);
         assert_eq!(morph.top_panel_title, "Morph: Near");
+    }
+
+    #[test]
+    fn standalone_native_glass_debug_summary_lists_descriptor_fields() {
+        let summary = native_liquid_glass_debug_summary(
+            NativeDemoVisualMode::Container,
+            NativeDemoMorphState::Near,
+            NativeDemoContainerPreset::Far,
+            NativeDemoReadabilityProbe::Mixed,
+            NativeDemoStyleMode::Clear,
+            NativeDemoColorTone::Arctic,
+            0.24,
+            52.0,
+            48.0,
+            NATIVE_DEMO_PANEL_COUNT,
+            true,
+        );
+
+        assert!(summary.line_1.contains("mode=Container: Far"));
+        assert!(summary.line_1.contains("style=Clear"));
+        assert!(summary.line_1.contains("tone=Arctic"));
+        assert!(summary.line_1.contains("panels=3"));
+        assert!(summary.line_1.contains("z=0/1/2"));
+        assert!(summary.line_2.contains("tint=24%"));
+        assert!(summary.line_2.contains("spacing=52"));
+        assert!(summary.line_2.contains("radius=48"));
+        assert!(summary.line_2.contains("makepad-glint:on"));
+    }
+
+    #[test]
+    fn standalone_native_glass_v4_1_descriptor_coverage_is_explicit() {
+        let coverage = native_liquid_glass_v4_1_descriptor_coverage();
+
+        assert!(coverage.style);
+        assert!(coverage.tint);
+        assert!(coverage.shape);
+        assert!(coverage.radius);
+        assert!(coverage.z_order);
+        assert!(coverage.hit_test_passthrough);
+        assert!(coverage.container_spacing);
+    }
+
+    #[test]
+    fn standalone_native_glass_container_mode_reports_selected_preset() {
+        assert_eq!(
+            native_liquid_glass_status_text(
+                NativeDemoVisualMode::Container,
+                NativeDemoMorphState::Near,
+                NativeDemoContainerPreset::Threshold,
+                NativeDemoReadabilityProbe::Mixed,
+                NativeDemoStyleMode::Clear,
+                0.22,
+                NativeDemoContainerPreset::Threshold.spacing(),
+                44.0,
+                true,
+            ),
+            "Container: Threshold  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on"
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_readability_status_reports_selected_probe() {
+        assert_eq!(
+            native_liquid_glass_status_text(
+                NativeDemoVisualMode::Readability,
+                NativeDemoMorphState::Near,
+                NativeDemoContainerPreset::Threshold,
+                NativeDemoReadabilityProbe::Bright,
+                NativeDemoStyleMode::Clear,
+                0.32,
+                28.0,
+                44.0,
+                false,
+            ),
+            "Readability: Bright  Clear  tint 32%  spacing 28  radius 44  makepad-glint:off"
+        );
     }
 
     #[test]
@@ -2095,7 +2803,10 @@ mod tests {
         );
 
         assert_ne!(near.top_panel_margin.top, far.top_panel_margin.top);
-        assert_ne!(near.bottom_panel_margin.bottom, overlap.bottom_panel_margin.bottom);
+        assert_ne!(
+            near.bottom_panel_margin.bottom,
+            overlap.bottom_panel_margin.bottom
+        );
         assert_eq!(far.bottom_left_label, "Far");
         assert_eq!(overlap.bottom_left_label, "Overlap");
     }
@@ -2202,5 +2913,17 @@ mod tests {
             native_liquid_glass_gold_glint_center_radius(44.0, edge_width),
             44.0 - center_inset
         );
+    }
+
+    #[test]
+    fn standalone_native_glass_demo_glint_toggle_text_tracks_visibility() {
+        assert_eq!(makepad_demo_glint_toggle_text(true), "Glint Off");
+        assert_eq!(makepad_demo_glint_toggle_text(false), "Glint On");
+    }
+
+    #[test]
+    fn standalone_native_glass_status_marks_makepad_demo_glint_overlay() {
+        assert_eq!(makepad_demo_glint_status_label(true), "makepad-glint:on");
+        assert_eq!(makepad_demo_glint_status_label(false), "makepad-glint:off");
     }
 }

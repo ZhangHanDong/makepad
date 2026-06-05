@@ -37,8 +37,8 @@ On macOS 26, the expected visual result is:
 The in-window controls update the native descriptors at runtime:
 
 - `Clear` / `Regular` switches the large panel and bottom capsule style.
-- `Panels` / `Morph` / `Controls` / `Readability` switch between focused
-  validation scenes.
+- `Panels` / `Geometry` / `Morph` / `Container` / `Debug` / `Controls` /
+  `Readability` switch between focused validation scenes.
 - In `Morph`, `Near` / `Far` / `Overlap` move the native panels through
   container-spacing merge, separated, and mixed-style overlap states.
 - `Tint -` / `Tint +` changes the native tint alpha.
@@ -46,6 +46,8 @@ The in-window controls update the native descriptors at runtime:
 - `Radius -` / `Radius +` changes the large rounded-rect radius.
 - `Reset` restores the default visual tuning.
 - `Hide` collapses the controls for visual inspection; `Tune` expands them again.
+- `Glint Off` / `Glint On` toggles the Makepad-rendered gold glint demo
+  overlay. Disable it when validating only Apple native glass behavior.
 - In `Controls`, `Disable Primary` / `Enable Primary` toggles the native
   `Primary` button's enabled descriptor while keeping it installed for AppKit
   state validation.
