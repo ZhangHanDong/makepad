@@ -22,6 +22,10 @@ The macOS native path is proven end to end in a standalone example:
 - Native button action delivery reaches Makepad actions.
 - `Native Press` drives a multi-second descriptor pulse that updates spacing,
   radius, and tint over time.
+- The standalone validation bench now includes dedicated `Geometry`,
+  `Container`, `Debug`, `Readability`, and Makepad demo-overlay toggle paths.
+- `GoldGlintEdge` is documented and toggled as a Makepad shader overlay, not
+  Apple native API evidence.
 
 The current proof is a vertical slice, not a complete product API. It proves
 the route is viable and gives us a stable visual/debug target.
@@ -50,6 +54,8 @@ Already working:
 - tint conversion through sRGB colors
 - panel z-order inside the single native container
 - descriptor update path from widget tree to platform backend
+- focused descriptor equivalence tests for style, tint, radius, hit-test,
+  z-order, visibility, and subpixel tolerance
 
 Remaining work:
 
@@ -59,7 +65,6 @@ Remaining work:
 - Finalize defaults for `GlassPanel.native`, style, shape, radius, tint, and
   hit-test policy.
 - Validate fallback behavior when a selector is missing at runtime.
-- Add focused tests for descriptor equivalence when tint/radius/style changes.
 - Keep `NativeGlassHitTest::Interactive` rejected for panels until a later
   phase explicitly changes the hit-test model.
 
@@ -77,10 +82,12 @@ Already working:
 - one `GlassContainer` per window
 - `GlassContainer.spacing` mapped to native macOS container spacing
 - runtime descriptor pulse proves dynamic spacing updates can be delivered
+- a dedicated standalone `Container` mode with Near / Threshold / Far spacing
+  presets
+- a standalone morph mode with near, far, and overlapping panel states
 
 Remaining work:
 
-- Build a dedicated container morph mode in the standalone example.
 - Validate adjacent panel merge behavior at multiple distances.
 - Validate overlapping panels with different `Regular` / `Clear` styles.
 - Validate morph behavior during window resize.
@@ -106,15 +113,11 @@ Already working:
 - AppKit native button installation
 - AppKit target/action bridge back into Makepad `ButtonAction::Clicked`
 - standalone `Native Press` visual and action proof
+- standalone native button role matrix for `Default`, `Primary`, `Utility`,
+  `Icon`, and `Nav`
 
 Remaining work:
 
-- Build a native button role matrix for:
-  - `Default`
-  - `Primary`
-  - `Utility`
-  - `Icon`
-  - `Nav`
 - Verify disabled, hidden, focus, hover, press, and keyboard activation states.
 - Decide whether role-specific appearance should be fully native or mixed with
   Makepad-rendered fallback.
@@ -219,8 +222,13 @@ Acceptance:
 ## Recommended Implementation Order
 
 1. Stabilize the standalone native example as the visual acceptance target.
+   Status: complete in `makepad-example-native-liquid-glass`.
 2. Add a dedicated container morph mode.
+   Status: complete in the standalone bench; visual merge/resize validation
+   remains part of runtime robustness.
 3. Add a native button role matrix.
+   Status: complete in the standalone bench; deeper focus/keyboard/hover state
+   validation remains.
 4. Extract reusable descriptor pulse/control helpers into Makepad APIs or
    documented widget patterns.
 5. Tighten macOS runtime robustness: resize, active/inactive, display changes,

@@ -801,6 +801,43 @@ mod native_glass_tests {
     }
 
     #[test]
+    fn native_glass_batch_equivalent_for_native_update_tolerates_small_radius_and_tint_delta() {
+        let mut a = batch_with_panels(vec![panel(1)]);
+        a.containers[0].panels[0].shape = NativeGlassShape::RoundedRect { radius: 24.0 };
+        a.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.2,
+            y: 0.4,
+            z: 0.6,
+            w: 0.22,
+        });
+
+        let mut equivalent = a.clone();
+        equivalent.containers[0].panels[0].shape =
+            NativeGlassShape::RoundedRect { radius: 24.25 };
+        equivalent.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.2005,
+            y: 0.4005,
+            z: 0.6005,
+            w: 0.2205,
+        });
+        assert!(a.equivalent_for_native_update(&equivalent));
+
+        let mut radius_changed = a.clone();
+        radius_changed.containers[0].panels[0].shape =
+            NativeGlassShape::RoundedRect { radius: 25.0 };
+        assert!(!a.equivalent_for_native_update(&radius_changed));
+
+        let mut tint_changed = a.clone();
+        tint_changed.containers[0].panels[0].tint = Some(Vec4f {
+            x: 0.2,
+            y: 0.4,
+            z: 0.6,
+            w: 0.24,
+        });
+        assert!(!a.equivalent_for_native_update(&tint_changed));
+    }
+
+    #[test]
     fn native_glass_batch_equivalent_for_native_update_detects_semantic_changes() {
         let a = batch_with_panels(vec![panel(1)]);
 
