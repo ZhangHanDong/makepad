@@ -355,6 +355,18 @@ impl MacosWindow {
         )
     }
 
+    pub(crate) fn native_glass_diagnostic_logs_enabled_from_value(value: Option<&str>) -> bool {
+        matches!(value.map(str::trim), Some("1" | "true" | "on" | "yes"))
+    }
+
+    pub(crate) fn native_glass_diagnostic_logs_enabled() -> bool {
+        Self::native_glass_diagnostic_logs_enabled_from_value(
+            std::env::var("MAKEPAD_NATIVE_GLASS_DIAGNOSTIC_LOGS")
+                .ok()
+                .as_deref(),
+        )
+    }
+
     pub(crate) fn native_glass_container_content_view_enabled_from_value(
         value: Option<&str>,
     ) -> bool {
@@ -463,11 +475,13 @@ impl MacosWindow {
         let can_set_spacing: BOOL = msg_send![native_container, respondsToSelector: set_spacing_sel];
         if can_set_spacing == YES {
             let () = msg_send![native_container, setSpacing: container.spacing];
-            crate::log!(
-                "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
-                container.id,
-                container.spacing
-            );
+            if Self::native_glass_diagnostic_logs_enabled() {
+                crate::log!(
+                    "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
+                    container.id,
+                    container.spacing
+                );
+            }
         }
     }
 
@@ -1787,12 +1801,14 @@ impl MacosWindow {
 
         for (panel_view, panel) in self.native_glass_panel_views.iter().zip(panels) {
             Self::apply_native_glass_panel_descriptor(*panel_view, container, panel);
-            crate::log!(
-                "[liquid-glass] native-panel-update container={:?} panel={:?} z_order={}",
-                container.id,
-                panel.id,
-                panel.z_order
-            );
+            if Self::native_glass_diagnostic_logs_enabled() {
+                crate::log!(
+                    "[liquid-glass] native-panel-update container={:?} panel={:?} z_order={}",
+                    container.id,
+                    panel.id,
+                    panel.z_order
+                );
+            }
         }
 
         let result = Self::native_glass_in_place_update_result(batch);
@@ -1929,11 +1945,13 @@ impl MacosWindow {
                 msg_send![native_container, respondsToSelector: set_spacing_sel];
             if can_set_spacing == YES {
                 let () = msg_send![native_container, setSpacing: container.spacing];
-                crate::log!(
-                    "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
-                    container.id,
-                    container.spacing
-                );
+                if Self::native_glass_diagnostic_logs_enabled() {
+                    crate::log!(
+                        "[liquid-glass] native-container-spacing container={:?} spacing={:.3}",
+                        container.id,
+                        container.spacing
+                    );
+                }
             }
 
             let use_container_content_view = Self::native_glass_container_content_view_enabled();
@@ -1974,12 +1992,14 @@ impl MacosWindow {
                         }
                     }
                 }
-                crate::log!(
-                    "[liquid-glass] native-container-panel-parent container={:?} requested=contentView role={} class={}",
-                    container.id,
-                    panel_parent_role,
-                    Self::native_glass_objc_class_name(panel_parent)
-                );
+                if Self::native_glass_diagnostic_logs_enabled() {
+                    crate::log!(
+                        "[liquid-glass] native-container-panel-parent container={:?} requested=contentView role={} class={}",
+                        container.id,
+                        panel_parent_role,
+                        Self::native_glass_objc_class_name(panel_parent)
+                    );
+                }
             }
 
             let mut panels: Vec<&NativeGlassPanelDescriptor> = container
@@ -3615,6 +3635,19 @@ mod tests {
         );
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(None));
         assert!(!MacosWindow::native_glass_geometry_snapshot_enabled_from_value(Some("off")));
+    }
+
+    #[test]
+    fn native_glass_diagnostic_logs_env_defaults_off() {
+        assert!(!MacosWindow::native_glass_diagnostic_logs_enabled_from_value(None));
+        assert!(!MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("")));
+        assert!(!MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("0")));
+        assert!(!MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("false")));
+        assert!(!MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("off")));
+        assert!(MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("1")));
+        assert!(MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("true")));
+        assert!(MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("on")));
+        assert!(MacosWindow::native_glass_diagnostic_logs_enabled_from_value(Some("yes")));
     }
 
     #[test]

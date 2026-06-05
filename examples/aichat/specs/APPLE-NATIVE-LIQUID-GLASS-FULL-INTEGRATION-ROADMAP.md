@@ -136,6 +136,12 @@ Acceptance:
 
 ## Track 4: macOS Runtime Robustness
 
+Already working:
+
+- Normal install/state/result logs remain enabled for acceptance runs.
+- Verbose native panel/container diagnostic logs are gated by
+  `MAKEPAD_NATIVE_GLASS_DIAGNOSTIC_LOGS`.
+
 Remaining work:
 
 - Resize validation for panel frames, control frames, and container spacing.
@@ -146,7 +152,6 @@ Remaining work:
 - Reduce Transparency behavior.
 - Light and dark wallpaper readability.
 - Performance budget for visible native panels and controls.
-- Normal logs versus diagnostic logs split.
 
 Acceptance:
 

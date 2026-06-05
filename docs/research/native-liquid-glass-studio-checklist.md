@@ -48,6 +48,11 @@ Mode and toggle clicks should emit status lines like:
 [liquid-glass] standalone-native-example tuning Panels  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on
 ```
 
+Verbose native container/panel update logs are off by default. Set
+`MAKEPAD_NATIVE_GLASS_DIAGNOSTIC_LOGS=1` when collecting logs such as
+`native-container-spacing`, `native-panel-update`, or
+`native-container-panel-parent`.
+
 ## Visual Acceptance
 
 Use direct visual inspection or a normal macOS screenshot for native material.
