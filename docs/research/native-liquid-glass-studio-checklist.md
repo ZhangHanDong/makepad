@@ -28,6 +28,8 @@ Validation sequence after `BuildStarted`:
 {"Screenshot":{"build_id":[BUILD_ID],"kind_id":0}}
 {"Click":{"build_id":[BUILD_ID],"x":493,"y":228}}
 {"Screenshot":{"build_id":[BUILD_ID],"kind_id":0}}
+{"Click":{"build_id":[BUILD_ID],"x":[RESIZE_PROBE_X],"y":[RESIZE_PROBE_Y]}}
+{"WidgetTreeDump":{"build_id":[BUILD_ID]}}
 ```
 
 Use the current widget dump for click coordinates. Do not apply extra DPI math.
@@ -48,6 +50,14 @@ Mode and toggle clicks should emit status lines like:
 [liquid-glass] standalone-native-example tuning Panels  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on
 ```
 
+The `Resize Probe` button should emit a request line and a geometry-change
+validation summary:
+
+```text
+[liquid-glass] standalone-native-example resize-probe=request current=820x560 target=980x700
+[liquid-glass] standalone-native-example resize-validation source=window-geom-change mode=Panels size=980x700 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28
+```
+
 Verbose native container/panel update logs are off by default. Set
 `MAKEPAD_NATIVE_GLASS_DIAGNOSTIC_LOGS=1` when collecting logs such as
 `native-container-spacing`, `native-panel-update`, or
@@ -65,6 +75,8 @@ Accept the run only when:
 - Native glass is visible below the Makepad foreground layer.
 - No opaque root background covers the native underlay.
 - The three native panels track window resize.
+- `Resize Probe` toggles the window between the default and validation sizes and
+  logs `panels_fit=true`; in Controls mode it also logs `controls_fit=true`.
 - `Clear` and `Regular` styles are visibly different on macOS 26.
 - `Geometry` shows rounded-rect and capsule descriptor mapping.
 - `Container` changes native `setSpacing:` through Near / Threshold / Far.

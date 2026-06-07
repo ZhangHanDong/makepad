@@ -27,6 +27,11 @@ const GOLD_GLINT_EDGE_WIDTH: f32 = 2.2;
 const GOLD_GLINT_BASE_STRENGTH: f32 = 0.28;
 const GOLD_GLINT_PULSE_BOOST: f32 = 0.68;
 const NATIVE_DEMO_PANEL_COUNT: usize = 3;
+const NATIVE_CONTROL_BUTTON_WIDTH: f64 = 112.0;
+const NATIVE_CONTROL_BUTTON_HEIGHT: f64 = 34.0;
+const NATIVE_CONTROL_BUTTON_SPACING: f64 = 8.0;
+const NATIVE_CONTROL_MATRIX_RIGHT: f64 = 64.0;
+const NATIVE_CONTROL_MATRIX_BOTTOM: f64 = 88.0;
 
 script_mod! {
     use mod.prelude.widgets.*
@@ -502,6 +507,7 @@ script_mod! {
                                 spacing_up_button := ControlButton{text: "Spacing +"}
                                 radius_down_button := ControlButton{text: "Radius -"}
                                 radius_up_button := ControlButton{text: "Radius +"}
+                                resize_probe_button := ControlButton{text: "Resize Probe"}
                             }
 
                             status_readout := ControlValue{
@@ -660,6 +666,8 @@ pub struct App {
     native_press_pulse_amount: f64,
     #[rust]
     native_press_pulse_active: bool,
+    #[rust]
+    last_resize_validation_size: Option<DVec2>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -871,6 +879,45 @@ struct NativeDemoControlRoleSpec {
     role: ButtonNativeGlassRole,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoLayoutRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl NativeDemoLayoutRect {
+    fn right(self) -> f64 {
+        self.x + self.width
+    }
+
+    fn bottom(self) -> f64 {
+        self.y + self.height
+    }
+
+    fn fits_inside(self, window_size: DVec2) -> bool {
+        const EPSILON: f64 = 0.5;
+        self.width >= 1.0
+            && self.height >= 1.0
+            && self.x >= -EPSILON
+            && self.y >= -EPSILON
+            && self.right() <= window_size.x + EPSILON
+            && self.bottom() <= window_size.y + EPSILON
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoResizeValidation {
+    visual_mode: NativeDemoVisualMode,
+    window_size: DVec2,
+    panel_count: usize,
+    panels_fit: bool,
+    visible_control_count: usize,
+    controls_fit: bool,
+    spacing: f64,
+}
+
 fn native_liquid_glass_control_role_matrix() -> [NativeDemoControlRoleSpec; 5] {
     [
         NativeDemoControlRoleSpec {
@@ -917,7 +964,6 @@ fn native_liquid_glass_v4_1_descriptor_coverage() -> NativeDemoV41DescriptorCove
     }
 }
 
-#[cfg(test)]
 fn native_liquid_glass_visible_control_count(scene: NativeDemoVisualScene) -> usize {
     if scene.native_control_visible {
         native_liquid_glass_control_role_matrix().len()
@@ -926,6 +972,7 @@ fn native_liquid_glass_visible_control_count(scene: NativeDemoVisualScene) -> us
     }
 }
 
+#[cfg(test)]
 fn native_liquid_glass_control_resize_validation_text(
     visual_mode: NativeDemoVisualMode,
 ) -> &'static str {
@@ -933,6 +980,110 @@ fn native_liquid_glass_control_resize_validation_text(
         NativeDemoVisualMode::Controls => "resize keeps 5 native controls",
         _ => "resize keeps native controls hidden outside Controls",
     }
+}
+
+fn native_liquid_glass_main_panel_rect(
+    window_size: DVec2,
+    margin: NativeDemoInset,
+) -> NativeDemoLayoutRect {
+    NativeDemoLayoutRect {
+        x: margin.left,
+        y: margin.top,
+        width: window_size.x - margin.left - margin.right,
+        height: window_size.y - margin.top - margin.bottom,
+    }
+}
+
+fn native_liquid_glass_top_panel_rect(
+    window_size: DVec2,
+    scene: NativeDemoVisualScene,
+) -> NativeDemoLayoutRect {
+    NativeDemoLayoutRect {
+        x: window_size.x - scene.top_panel_margin.right - scene.top_panel_width,
+        y: scene.top_panel_margin.top,
+        width: scene.top_panel_width,
+        height: scene.top_panel_height,
+    }
+}
+
+fn native_liquid_glass_bottom_panel_rect(
+    window_size: DVec2,
+    scene: NativeDemoVisualScene,
+) -> NativeDemoLayoutRect {
+    NativeDemoLayoutRect {
+        x: (window_size.x - scene.bottom_panel_width) * 0.5,
+        y: window_size.y - scene.bottom_panel_margin.bottom - scene.bottom_panel_height,
+        width: scene.bottom_panel_width,
+        height: scene.bottom_panel_height,
+    }
+}
+
+fn native_liquid_glass_panel_resize_rects(
+    window_size: DVec2,
+    scene: NativeDemoVisualScene,
+) -> [NativeDemoLayoutRect; NATIVE_DEMO_PANEL_COUNT] {
+    [
+        native_liquid_glass_main_panel_rect(window_size, scene.main_panel_margin),
+        native_liquid_glass_top_panel_rect(window_size, scene),
+        native_liquid_glass_bottom_panel_rect(window_size, scene),
+    ]
+}
+
+fn native_liquid_glass_control_matrix_rect(window_size: DVec2) -> NativeDemoLayoutRect {
+    let row_1_width = NATIVE_CONTROL_BUTTON_WIDTH * 2.0 + NATIVE_CONTROL_BUTTON_SPACING;
+    let row_2_width = NATIVE_CONTROL_BUTTON_WIDTH * 3.0 + NATIVE_CONTROL_BUTTON_SPACING * 2.0;
+    let width = row_1_width.max(row_2_width);
+    let height = NATIVE_CONTROL_BUTTON_HEIGHT * 2.0 + NATIVE_CONTROL_BUTTON_SPACING;
+
+    NativeDemoLayoutRect {
+        x: window_size.x - NATIVE_CONTROL_MATRIX_RIGHT - width,
+        y: window_size.y - NATIVE_CONTROL_MATRIX_BOTTOM - height,
+        width,
+        height,
+    }
+}
+
+fn native_liquid_glass_resize_validation(
+    window_size: DVec2,
+    visual_mode: NativeDemoVisualMode,
+    morph_state: NativeDemoMorphState,
+    spacing: f64,
+) -> NativeDemoResizeValidation {
+    let scene = native_liquid_glass_visual_scene(visual_mode, morph_state);
+    let panel_rects = native_liquid_glass_panel_resize_rects(window_size, scene);
+    let panels_fit = window_size.x >= 1.0
+        && window_size.y >= 1.0
+        && panel_rects.iter().all(|rect| rect.fits_inside(window_size));
+    let visible_control_count = native_liquid_glass_visible_control_count(scene);
+    let controls_fit = if visible_control_count == 0 {
+        true
+    } else {
+        native_liquid_glass_control_matrix_rect(window_size).fits_inside(window_size)
+    };
+
+    NativeDemoResizeValidation {
+        visual_mode,
+        window_size,
+        panel_count: panel_rects.len(),
+        panels_fit,
+        visible_control_count,
+        controls_fit,
+        spacing: clamp_native_demo_spacing(spacing),
+    }
+}
+
+fn native_liquid_glass_resize_validation_summary(validation: NativeDemoResizeValidation) -> String {
+    format!(
+        "mode={} size={:.0}x{:.0} panels={} panels_fit={} controls={} controls_fit={} spacing={:.0}",
+        validation.visual_mode.label(),
+        validation.window_size.x,
+        validation.window_size.y,
+        validation.panel_count,
+        validation.panels_fit,
+        validation.visible_control_count,
+        validation.controls_fit,
+        validation.spacing
+    )
 }
 
 fn native_liquid_glass_visual_scene(
@@ -1560,6 +1711,14 @@ fn should_start_window_drag(abs: DVec2, size: DVec2) -> bool {
         && abs.x < size.x - EDGE_MARGIN
 }
 
+fn native_liquid_glass_resize_probe_target_size(current_size: DVec2) -> DVec2 {
+    if current_size.x >= 900.0 || current_size.y >= 640.0 {
+        dvec2(820.0, 560.0)
+    } else {
+        dvec2(980.0, 700.0)
+    }
+}
+
 impl App {
     fn ensure_default_tuning_state(&mut self) {
         if self.tint_alpha <= 0.0 {
@@ -2018,6 +2177,108 @@ impl App {
     fn step_radius(&mut self, delta: f64) {
         self.main_radius = clamp_native_demo_radius(self.main_radius + delta);
     }
+
+    fn current_resize_validation(&self, cx: &mut Cx) -> Option<NativeDemoResizeValidation> {
+        let size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
+        if size.x < 1.0 || size.y < 1.0 {
+            return None;
+        }
+
+        let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
+            self.demo_mode,
+            self.container_preset,
+            self.tint_alpha,
+            self.container_spacing,
+            self.main_radius,
+        );
+        let (_, effective_spacing, _) = native_liquid_glass_effective_tuning(
+            mode_tint_alpha,
+            mode_spacing,
+            mode_radius,
+            self.native_press_pulse_amount,
+        );
+
+        Some(native_liquid_glass_resize_validation(
+            size,
+            self.demo_mode,
+            self.morph_state,
+            effective_spacing,
+        ))
+    }
+
+    fn log_resize_validation(
+        &mut self,
+        validation: NativeDemoResizeValidation,
+        source: &'static str,
+        force: bool,
+    ) {
+        let size = validation.window_size;
+        let size_changed = self
+            .last_resize_validation_size
+            .map(|last| (last.x - size.x).abs() > 0.5 || (last.y - size.y).abs() > 0.5)
+            .unwrap_or(true);
+        if !force && !size_changed {
+            return;
+        }
+
+        self.last_resize_validation_size = Some(size);
+        log!(
+            "[liquid-glass] standalone-native-example resize-validation source={} {}",
+            source,
+            native_liquid_glass_resize_validation_summary(validation)
+        );
+    }
+
+    fn log_current_resize_validation(&mut self, cx: &mut Cx, source: &'static str, force: bool) {
+        if let Some(validation) = self.current_resize_validation(cx) {
+            self.log_resize_validation(validation, source, force);
+        }
+    }
+
+    fn run_resize_probe(&mut self, cx: &mut Cx) {
+        let window = self.ui.window(cx, ids!(main_window));
+        let current_size = window.get_inner_size(cx);
+        let target_size = native_liquid_glass_resize_probe_target_size(current_size);
+        log!(
+            "[liquid-glass] standalone-native-example resize-probe=request current={:.0}x{:.0} target={:.0}x{:.0}",
+            current_size.x,
+            current_size.y,
+            target_size.x,
+            target_size.y
+        );
+        window.resize(cx, target_size);
+    }
+
+    fn handle_window_resize_validation(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
+        if Some(event.window_id) != self.ui.window(cx, ids!(main_window)).window_id() {
+            return;
+        }
+        if event.new_geom.inner_size.x < 1.0 || event.new_geom.inner_size.y < 1.0 {
+            return;
+        }
+
+        self.configure_native_liquid_glass(cx);
+        let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
+            self.demo_mode,
+            self.container_preset,
+            self.tint_alpha,
+            self.container_spacing,
+            self.main_radius,
+        );
+        let (_, effective_spacing, _) = native_liquid_glass_effective_tuning(
+            mode_tint_alpha,
+            mode_spacing,
+            mode_radius,
+            self.native_press_pulse_amount,
+        );
+        let validation = native_liquid_glass_resize_validation(
+            event.new_geom.inner_size,
+            self.demo_mode,
+            self.morph_state,
+            effective_spacing,
+        );
+        self.log_resize_validation(validation, "window-geom-change", false);
+    }
 }
 
 impl MatchEvent for App {
@@ -2298,6 +2559,13 @@ impl MatchEvent for App {
             self.step_radius(MAIN_RADIUS_STEP);
             changed = true;
         }
+        if self
+            .ui
+            .button(cx, ids!(resize_probe_button))
+            .clicked(actions)
+        {
+            self.run_resize_probe(cx);
+        }
 
         if changed {
             let (mode_tint_alpha, mode_spacing, mode_radius) =
@@ -2322,10 +2590,7 @@ impl MatchEvent for App {
                     self.makepad_demo_glint_visible
                 )
             );
-            log!(
-                "[liquid-glass] standalone-native-example control-resize-validation {}",
-                native_liquid_glass_control_resize_validation_text(self.demo_mode)
-            );
+            self.log_current_resize_validation(cx, "action", true);
             self.configure_native_liquid_glass(cx);
         }
     }
@@ -2343,6 +2608,12 @@ impl AppMain for App {
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
+        let window_geom_change = if let Event::WindowGeomChange(event) = event {
+            Some(event.clone())
+        } else {
+            None
+        };
+
         if let Event::WindowDragQuery(dq) = event {
             if Some(dq.window_id) == self.ui.window(cx, ids!(main_window)).window_id() {
                 let size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
@@ -2364,6 +2635,10 @@ impl AppMain for App {
 
         self.match_event(cx, event);
         self.ui.handle_event(cx, event, &mut Scope::empty());
+
+        if let Some(event) = window_geom_change {
+            self.handle_window_resize_validation(cx, &event);
+        }
     }
 }
 
@@ -2784,6 +3059,52 @@ mod tests {
         assert_eq!(
             native_liquid_glass_control_resize_validation_text(NativeDemoVisualMode::Panels),
             "resize keeps native controls hidden outside Controls"
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_validation_reports_default_panel_fit() {
+        let validation = native_liquid_glass_resize_validation(
+            dvec2(820.0, 560.0),
+            NativeDemoVisualMode::Panels,
+            NativeDemoMorphState::Near,
+            DEFAULT_CONTAINER_SPACING,
+        );
+
+        assert_eq!(validation.panel_count, NATIVE_DEMO_PANEL_COUNT);
+        assert!(validation.panels_fit);
+        assert_eq!(validation.visible_control_count, 0);
+        assert!(validation.controls_fit);
+        assert_eq!(
+            native_liquid_glass_resize_validation_summary(validation),
+            "mode=Panels size=820x560 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28"
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_validation_detects_too_narrow_controls() {
+        let validation = native_liquid_glass_resize_validation(
+            dvec2(380.0, 260.0),
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+            DEFAULT_CONTAINER_SPACING,
+        );
+
+        assert_eq!(validation.visible_control_count, 5);
+        assert!(!validation.controls_fit);
+        assert!(native_liquid_glass_resize_validation_summary(validation)
+            .contains("controls_fit=false"));
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_probe_toggles_between_validation_sizes() {
+        assert_eq!(
+            native_liquid_glass_resize_probe_target_size(dvec2(820.0, 560.0)),
+            dvec2(980.0, 700.0)
+        );
+        assert_eq!(
+            native_liquid_glass_resize_probe_target_size(dvec2(980.0, 700.0)),
+            dvec2(820.0, 560.0)
         );
     }
 

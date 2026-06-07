@@ -141,10 +141,14 @@ Already working:
 - Normal install/state/result logs remain enabled for acceptance runs.
 - Verbose native panel/container diagnostic logs are gated by
   `MAKEPAD_NATIVE_GLASS_DIAGNOSTIC_LOGS`.
+- The standalone bench has a `Resize Probe` path that toggles the window between
+  validation sizes and logs panel/control fit summaries after
+  `WindowGeomChange`.
 
 Remaining work:
 
-- Resize validation for panel frames, control frames, and container spacing.
+- Broader manual resize validation across small windows, large windows, and
+  Controls mode.
 - Fullscreen fallback policy.
 - Stage Manager behavior.
 - Multi-display and backing-scale changes.
