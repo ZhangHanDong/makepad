@@ -17,7 +17,7 @@ acceptance gate.
 | P2 | iOS `UITextField` implementation | `apple_ios_native_text_input.rs`, iOS typed op handling; `tools/native_textinput_apple_static_check.sh` passed; `cargo check -p makepad-example-native-text-input --target aarch64-apple-ios` and `--release` passed | Compile/static complete, blocked on simulator/device runtime gate |
 | P3 | Android `EditText` implementation | `MakepadActivity.java`, `MakepadNative.java`, `android_jni.rs`, `android.rs`; `tools/native_textinput_android_static_check.sh` passed; `cargo check -p makepad-widgets --target aarch64-linux-android` passed | Compile/static complete, blocked on cargo-makepad/device runtime gate |
 | P4 | `NativeMountQueue` transaction layer | `NativeMountQueue` / `NativeMountMutation` in `cx_api.rs`, `Cx::flush_native_mount_queue`, per-platform flush calls; `tools/native_textinput_host_queue_static_check.sh` passed; platform tests cover coalescing, command barriers, close, and reentrant flush | Code/static complete; runtime checklist retained |
-| P5 | OpenHarmony ArkUI leaf host | `open_harmony.rs`, `oh_callbacks.rs`, `makepad.ets`, `Index.ets`; ArkTS selection uses `TextInputController.setTextSelection`, clipboard uses `@kit.BasicServicesKit` pasteboard | Code present, blocked by crates.io DNS before OHOS target compile, DevEco build, and device runtime validation |
+| P5 | OpenHarmony ArkUI leaf host | `open_harmony.rs`, `oh_callbacks.rs`, `makepad.ets`, `Index.ets`; ArkTS selection uses `TextInputController.setTextSelection`, clipboard uses `@kit.BasicServicesKit` pasteboard; simulator contract is `docs/native-textinput-ohos-simulator.spec.md` | Code present; simulator evidence, OHOS target compile, DevEco build, and device runtime validation not accepted |
 | P6 | schema / codegen seed | `native_host_schema.rs`; `tools/native_textinput_schema_texture_static_check.sh` passed; schema/golden manifest tests pass | Seed complete, generator replacement not implemented |
 | P7 | native texture layer seed | `native_texture_layer.rs`; `tools/native_textinput_schema_texture_static_check.sh` passed; texture layer unit tests pass | Seed complete, native widget texture rendering not implemented |
 
@@ -137,6 +137,12 @@ acceptance gate.
 - OpenHarmony `selectAllNativeTextInput`, `copyNativeTextInput`,
   `cutNativeTextInput`, and `pasteNativeTextInput` now have ArkTS
   selection/clipboard implementations, but still need DevEco/device validation.
+- OpenHarmony simulator acceptance is now tracked by
+  `docs/native-textinput-ohos-simulator.spec.md` and
+  `docs/native-textinput-ohos-simulator.plan.md`. That gate requires layout
+  trace, command trace, raw hilog evidence, screenshot evidence, callback-order
+  notes, revision/event-count guard validation, and explicit handling of
+  commands that arrive before ArkUI component attachment.
 
 ## Not Yet Accepted
 
@@ -147,8 +153,11 @@ acceptance gate.
 - iOS simulator/device input, IME, emoji, selection, and clipboard behavior.
 - Android cargo-makepad package/deploy, input, IME, emoji, selection, and
   clipboard behavior.
+- OpenHarmony simulator runtime evidence for layout trace, command trace,
+  focus/blur controller behavior, early command handling, set-text guard,
+  selection/cut/paste callback ordering, and screenshot/log correlation.
 - OpenHarmony DevEco compile and device runtime validation for selection,
-  clipboard, permission, and callback behavior.
+  clipboard, permission, callback behavior, and soft keyboard behavior.
 - Any claim that P6 generated code replaces the current hand-written typed
   enums.
 - Any claim that P7 renders native widgets into Makepad texture/shader content.
@@ -167,7 +176,7 @@ progress summary.
 | P2 iOS `UITextField`: focus/keyboard/input/emoji/selection/clipboard | Simulator or device run of `makepad-example-native-text-input` | `tools/native_textinput_apple_static_check.sh`, iOS dev/release target checks | Compile/static covered; simulator/device not accepted |
 | P3 Android `EditText`: JNI bridge, IME/input/emoji/selection/clipboard | Android cargo-makepad package/deploy and device/emulator run | `tools/native_textinput_android_static_check.sh`, `cargo check -p makepad-widgets --target aarch64-linux-android` | Compile/static covered; package/device not accepted |
 | P4 `NativeMountQueue`: frame-boundary native mutations, coalescing, command order, close behavior, per-platform flush | Unit tests plus visual runtime check for multi-native-view same-frame updates | `tools/native_textinput_host_queue_static_check.sh`, platform queue tests | Unit/static covered; Studio visual runtime not accepted |
-| P5 OpenHarmony ArkUI leaf host: create/update/detach/focus/blur/changed/selection/clipboard | OHOS target compile, DevEco ArkTS compile, device run | `tools/native_textinput_ohos_static_check.sh`; target check blocked by crates.io DNS | Static covered; compile/device not accepted |
+| P5 OpenHarmony ArkUI leaf host: create/update/detach/focus/blur/changed/selection/clipboard | OHOS target compile, DevEco ArkTS compile, simulator evidence, device run | `tools/native_textinput_ohos_static_check.sh`; simulator contract in `docs/native-textinput-ohos-simulator.spec.md`; target check blocked by crates.io DNS | Static covered; simulator/compile/device not accepted |
 | P6 schema/codegen seed | Stable manifest and parity tests against typed Rust contract; explicit no-claim that generated code replaces handwritten enums | `native_host_schema.rs`, manifest golden, `cx_api` parity tests, `tools/native_textinput_schema_texture_static_check.sh` | Seed accepted; generator replacement intentionally out of scope |
 | P7 native texture layer seed | External texture allocation, host binding, frame generation contract; explicit no-claim that native widgets render into textures | `native_texture_layer.rs` tests, `tools/native_textinput_schema_texture_static_check.sh` | Seed accepted; native widget texture rendering intentionally out of scope |
 

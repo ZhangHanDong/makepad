@@ -212,13 +212,23 @@ RunItem，使用仓库内 `examples/native_text_input` 通过
 ## P5：OHOS ArkUI leaf widget 原型
 
 目标：让 P1 typed native op 能在 OpenHarmony 上落到 ArkTS host registry。
+当前 P5 拆成两个 gate：先按
+`docs/native-textinput-ohos-simulator.spec.md` /
+`docs/native-textinput-ohos-simulator.plan.md` 关闭本地 simulator slice，
+再用 DevEco/真实设备证据关闭完整 P5。
 
 - Rust `open_harmony.rs` 消费 `CreateNativeView(TextInput)` / layout / props / command / detach / close。
 - ArkTS `ArkGlue` 暴露 native text input host methods。
 - `Index.ets` 维护 overlay `TextInput` 列表，按 Makepad rect 同步 position / size / visible。
 - ArkTS `TextInput.onChange/onFocus/onBlur` 通过 XComponent context 回投 Rust NAPI callback，再转成 `NativeTextInputChanged` / `NativeTextInputFocusChanged` action。
+- simulator evidence 必须记录 native id、Makepad rect、ArkUI global position、applied size、vp/px ratio。
+- ArkTS host 必须处理 Rust command 早于 ArkUI component attach 的情况：按 native id queue，或带 reason 明确 reject。
+- programmatic `set_text` 需要 revision/event-count guard，避免 stale command 覆盖用户输入或制造 changed loop。
+- blur 优先验证 ArkUI controller 路径，例如 `TextInputController.stopEditing()`；必要时可以用 documented hidden focus sink 作为 OHOS host workaround。
+- selection / paste / cut / onChange 的实际回调顺序必须进入 runtime evidence。
+- 后续软键盘布局优先用 OHOS window avoid-area / keyboard-height signal，不猜测键盘高度。
 
-**当前实现进度**：代码侧已接入最小 ArkTS overlay host。`tools/open_harmony/deveco/entry/src/main/ets/pages/Index.ets` 持有 `nativeTextInputs` state，并实现 create / update / detach / set text / placeholder / editable / focus / blur / select_all / copy / cut / paste / close；`tools/open_harmony/deveco/entry/src/main/ets/makepad/makepad.ets` 为 `ArkGlue` 增加 host 转发方法；`platform/src/os/linux/open_harmony/open_harmony.rs` 将 generic native ops 映射为 ArkTS calls，字符串参数按 UTF-8 bytes + explicit length 创建 JS string，不再因用户文本中包含 NUL 字节而拒绝调用；`oh_callbacks.rs` 增加 native text input changed / focus changed / selection changed callbacks，复用 `NativeTextInputId` 的 decimal string parser，并复用 `cx_api` native event constructors。ArkTS `TextInput` 已挂 `.onTextSelectionChange(...)` 回投 `handleNativeTextInputSelectionChanged(...)`；`selectAllNativeTextInput` 通过 `TextInputController.setTextSelection(...)` 全选并回投 selection，`copyNativeTextInput` / `cutNativeTextInput` / `pasteNativeTextInput` 已接 `@kit.BasicServicesKit` pasteboard 的纯文本读写，cut/paste 会同步 ArkTS state 并回投 changed/selection。`module.json5` 已声明 `ohos.permission.READ_PASTEBOARD`。OpenHarmony target 编译当前受 crates.io 下载阻塞（最近几次 `cargo check -p makepad-platform --target aarch64-unknown-linux-ohos` 阻塞在 OpenHarmony NAPI crates 下载，包含 `napi-ohos 0.1.3` 与 `napi-derive-backend-ohos 0.0.7`，当前环境无法解析 `static.crates.io`），且仍缺 DevEco/设备 runtime 验证。
+**当前实现进度**：代码侧已接入最小 ArkTS overlay host。`tools/open_harmony/deveco/entry/src/main/ets/pages/Index.ets` 持有 `nativeTextInputs` state，并实现 create / update / detach / set text / placeholder / editable / focus / blur / select_all / copy / cut / paste / close；`tools/open_harmony/deveco/entry/src/main/ets/makepad/makepad.ets` 为 `ArkGlue` 增加 host 转发方法；`platform/src/os/linux/open_harmony/open_harmony.rs` 将 generic native ops 映射为 ArkTS calls，字符串参数按 UTF-8 bytes + explicit length 创建 JS string，不再因用户文本中包含 NUL 字节而拒绝调用；`oh_callbacks.rs` 增加 native text input changed / focus changed / selection changed callbacks，复用 `NativeTextInputId` 的 decimal string parser，并复用 `cx_api` native event constructors。ArkTS `TextInput` 已挂 `.onTextSelectionChange(...)` 回投 `handleNativeTextInputSelectionChanged(...)`；`selectAllNativeTextInput` 通过 `TextInputController.setTextSelection(...)` 全选并回投 selection，`copyNativeTextInput` / `cutNativeTextInput` / `pasteNativeTextInput` 已接 `@kit.BasicServicesKit` pasteboard 的纯文本读写，cut/paste 会同步 ArkTS state 并回投 changed/selection。`module.json5` 已声明 `ohos.permission.READ_PASTEBOARD`。RNOH 复盘后，P5 的下一步不再只是“跑起来”，还要补齐 simulator evidence 所需的 layout trace、command trace、revision/event-count guard、early command handling、focus/blur controller 验证和 callback-order 记录。OpenHarmony target 编译当前受 crates.io 下载阻塞（最近几次 `cargo check -p makepad-platform --target aarch64-unknown-linux-ohos` 阻塞在 OpenHarmony NAPI crates 下载，包含 `napi-ohos 0.1.3` 与 `napi-derive-backend-ohos 0.0.7`，当前环境无法解析 `static.crates.io`），且仍缺 DevEco/simulator/设备 runtime 验证。
 
 `makepad.splash` 已注册 `makepad-example-native-text-input-ohos`
 RunItem，使用仓库内 `examples/native_text_input` 通过
@@ -423,8 +433,14 @@ P1 完成后：
 
 ### OpenHarmony DevEco/device gate（P5）
 
+- 本地 simulator slice 先按 `docs/native-textinput-ohos-simulator.spec.md`
+  收集 `docs/native-textinput-evidence/ohos-runtime.md` /
+  `docs/native-textinput-evidence/ohos-runtime.log`。
 - 先在可访问 crates.io 的环境跑 `cargo check -p makepad-platform --target aarch64-unknown-linux-ohos`。
 - 首选 Studio RunItem `makepad-example-native-text-input-ohos`。
 - 用 DevEco 编译 ArkTS，重点确认 `.onTextSelectionChange(...)`、`focusControl.requestFocus(...)` 与新增 host methods 的 ArkUI API 形状。
-- 在设备上验证 create/update/detach/focus/blur/changed/selection_changed。
+- 在 simulator 和设备上验证 create/update/detach/focus/blur/changed/selection_changed。
+- 记录 native id、Makepad rect、ArkUI global position、applied size、vp/px ratio。
+- 验证 Rust command 早于 ArkUI component attach 时被 queue 或带 reason reject。
+- 验证 programmatic `set_text` 的 revision/event-count guard 不产生 changed loop，也不覆盖更新的手动输入。
 - `selectAllNativeTextInput` / `copyNativeTextInput` / `cutNativeTextInput` / `pasteNativeTextInput` 已接 ArkUI `TextInputController` + pasteboard API，但关闭 P5 前仍必须用 DevEco/设备确认 API 形状、权限弹窗、selection 回投和 changed 回投行为。
