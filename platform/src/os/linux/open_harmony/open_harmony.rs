@@ -960,7 +960,7 @@ impl CxOhosDisplay {
         (self.libegl.eglSwapBuffers.unwrap())(self.egl_display, self.surface);
     }
 
-    unsafe fn make_current(&mut self) {
+    pub(crate) unsafe fn make_current(&mut self) {
         if (self.libegl.eglMakeCurrent.unwrap())(
             self.egl_display,
             self.surface,

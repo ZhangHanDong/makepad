@@ -28,7 +28,9 @@ require_pattern "$index_ets" "systemPasteboard\\.getDataSync\\(\\)\\.getPrimaryT
 require_pattern "$index_ets" "handleNativeTextInputChanged\\(input\\.inputId, nextText\\)" "changed callback after cut/paste"
 require_pattern "$index_ets" "handleNativeTextInputSelectionChanged\\(input\\.inputId, nextSelection, nextSelection\\)" "selection callback after cut/paste"
 require_pattern "$index_ets" "handleNativeTextInputSelectionChanged\\(input\\.inputId, nextStart, nextEnd\\)" "selection callback after select all"
-require_pattern "$index_ets" "focusControl\\.requestFocus\\('native_text_input_' \\+ input\\.inputId\\)" "focus before native command"
+require_pattern "$index_ets" "private requestNativeFocus\\(focusId: string\\): void" "native focus request hook"
+require_pattern "$index_ets" "focusControl\\.requestFocus\\(focusId\\)" "native focusControl request"
+require_pattern "$index_ets" "this\\.requestNativeFocus\\('native_text_input_' \\+ input\\.inputId\\)" "focus before native command"
 
 require_pattern "$makepad_ets" "controller: TextInputController" "NativeTextInputState controller field"
 require_pattern "$makepad_ets" "selectionStart: number" "NativeTextInputState selectionStart"

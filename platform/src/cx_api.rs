@@ -2174,9 +2174,18 @@ pub fn can_play_type(mime: &str) -> &'static str {
     can_play_type_impl(mime)
 }
 
-#[cfg(all(target_os = "linux", not(target_os = "android")))]
+#[cfg(all(
+    target_os = "linux",
+    not(target_os = "android"),
+    not(target_env = "ohos")
+))]
 fn can_play_type_impl(mime: &str) -> &'static str {
     crate::os::linux::linux_video_playback::can_play_type(mime)
+}
+
+#[cfg(target_env = "ohos")]
+fn can_play_type_impl(_mime: &str) -> &'static str {
+    ""
 }
 
 #[cfg(target_os = "android")]

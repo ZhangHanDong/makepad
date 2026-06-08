@@ -103,6 +103,86 @@ These lessons refine the current ArkTS overlay path. They do not justify
 introducing a React Native style bridge or a broad descriptor system for the
 simulator slice.
 
+## Implementation Steps
+
+Use this checklist as the execution order for the simulator slice.
+
+1. Establish the local OHOS environment.
+   - Set `DEVECO_HOME`, `JAVA_HOME`, `PATH`, and `MAKEPAD=ohos_sim`.
+   - Confirm `hdc` is available.
+   - Confirm the local simulator appears in `hdc list targets`.
+   - Ensure `cargo makepad` resolves to this repository's current
+     `tools/cargo_makepad` build. Older globally installed `cargo-makepad`
+     binaries may print `not implemented yet` for OHOS.
+   - Run the OHOS rustup target install through the current tool, for example:
+     `cargo run -p cargo-makepad -- ohos --arch=x86_64 install-toolchain` for
+     an x86_64 simulator or `cargo run -p cargo-makepad -- ohos --arch=aarch64
+     install-toolchain` for an ARM64 device.
+
+2. Run static gates before runtime work.
+   - Run `tools/native_textinput_ohos_static_check.sh`.
+   - Run `cargo check -p makepad-platform --target aarch64-unknown-linux-ohos`
+     when the OHOS crates can be fetched.
+   - For an x86_64 simulator, also run the `x86_64-unknown-linux-ohos` target
+     check when supported by the local SDK.
+
+3. Fill the ArkTS host implementation gaps required by this spec.
+   - Log layout trace per native input id: Makepad rect, ArkUI global position,
+     applied width/height, and vp/px ratio.
+   - Log command trace per native input id: command name, revision or event
+     count, queued/immediate status, and result or reject reason.
+   - Queue commands that arrive before the target ArkUI `TextInput` attaches,
+     or reject them with a clear evidence log.
+   - Add a revision/event-count guard for programmatic `set_text`.
+   - Validate blur through the ArkUI controller path first, such as
+     `TextInputController.stopEditing()`.
+   - Add a documented hidden focus sink only if controller blur is not enough.
+   - Record the observed ordering of `onChange`, selection, paste, cut, focus,
+     and blur callbacks.
+
+4. Generate the DevEco project from the canonical example.
+   - Use `examples/native_text_input`.
+   - Generate with `cargo makepad ohos ... deveco -p
+     makepad-example-native-text-input --release`.
+   - Expected output:
+     `target/makepad-open-harmony/makepad_example_native_text_input`.
+
+5. Run the app on the local simulator.
+   - Prefer Studio RunItem `makepad-example-native-text-input-ohos` for formal
+     UI/runtime validation.
+   - Direct `cargo makepad ohos ... run -p
+     makepad-example-native-text-input --release` is acceptable for initial
+     environment bring-up and failure triage.
+
+6. Execute the manual runtime checklist.
+   - App launches and Makepad content appears inside the `XComponent`.
+   - Primary and secondary ArkUI `TextInput` overlays appear at the expected
+     Makepad locations.
+   - Tapping an input focuses it and opens the soft keyboard when the simulator
+     supports that behavior.
+   - Manual ASCII input changes the native field and updates the Makepad status
+     label through Rust actions.
+   - `Primary Set`, `Secondary Set`, and `Set Both` update the correct fields
+     without changed-event loops or stale overwrites.
+   - `Focus`, `Blur`, `Select All`, `Copy`, `Cut`, and `Paste` are either
+     verified or documented as simulator limitations with logs.
+   - Close/relaunch leaves no stale ArkUI overlay.
+
+7. Capture evidence before closing the slice.
+   - Save raw `hilog` first, then filter locally with `rg`.
+   - Save `docs/native-textinput-evidence/ohos-runtime.log`.
+   - Write `docs/native-textinput-evidence/ohos-runtime.md`.
+   - Include `LayerTrace`, `LayoutTrace`, `CommandTrace`, screenshot, HAP
+     checksum, `libmakepad.so` checksum when available, command transcript, and
+     PASS / FAIL / DEFERRED checklist results.
+
+8. Decide slice status.
+   - Mark the simulator slice complete only when the static guard passes, the
+     example runs on the simulator, at least one ArkUI `TextInput` is visible,
+     focusable, and editable, callbacks reach Rust, lifecycle cleanup is
+     observed, and evidence files are saved.
+   - Keep full P5 open until DevEco and real-device runtime evidence also pass.
+
 ## Phase 0: Environment Baseline
 
 Install or verify:
@@ -118,8 +198,14 @@ Commands:
 echo "$DEVECO_HOME"
 which hdc
 hdc list targets
-cargo makepad ohos install-toolchain
+cargo run -p cargo-makepad -- ohos --arch=x86_64 install-toolchain
 ```
+
+Use `--arch=aarch64` instead of `--arch=x86_64` for an ARM64 device. If a
+globally installed `cargo makepad ohos install-toolchain` prints `not
+implemented yet`, it is an old `cargo-makepad`; use the repo-local `cargo run
+-p cargo-makepad -- ...` command or reinstall it with `cargo install --path
+tools/cargo_makepad --force`.
 
 Verified local macOS setup:
 
@@ -140,7 +226,8 @@ Expected:
 - `DEVECO_HOME` points at the installed DevEco command-line tools or Studio
   SDK location.
 - `hdc list targets` can see the local simulator after it starts.
-- `cargo makepad ohos install-toolchain` completes without reinstall errors.
+- the repo-local `cargo-makepad` OHOS `install-toolchain` command completes
+  without reinstall errors, or the needed Rust target is already installed.
 
 If the local simulator is x86_64, set:
 

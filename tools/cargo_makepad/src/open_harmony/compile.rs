@@ -210,6 +210,10 @@ fn label_json(label_name: &str) -> String {
     {{
       "name": "EntryAbility_label",
       "value": "{label_name}"
+    }},
+    {{
+      "name": "read_pasteboard_reason",
+      "value": "Allow pasteboard access for text input copy and paste"
     }}
   ]
 }}
@@ -233,6 +237,10 @@ fn label_zh_json(label_name: &str) -> String {
     {{
       "name": "EntryAbility_label",
       "value": "{label_name}"
+    }},
+    {{
+      "name": "read_pasteboard_reason",
+      "value": "允许文本输入复制和粘贴访问剪贴板"
     }}
   ]
 }}

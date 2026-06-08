@@ -1,4 +1,3 @@
-import { focusControl } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import {
   ArkGlue,
@@ -43,6 +42,10 @@ struct Index {
     return this.nativeTextInputs.find((item: NativeTextInputState) => item.inputId === inputId);
   }
 
+  private requestNativeFocus(focusId: string): void {
+    focusControl.requestFocus(focusId);
+  }
+
   private clampSelection(input: NativeTextInputState): [number, number] {
     let textLength = input.text.length;
     let start = Math.max(0, Math.min(input.selectionStart, textLength));
@@ -61,7 +64,7 @@ struct Index {
       current.selectionEnd = nextEnd;
       return current;
     });
-    focusControl.requestFocus('native_text_input_' + input.inputId);
+    this.requestNativeFocus('native_text_input_' + input.inputId);
     try {
       input.controller.setTextSelection(nextStart, nextEnd);
     } catch (err) {
@@ -71,7 +74,9 @@ struct Index {
   }
 
   private selectedNativeTextInputText(input: NativeTextInputState): string {
-    let [start, end] = this.clampSelection(input);
+    let selection = this.clampSelection(input);
+    let start = selection[0];
+    let end = selection[1];
     if (start === end) {
       return '';
     }
@@ -103,7 +108,9 @@ struct Index {
   }
 
   private replaceNativeTextInputSelection(input: NativeTextInputState, replacement: string): void {
-    let [start, end] = this.clampSelection(input);
+    let selection = this.clampSelection(input);
+    let start = selection[0];
+    let end = selection[1];
     let nextText = input.text.substring(0, start) + replacement + input.text.substring(end);
     let nextSelection = start + replacement.length;
     this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
@@ -115,7 +122,7 @@ struct Index {
     });
     this.xComponentContext?.handleNativeTextInputChanged(input.inputId, nextText);
     this.xComponentContext?.handleNativeTextInputSelectionChanged(input.inputId, nextSelection, nextSelection);
-    focusControl.requestFocus('native_text_input_' + input.inputId);
+    this.requestNativeFocus('native_text_input_' + input.inputId);
     try {
       input.controller.setTextSelection(nextSelection, nextSelection);
     } catch (err) {
@@ -184,11 +191,11 @@ struct Index {
   }
 
   focusNativeTextInput(inputId: string): void {
-    focusControl.requestFocus('native_text_input_' + inputId);
+    this.requestNativeFocus('native_text_input_' + inputId);
   }
 
   blurNativeTextInput(_inputId: string): void {
-    focusControl.requestFocus('makepad_xcomponent');
+    this.requestNativeFocus('makepad_xcomponent');
   }
 
   selectAllNativeTextInput(inputId: string): void {
@@ -204,7 +211,7 @@ struct Index {
     if (input === undefined) {
       return;
     }
-    focusControl.requestFocus('native_text_input_' + input.inputId);
+    this.requestNativeFocus('native_text_input_' + input.inputId);
     let selectedText = this.selectedNativeTextInputText(input);
     if (selectedText.length > 0) {
       this.setSystemClipboardText(selectedText);
@@ -216,7 +223,7 @@ struct Index {
     if (input === undefined || !input.editable) {
       return;
     }
-    focusControl.requestFocus('native_text_input_' + input.inputId);
+    this.requestNativeFocus('native_text_input_' + input.inputId);
     let selectedText = this.selectedNativeTextInputText(input);
     if (selectedText.length > 0 && this.setSystemClipboardText(selectedText)) {
       this.replaceNativeTextInputSelection(input, '');
@@ -228,7 +235,7 @@ struct Index {
     if (input === undefined || !input.editable) {
       return;
     }
-    focusControl.requestFocus('native_text_input_' + input.inputId);
+    this.requestNativeFocus('native_text_input_' + input.inputId);
     let clipboardText = this.systemClipboardText();
     if (clipboardText !== undefined && clipboardText.length > 0) {
       this.replaceNativeTextInputSelection(input, clipboardText);
