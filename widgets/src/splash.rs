@@ -71,6 +71,11 @@ pub struct Splash {
     /// This Splash's own VM, allocated on first eval (upstream isolation model).
     #[rust]
     vm_id: SplashVmId,
+    /// Body text of the previous eval. Used to detect streaming extensions
+    /// (the new body forward-extends the old) so repeated set_text(full growing
+    /// text) reuses ONE vm body instead of a fresh generation per frame.
+    #[rust]
+    last_eval_body: String,
 }
 
 /// Prefix for View-children mode: wraps code inside a View
@@ -97,7 +102,7 @@ impl Splash {
     }
 
     fn eval_body(&mut self, cx: &mut Cx) {
-        let body = self.body.as_ref();
+        let body = self.body.as_ref().to_string();
         if body.is_empty() {
             return;
         }
@@ -111,15 +116,27 @@ impl Splash {
             self.vm_id = cx.alloc_splash_vm();
         }
 
-        // Use a unique generation counter so that full content replacements
-        // get a fresh VM body instead of hitting the broken content_changed
-        // re-parse path in eval_with_append_source.
-        self.eval_generation += 1;
+        // Only start a NEW vm body (bump the generation) on a genuine content
+        // replacement — NOT a streaming extension of the previous body. aichat
+        // streams runsplash by calling set_text() with the full, growing block
+        // string every frame; without this each frame got its own generation,
+        // accumulating dozens of stale bodies whose widgets/closures lingered
+        // (clicking a button then hit a stale generation -> "widget not found in
+        // tree" -> the app vanished). A forward-extension reuses the same
+        // unique_id so eval_with_append_source does its incremental checkpoint
+        // parse (the same path stream_append uses). Compare the raw body (not the
+        // prefixed code) so an is_full_script flip can't cause a false miss.
+        let is_extension =
+            !self.last_eval_body.is_empty() && body.starts_with(self.last_eval_body.as_str());
+        if !is_extension {
+            self.eval_generation += 1;
+        }
+        self.last_eval_body = body.clone();
         let unique_id = self.self_id().wrapping_add(self.eval_generation as usize);
         self.last_unique_id = unique_id;
 
         // Choose prefix based on code style
-        let prefix = if is_full_script(body) {
+        let prefix = if is_full_script(&body) {
             SPLASH_PREFIX_SCRIPT
         } else {
             SPLASH_PREFIX_VIEW
@@ -137,13 +154,16 @@ impl Splash {
         };
 
         log!(
-            "[SPLASH] eval_body: {} bytes, prefix={}",
+            "[SPLASH] eval_body: {} bytes, prefix={}, uid={}, gen={}, ext={}",
             body.len(),
-            if is_full_script(body) {
+            if is_full_script(&body) {
                 "script"
             } else {
                 "view"
-            }
+            },
+            unique_id,
+            self.eval_generation,
+            is_extension
         );
 
         // Evaluate in THIS Splash's own isolated vm and inject a `ui` global
