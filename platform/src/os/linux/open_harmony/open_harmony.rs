@@ -590,6 +590,24 @@ impl Cx {
                 panic!();
             }
 
+            unsafe {
+                let gl_str = |key: u32| {
+                    let p = (libgl.glGetString)(key) as *const std::ffi::c_char;
+                    if p.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+                    }
+                };
+                crate::log!(
+                    "GL_VENDOR={} GL_RENDERER={} GL_VERSION={} GLSL_VERSION={}",
+                    gl_str(gl_sys::VENDOR),
+                    gl_str(gl_sys::RENDERER),
+                    gl_str(0x1F02 /* GL_VERSION */),
+                    gl_str(0x8B8C /* GL_SHADING_LANGUAGE_VERSION */),
+                );
+            }
+
             cx.os.display = Some(CxOhosDisplay {
                 libegl,
                 libgl,

@@ -140,6 +140,30 @@ Use this checklist as the execution order for the simulator slice.
    - Record the observed ordering of `onChange`, selection, paste, cut, focus,
      and blur callbacks.
 
+   Current implementation progress: the ArkTS host gaps above are now coded in
+   `Index.ets` / `makepad.ets` and guarded by
+   `tools/native_textinput_ohos_static_check.sh`:
+   - `setNativeTextInputText` keeps a `pendingProgrammaticEchoes` count plus
+     `lastProgrammaticText`; `onChange` re-resolves the current state (the
+     closure snapshot is stale), swallows at most the matching programmatic
+     echoes, and resets the count on any real user edit. The cut/paste
+     replacement path arms the same echo so its explicit changed callback stays
+     the single changed event.
+   - Commands that arrive before the state exists or before the ArkUI
+     component fires `.onAppear` are queued per native id in `pendingCommands`
+     and flushed from `.onAppear`; queue/flush/immediate decisions are trace
+     logged. `close` drops the pending queue.
+   - All host layout and command paths log with the `[MakepadNTI]` prefix:
+     layout logs Makepad rect, applied size, visibility, and `vp2px(1)`;
+     `.onAreaChange` logs ArkUI global position and size; commands log
+     immediate/queued/flushed status and result or reject reason. Filter
+     evidence with `rg "MakepadNTI"` over the saved hilog.
+   - `blur` now calls `TextInputController.stopEditing()` first and only falls
+     back to the documented `makepad_xcomponent` focus sink when the controller
+     call throws; the chosen path is trace logged.
+   Callback-order recording remains a runtime task: capture it from the
+   `[MakepadNTI]` changed/selection/focus traces during the simulator run.
+
 4. Generate the DevEco project from the canonical example.
    - Use `examples/native_text_input`.
    - Generate with `cargo makepad ohos ... deveco -p
@@ -216,10 +240,23 @@ export PATH="$JAVA_HOME/bin:$DEVECO_HOME/sdk/default/openharmony/toolchains:$DEV
 export MAKEPAD=ohos_sim
 ```
 
-On this machine, the Rust target `aarch64-unknown-linux-ohos` is installed and
-the release HAP build succeeds. `hdc list targets` currently reports `[Empty]`,
-so the simulator still has to be created and started in DevEco before install
-and runtime validation can proceed.
+On this machine, the Rust target `aarch64-unknown-linux-ohos` is installed,
+the release HAP build succeeds, and
+`cargo check -p makepad-platform --target aarch64-unknown-linux-ohos` passes
+(`OhosTarget: checked` in the static evidence). A local aarch64 API-15
+simulator is created and visible as `127.0.0.1:5555`.
+
+First simulator bring-up status: install/launch/module-init/XComponent
+surface/EGL all pass after four fixes (`libraryname: 'makepad'`, OHOS
+`Cx::init_log()`, profile ACL for `READ_PASTEBOARD`, local HAP signing via
+`tools/ohos_sim_sign_run.sh`), but the slice is **blocked** by the emulator
+GPU stack: guest GLES3 shaders are translated to desktop GLSL 450 while the
+macOS host OpenGL caps at 4.1, so every Makepad shader fails to compile and
+the render thread panics before any native text input op is emitted. Full
+blocker record: `docs/native-textinput-evidence/ohos-runtime.md`. `MAKEPAD=
+ohos_sim` does not change the outcome and is not needed for this aarch64
+emulator. Next unblock options are listed in the evidence file (real device
+gate, emulator GPU settings/newer image, or out-of-scope renderer work).
 
 Expected:
 

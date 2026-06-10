@@ -19,7 +19,7 @@ require_pattern() {
 }
 
 require_pattern "$index_ets" "import \\{ pasteboard \\} from '@kit\\.BasicServicesKit'" "pasteboard import"
-require_pattern "$index_ets" "controller: new TextInputController\\(\\)" "per-input TextInputController"
+require_pattern "$index_ets" "existing\\.controller : new TextInputController\\(\\)" "per-input TextInputController with reuse on re-create"
 require_pattern "$index_ets" "TextInput\\(\\{ text: input\\.text, placeholder: input\\.placeholder, controller: input\\.controller \\}\\)" "TextInput controller binding"
 require_pattern "$index_ets" "input\\.controller\\.setTextSelection\\(" "controller selection update"
 require_pattern "$index_ets" "pasteboard\\.createData\\(pasteboard\\.MIMETYPE_TEXT_PLAIN, text\\)" "clipboard write"
@@ -31,8 +31,18 @@ require_pattern "$index_ets" "handleNativeTextInputSelectionChanged\\(input\\.in
 require_pattern "$index_ets" "private requestNativeFocus\\(focusId: string\\): void" "native focus request hook"
 require_pattern "$index_ets" "focusControl\\.requestFocus\\(focusId\\)" "native focusControl request"
 require_pattern "$index_ets" "this\\.requestNativeFocus\\('native_text_input_' \\+ input\\.inputId\\)" "focus before native command"
+require_pattern "$index_ets" "\\[MakepadNTI\\]" "layout/command trace prefix"
+require_pattern "$index_ets" "pendingProgrammaticEchoes" "programmatic echo guard"
+require_pattern "$index_ets" "lastProgrammaticText" "programmatic echo text compare"
+require_pattern "$index_ets" "pendingCommands" "command queue before attach"
+require_pattern "$index_ets" "input\\.controller\\.stopEditing\\(\\)" "controller blur path"
+require_pattern "$index_ets" "\\.onAppear\\(" "attach flush hook"
+require_pattern "$index_ets" "\\.onAreaChange\\(" "layout trace area hook"
+require_pattern "$index_ets" "vp2px\\(1\\)" "vp/px ratio trace"
 
 require_pattern "$makepad_ets" "controller: TextInputController" "NativeTextInputState controller field"
+require_pattern "$makepad_ets" "pendingProgrammaticEchoes: number" "NativeTextInputState echo count"
+require_pattern "$makepad_ets" "attached: boolean" "NativeTextInputState attach flag"
 require_pattern "$makepad_ets" "selectionStart: number" "NativeTextInputState selectionStart"
 require_pattern "$makepad_ets" "selectionEnd: number" "NativeTextInputState selectionEnd"
 require_pattern "$makepad_ets" "handleNativeTextInputSelectionChanged\\(inputId: string, start: number, end: number\\): void" "selection callback interface"

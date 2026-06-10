@@ -11,10 +11,19 @@ import {
 struct Index {
   xComponentContext: MakepadXComponentInterface | undefined = undefined;
   @State nativeTextInputs: NativeTextInputState[] = [];
+  private pendingCommands: Map<string, string[]> = new Map<string, string[]>();
   xComponentAttrs: XComponentAttrs = {
     id: 'Entry',
     type: XComponentType.SURFACE,
-    libraryname: 'entry',
+    // Must match the Rust NAPI module name registered by libmakepad.so.
+    // 'entry' loads a nonexistent libentry.so: the XComponent then never
+    // delivers __NATIVE_XCOMPONENT_OBJ__ to Rust, no surface callbacks fire,
+    // and the app shows a black screen with zero makepad-ohos hilog output.
+    libraryname: 'makepad',
+  }
+
+  private traceNTI(message: string): void {
+    console.info('[MakepadNTI] ' + message);
   }
 
   private upsertNativeTextInput(input: NativeTextInputState): void {
@@ -115,7 +124,11 @@ struct Index {
     let nextSelection = start + replacement.length;
     this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
       current.text = nextText;
-      current.programmatic = false;
+      // The state-driven text change below re-renders the ArkUI TextInput and
+      // may fire onChange; arm an echo so the explicit changed callback here
+      // stays the single changed event for this edit.
+      current.pendingProgrammaticEchoes += 1;
+      current.lastProgrammaticText = nextText;
       current.selectionStart = nextSelection;
       current.selectionEnd = nextSelection;
       return current;
@@ -130,36 +143,148 @@ struct Index {
     }
   }
 
+  private runNativeTextInputCommand(input: NativeTextInputState, command: string): void {
+    if (command === 'focus') {
+      this.requestNativeFocus('native_text_input_' + input.inputId);
+      this.traceNTI('command id=' + input.inputId + ' command=focus result=request_focus');
+      return;
+    }
+    if (command === 'blur') {
+      let stoppedEditing = false;
+      try {
+        input.controller.stopEditing();
+        stoppedEditing = true;
+      } catch (err) {
+        console.error('NativeTextInput stopEditing failed: ' + JSON.stringify(err));
+      }
+      if (!stoppedEditing) {
+        // Documented OHOS host fallback: move focus to the Makepad
+        // XComponent as a focus sink when the controller path fails.
+        this.requestNativeFocus('makepad_xcomponent');
+      }
+      this.traceNTI('command id=' + input.inputId + ' command=blur controller_stop_editing=' + stoppedEditing);
+      return;
+    }
+    if (command === 'select_all') {
+      this.setNativeTextInputSelection(input, 0, input.text.length);
+      this.traceNTI('command id=' + input.inputId + ' command=select_all result=selection 0..' + input.text.length);
+      return;
+    }
+    if (command === 'copy') {
+      this.requestNativeFocus('native_text_input_' + input.inputId);
+      let selectedText = this.selectedNativeTextInputText(input);
+      if (selectedText.length > 0) {
+        let copied = this.setSystemClipboardText(selectedText);
+        this.traceNTI('command id=' + input.inputId + ' command=copy result=' + (copied ? 'copied len=' + selectedText.length : 'clipboard_error'));
+      } else {
+        this.traceNTI('command id=' + input.inputId + ' command=copy result=empty_selection');
+      }
+      return;
+    }
+    if (command === 'cut') {
+      if (!input.editable) {
+        this.traceNTI('command id=' + input.inputId + ' command=cut result=rejected_not_editable');
+        return;
+      }
+      this.requestNativeFocus('native_text_input_' + input.inputId);
+      let selectedText = this.selectedNativeTextInputText(input);
+      if (selectedText.length > 0 && this.setSystemClipboardText(selectedText)) {
+        this.replaceNativeTextInputSelection(input, '');
+        this.traceNTI('command id=' + input.inputId + ' command=cut result=cut len=' + selectedText.length);
+      } else {
+        this.traceNTI('command id=' + input.inputId + ' command=cut result=empty_selection');
+      }
+      return;
+    }
+    if (command === 'paste') {
+      if (!input.editable) {
+        this.traceNTI('command id=' + input.inputId + ' command=paste result=rejected_not_editable');
+        return;
+      }
+      this.requestNativeFocus('native_text_input_' + input.inputId);
+      let clipboardText = this.systemClipboardText();
+      if (clipboardText !== undefined && clipboardText.length > 0) {
+        this.replaceNativeTextInputSelection(input, clipboardText);
+        this.traceNTI('command id=' + input.inputId + ' command=paste result=pasted len=' + clipboardText.length);
+      } else {
+        this.traceNTI('command id=' + input.inputId + ' command=paste result=empty_clipboard');
+      }
+      return;
+    }
+    this.traceNTI('command id=' + input.inputId + ' command=' + command + ' result=rejected_unknown_command');
+  }
+
+  private dispatchNativeTextInputCommand(inputId: string, command: string): void {
+    let input = this.nativeTextInput(inputId);
+    if (input === undefined || !input.attached) {
+      let queue = this.pendingCommands.get(inputId);
+      if (queue === undefined) {
+        queue = [];
+      }
+      queue.push(command);
+      this.pendingCommands.set(inputId, queue);
+      let reason = input === undefined ? 'not_created' : 'not_attached';
+      this.traceNTI('command id=' + inputId + ' command=' + command + ' queued=true reason=' + reason);
+      return;
+    }
+    this.runNativeTextInputCommand(input, command);
+  }
+
+  private flushPendingCommands(inputId: string): void {
+    let queue = this.pendingCommands.get(inputId);
+    this.pendingCommands.delete(inputId);
+    if (queue === undefined || queue.length === 0) {
+      return;
+    }
+    for (let command of queue) {
+      this.traceNTI('command id=' + inputId + ' command=' + command + ' queued=false flushed=true');
+      this.dispatchNativeTextInputCommand(inputId, command);
+    }
+  }
+
   createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean): void {
+    let existing = this.nativeTextInput(inputId);
+    let attached = existing !== undefined ? existing.attached : false;
+    this.traceNTI('create id=' + inputId + ' editable=' + editable + ' attached=' + attached);
     this.upsertNativeTextInput({
-      inputId,
-      text,
-      placeholder,
-      editable,
+      inputId: inputId,
+      text: text,
+      placeholder: placeholder,
+      editable: editable,
       left: 0,
       top: 0,
       width: 1,
       height: 1,
       visible: false,
-      programmatic: false,
+      pendingProgrammaticEchoes: 0,
+      lastProgrammaticText: '',
+      attached: attached,
       selectionStart: 0,
       selectionEnd: 0,
-      controller: new TextInputController()
+      controller: existing !== undefined ? existing.controller : new TextInputController()
     });
   }
 
   updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
+    let appliedWidth = Math.max(1, width);
+    let appliedHeight = Math.max(1, height);
+    this.traceNTI('layout id=' + inputId
+      + ' makepad_rect=' + left + ',' + top + ',' + width + ',' + height
+      + ' applied_size=' + appliedWidth + 'x' + appliedHeight
+      + ' visible=' + visible
+      + ' vp_px=' + vp2px(1));
     this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
       input.left = left;
       input.top = top;
-      input.width = Math.max(1, width);
-      input.height = Math.max(1, height);
+      input.width = appliedWidth;
+      input.height = appliedHeight;
       input.visible = visible;
       return input;
     });
   }
 
   detachNativeTextInput(inputId: string): void {
+    this.traceNTI('detach id=' + inputId);
     this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
       input.visible = false;
       return input;
@@ -167,9 +292,13 @@ struct Index {
   }
 
   setNativeTextInputText(inputId: string, text: string, programmatic: boolean): void {
+    this.traceNTI('set_text id=' + inputId + ' programmatic=' + programmatic + ' len=' + text.length);
     this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+      if (programmatic && input.text !== text) {
+        input.pendingProgrammaticEchoes += 1;
+        input.lastProgrammaticText = text;
+      }
       input.text = text;
-      input.programmatic = programmatic;
       input.selectionStart = Math.min(input.selectionStart, text.length);
       input.selectionEnd = Math.min(input.selectionEnd, text.length);
       return input;
@@ -191,58 +320,32 @@ struct Index {
   }
 
   focusNativeTextInput(inputId: string): void {
-    this.requestNativeFocus('native_text_input_' + inputId);
+    this.dispatchNativeTextInputCommand(inputId, 'focus');
   }
 
-  blurNativeTextInput(_inputId: string): void {
-    this.requestNativeFocus('makepad_xcomponent');
+  blurNativeTextInput(inputId: string): void {
+    this.dispatchNativeTextInputCommand(inputId, 'blur');
   }
 
   selectAllNativeTextInput(inputId: string): void {
-    let input = this.nativeTextInput(inputId);
-    if (input === undefined) {
-      return;
-    }
-    this.setNativeTextInputSelection(input, 0, input.text.length);
+    this.dispatchNativeTextInputCommand(inputId, 'select_all');
   }
 
   copyNativeTextInput(inputId: string): void {
-    let input = this.nativeTextInput(inputId);
-    if (input === undefined) {
-      return;
-    }
-    this.requestNativeFocus('native_text_input_' + input.inputId);
-    let selectedText = this.selectedNativeTextInputText(input);
-    if (selectedText.length > 0) {
-      this.setSystemClipboardText(selectedText);
-    }
+    this.dispatchNativeTextInputCommand(inputId, 'copy');
   }
 
   cutNativeTextInput(inputId: string): void {
-    let input = this.nativeTextInput(inputId);
-    if (input === undefined || !input.editable) {
-      return;
-    }
-    this.requestNativeFocus('native_text_input_' + input.inputId);
-    let selectedText = this.selectedNativeTextInputText(input);
-    if (selectedText.length > 0 && this.setSystemClipboardText(selectedText)) {
-      this.replaceNativeTextInputSelection(input, '');
-    }
+    this.dispatchNativeTextInputCommand(inputId, 'cut');
   }
 
   pasteNativeTextInput(inputId: string): void {
-    let input = this.nativeTextInput(inputId);
-    if (input === undefined || !input.editable) {
-      return;
-    }
-    this.requestNativeFocus('native_text_input_' + input.inputId);
-    let clipboardText = this.systemClipboardText();
-    if (clipboardText !== undefined && clipboardText.length > 0) {
-      this.replaceNativeTextInputSelection(input, clipboardText);
-    }
+    this.dispatchNativeTextInputCommand(inputId, 'paste');
   }
 
   closeNativeTextInput(inputId: string): void {
+    this.traceNTI('close id=' + inputId);
+    this.pendingCommands.delete(inputId);
     this.nativeTextInputs = this.nativeTextInputs.filter((input: NativeTextInputState) => input.inputId !== inputId);
   }
 
@@ -272,12 +375,44 @@ struct Index {
           .height(input.height)
           .enabled(input.editable)
           .visibility(input.visible ? Visibility.Visible : Visibility.Hidden)
+          .onAppear(() => {
+            this.traceNTI('attached id=' + input.inputId);
+            this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
+              current.attached = true;
+              return current;
+            });
+            this.flushPendingCommands(input.inputId);
+          })
+          .onAreaChange((_oldValue: Area, newValue: Area) => {
+            this.traceNTI('area id=' + input.inputId
+              + ' arkui_global=' + JSON.stringify(newValue.globalPosition)
+              + ' arkui_size=' + newValue.width + 'x' + newValue.height);
+          })
           .onChange((value: string) => {
-            if (input.programmatic) {
-              this.setNativeTextInputText(input.inputId, value, false);
+            // Re-resolve current state: the closure-captured `input` is the
+            // render-time snapshot and its guard fields may be stale.
+            let current = this.nativeTextInput(input.inputId);
+            if (current === undefined) {
               return;
             }
-            this.setNativeTextInputText(input.inputId, value, false);
+            if (current.pendingProgrammaticEchoes > 0 && value === current.lastProgrammaticText) {
+              this.updateNativeTextInputState(input.inputId, (state: NativeTextInputState): NativeTextInputState => {
+                state.pendingProgrammaticEchoes -= 1;
+                state.text = value;
+                return state;
+              });
+              this.traceNTI('changed id=' + input.inputId + ' programmatic_echo=true len=' + value.length);
+              return;
+            }
+            this.updateNativeTextInputState(input.inputId, (state: NativeTextInputState): NativeTextInputState => {
+              // A real user edit invalidates any echoes that never fired.
+              state.pendingProgrammaticEchoes = 0;
+              state.text = value;
+              state.selectionStart = Math.min(state.selectionStart, value.length);
+              state.selectionEnd = Math.min(state.selectionEnd, value.length);
+              return state;
+            });
+            this.traceNTI('changed id=' + input.inputId + ' programmatic_echo=false len=' + value.length);
             this.xComponentContext?.handleNativeTextInputChanged(input.inputId, value);
           })
           .onFocus(() => {

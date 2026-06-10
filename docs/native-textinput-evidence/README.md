@@ -74,10 +74,10 @@ tools/native_textinput_static_evidence.sh
 For local development environments that cannot reach crates.io or do not have
 the OpenHarmony target installed, `--skip-ohos-target` can be used to regenerate
 this file for debugging, but that marker will not satisfy the completion audit.
-In the current sandbox, the direct OHOS target check is blocked by DNS failure
-while downloading OpenHarmony NAPI crates from `static.crates.io`; recent
-failures include `ohos-sys 0.2.2`, `napi-ohos 0.1.3`, and
-`napi-derive-backend-ohos 0.0.7`. These target-only dependencies are pinned in
+The full run (no skips) has passed in the local environment and recorded
+`OhosTarget: checked`; the earlier `static.crates.io` DNS failures for
+`ohos-sys 0.2.2`, `napi-ohos 0.1.3`, and `napi-derive-backend-ohos 0.0.7` were
+specific to the Codex sandbox. These target-only dependencies remain pinned in
 `platform/Cargo.toml` to the versions recorded in `Cargo.lock` so a networked
 environment does not silently drift to newer OHOS bindings.
 
@@ -229,6 +229,35 @@ Command: tools/native_textinput_device_runtime_evidence.sh --platform ohos --cle
 
 Record the DevEco build result, device target, ArkUI `TextInputController`
 behavior, pasteboard behavior, and callback observations.
+
+For the simulator slice, `Device:` may name the local simulator, for example
+`OpenHarmony local simulator (<hdc target>)`. In addition to the marker block
+above, OHOS evidence must include the fields required by
+`docs/native-textinput-ohos-simulator.spec.md` below the markers — the
+completion audit only checks the basic markers, so these fields are part of
+the simulator spec contract even though the audit script does not enforce
+them:
+
+```text
+DevEcoHome: <path>
+JavaHome: <path>
+HdcTargets: <raw hdc list targets output>
+Hap: <path> <bytes> <checksum>
+LibMakepad: <path> <bytes> <checksum>
+Screenshot: <path>
+LayerTrace:
+  RustOp / OhosPlatformHandler / ArkTsHostMethod / ArkTsState /
+  ArkUiVisual / ArkTsCallback / RustAction / MakepadStatusLabel:
+  PASS|FAIL|DEFERRED
+LayoutTrace:
+  <native-id>: makepad_rect=<...> arkui_global=<...> arkui_size=<...> vp_px=<...>
+CommandTrace:
+  <native-id>: command=<...> queued=true|false result=<...>
+```
+
+The `LayoutTrace` and `CommandTrace` lines come from the `[MakepadNTI]`
+hilog entries emitted by the ArkTS host; filter the saved raw log with
+`rg "MakepadNTI"`.
 
 Helper:
 

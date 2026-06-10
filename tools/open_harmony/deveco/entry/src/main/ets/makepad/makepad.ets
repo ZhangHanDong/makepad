@@ -43,7 +43,16 @@ export interface NativeTextInputState {
   width: number;
   height: number;
   visible: boolean;
-  programmatic: boolean;
+  // ArkUI may or may not fire onChange for a programmatic text update
+  // depending on version, so a boolean flag cannot pair sets with echoes.
+  // Each programmatic set increments the echo count; onChange only swallows
+  // a callback when the count is positive AND the value matches the last
+  // programmatic text, so stale echoes can never eat newer user input.
+  pendingProgrammaticEchoes: number;
+  lastProgrammaticText: string;
+  // Commands arriving between state insertion and ArkUI component attach
+  // (same Rust op batch) must be queued; onAppear flips this and flushes.
+  attached: boolean;
   selectionStart: number;
   selectionEnd: number;
   controller: TextInputController;
