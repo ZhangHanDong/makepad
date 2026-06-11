@@ -246,17 +246,23 @@ the release HAP build succeeds, and
 (`OhosTarget: checked` in the static evidence). A local aarch64 API-15
 simulator is created and visible as `127.0.0.1:5555`.
 
-First simulator bring-up status: install/launch/module-init/XComponent
-surface/EGL all pass after four fixes (`libraryname: 'makepad'`, OHOS
-`Cx::init_log()`, profile ACL for `READ_PASTEBOARD`, local HAP signing via
-`tools/ohos_sim_sign_run.sh`), but the slice is **blocked** by the emulator
-GPU stack: guest GLES3 shaders are translated to desktop GLSL 450 while the
-macOS host OpenGL caps at 4.1, so every Makepad shader fails to compile and
-the render thread panics before any native text input op is emitted. Full
-blocker record: `docs/native-textinput-evidence/ohos-runtime.md`. `MAKEPAD=
-ohos_sim` does not change the outcome and is not needed for this aarch64
-emulator. Next unblock options are listed in the evidence file (real device
-gate, emulator GPU settings/newer image, or out-of-scope renderer work).
+Simulator bring-up status: the core chain now PASSES. After five fixes
+(`libraryname: 'makepad'`, OHOS `Cx::init_log()`, profile ACL for
+`READ_PASTEBOARD`, local HAP signing via `tools/ohos_sim_sign_run.sh`, and
+the `ohos_sim` tolerant shader mode below), the ArkUI TextInput overlays
+render at the Makepad-computed positions, typed input flows
+ArkUI onChange -> [MakepadNTI] -> NAPI -> Rust widget action ("changed action
+received: hello ohos"), and focus/blur/selection actions round-trip. Evidence:
+`docs/native-textinput-evidence/ohos-runtime.md`.
+
+Emulator GPU limitation (tolerated, not solved): the emulator translates
+guest GLES3 shaders to desktop GLSL 450 over a macOS host OpenGL 4.1 limit,
+so Makepad's own shaders cannot compile there. Under `MAKEPAD=ohos_sim` the
+GL backend now skips failed shaders instead of panicking
+(`GlShaderState::Failed`), keeping the main loop and the native host path
+alive while Makepad pixels stay blank. Build simulator HAPs **with**
+`MAKEPAD=ohos_sim`; real devices build without it and keep the panic
+behavior. Makepad self-render validation stays on the real device gate.
 
 Expected:
 

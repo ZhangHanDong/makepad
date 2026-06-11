@@ -359,24 +359,37 @@ impl Cx {
                         .as_ref()
                         .and_then(GlShaderState::as_ready)
                     else {
-                        self.demo_time_repaint = true;
+                        if matches!(
+                            shp.gl_shader[shader_variant],
+                            Some(GlShaderState::Pending(_))
+                        ) {
+                            self.demo_time_repaint = true;
+                        }
                         continue;
                     };
                     shgl
                 } else {
                     if shp.gl_shader[shader_variant].is_none() {
-                        shp.gl_shader[shader_variant] = Some(GlShaderState::Ready(GlShader::new(
-                            self.os.gl(),
-                            &shp.vertex[shader_variant],
-                            &shp.pixel[shader_variant],
-                            &sh.mapping,
-                            &self.os_type,
-                        )));
+                        shp.gl_shader[shader_variant] = Some(
+                            match GlShader::new(
+                                self.os.gl(),
+                                &shp.vertex[shader_variant],
+                                &shp.pixel[shader_variant],
+                                &sh.mapping,
+                                &self.os_type,
+                            ) {
+                                Some(shader) => GlShaderState::Ready(shader),
+                                None => GlShaderState::Failed,
+                            },
+                        );
                     }
-                    shp.gl_shader[shader_variant]
+                    let Some(shgl) = shp.gl_shader[shader_variant]
                         .as_ref()
                         .and_then(GlShaderState::as_ready)
-                        .unwrap()
+                    else {
+                        continue;
+                    };
+                    shgl
                 };
                 let trace_draw = std::env::var_os("MAKEPAD_GL_DRAW_TRACE").is_some();
 
@@ -1111,13 +1124,18 @@ pub struct GlShaderUniforms {
 pub enum GlShaderState {
     Ready(GlShader),
     Pending(PendingGlShader),
+    // The simulator's GLES-to-host translation can reject shaders that every
+    // real device accepts; under cfg(ohos_sim) a failed compile parks the
+    // shader here so the rest of the frame loop keeps running instead of
+    // panicking, and items using it are skipped.
+    Failed,
 }
 
 impl GlShaderState {
     fn as_ready(&self) -> Option<&GlShader> {
         match self {
             Self::Ready(shader) => Some(shader),
-            Self::Pending(_) => None,
+            Self::Pending(_) | Self::Failed => None,
         }
     }
 
@@ -1125,6 +1143,7 @@ impl GlShaderState {
         match self {
             Self::Ready(shader) => shader.free_resources(gl),
             Self::Pending(shader) => shader.free_resources(gl),
+            Self::Failed => {}
         }
     }
 }
@@ -1509,12 +1528,12 @@ impl GlShader {
         vertex: &str,
         pixel: &str,
         os_type: &OsType,
-    ) -> u32 {
+    ) -> Option<u32> {
         Self::opengl_log_shader_info(gl, true, pending.vertex_shader as usize, "vertex", vertex);
         if let Some(error) =
             Self::opengl_has_shader_error(gl, true, pending.vertex_shader as usize, vertex)
         {
-            panic!("ERROR::SHADER::VERTEX::COMPILATION_FAILED\n{}", error);
+            return Self::fail_program_compile(gl, pending, "VERTEX", &error);
         }
 
         Self::opengl_log_shader_info(
@@ -1527,13 +1546,13 @@ impl GlShader {
         if let Some(error) =
             Self::opengl_has_shader_error(gl, true, pending.fragment_shader as usize, pixel)
         {
-            panic!("ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n{}", error);
+            return Self::fail_program_compile(gl, pending, "FRAGMENT", &error);
         }
 
         Self::opengl_log_shader_info(gl, false, pending.program as usize, "program", "");
         if let Some(error) = Self::opengl_has_shader_error(gl, false, pending.program as usize, "")
         {
-            panic!("ERROR::SHADER::LINK::COMPILATION_FAILED\n{}", error);
+            return Self::fail_program_compile(gl, pending, "LINK", &error);
         }
 
         unsafe {
@@ -1541,7 +1560,33 @@ impl GlShader {
             (gl.glDeleteShader)(pending.fragment_shader);
         }
         Self::write_program_cache(gl, pending.program, vertex, pixel, os_type);
-        pending.program
+        Some(pending.program)
+    }
+
+    #[cfg(ohos_sim)]
+    fn fail_program_compile(
+        gl: &LibGl,
+        pending: PendingGlShader,
+        stage: &str,
+        error: &str,
+    ) -> Option<u32> {
+        crate::error!(
+            "SHADER::{}::COMPILATION_FAILED (skipping shader under ohos_sim tolerant mode)\n{}",
+            stage,
+            error
+        );
+        pending.free_resources(gl);
+        None
+    }
+
+    #[cfg(not(ohos_sim))]
+    fn fail_program_compile(
+        _gl: &LibGl,
+        _pending: PendingGlShader,
+        stage: &str,
+        error: &str,
+    ) -> Option<u32> {
+        panic!("ERROR::SHADER::{}::COMPILATION_FAILED\n{}", stage, error);
     }
 
     fn build_from_program(gl: &LibGl, program: u32, mapping: &CxDrawShaderMapping) -> Self {
@@ -1602,7 +1647,10 @@ impl GlShader {
             ));
         }
 
-        GlShaderState::Ready(Self::new(gl, vertex, pixel, mapping, os_type))
+        match Self::new(gl, vertex, pixel, mapping, os_type) {
+            Some(shader) => GlShaderState::Ready(shader),
+            None => GlShaderState::Failed,
+        }
     }
 
     pub fn new(
@@ -1611,14 +1659,14 @@ impl GlShader {
         pixel: &str,
         mapping: &CxDrawShaderMapping,
         os_type: &OsType,
-    ) -> Self {
+    ) -> Option<Self> {
         if let Some(program) = Self::read_program_cache(gl, vertex, pixel, os_type) {
-            return Self::build_from_program(gl, program, mapping);
+            return Some(Self::build_from_program(gl, program, mapping));
         }
 
         let pending = Self::start_pending_program_compile(gl, vertex, pixel, os_type);
-        let program = Self::finish_pending_program_compile(gl, pending, vertex, pixel, os_type);
-        Self::build_from_program(gl, program, mapping)
+        let program = Self::finish_pending_program_compile(gl, pending, vertex, pixel, os_type)?;
+        Some(Self::build_from_program(gl, program, mapping))
     }
 
     pub fn set_uniform_array(gl: &LibGl, loc: &OpenglUniform, array: &[f32]) {
@@ -1972,13 +2020,16 @@ impl CxOsDrawShader {
             return;
         }
 
-        let program = GlShader::finish_pending_program_compile(
+        let Some(program) = GlShader::finish_pending_program_compile(
             gl,
             pending,
             &self.vertex[shader_variant],
             &self.pixel[shader_variant],
             os_type,
-        );
+        ) else {
+            self.gl_shader[shader_variant] = Some(GlShaderState::Failed);
+            return;
+        };
         self.gl_shader[shader_variant] = Some(GlShaderState::Ready(GlShader::build_from_program(
             gl, program, mapping,
         )));
