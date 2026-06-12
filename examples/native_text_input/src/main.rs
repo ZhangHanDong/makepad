@@ -289,6 +289,42 @@ impl MatchEvent for App {
         let request = HttpRequest::new("https://example.com/".to_string(), HttpMethod::GET);
         cx.http_request(live_id!(ohos_http_smoke), request);
         log!("NativeTextInput smoke: http smoke request started");
+
+        // Streaming (SSE) smoke against the host-side test server
+        // (tools/ohos_sse_test_server.py; the emulator reaches the host at
+        // 10.0.2.2). Chunks land in handle_http_stream below.
+        let mut stream_request =
+            HttpRequest::new("http://10.0.2.2:8765/sse".to_string(), HttpMethod::GET);
+        stream_request.is_streaming = true;
+        cx.http_request(live_id!(ohos_sse_smoke), stream_request);
+        log!("NativeTextInput smoke: sse smoke request started");
+    }
+
+    fn handle_http_stream(&mut self, _cx: &mut Cx, request_id: LiveId, data: &HttpResponse) {
+        if request_id == live_id!(ohos_sse_smoke) {
+            let chunk = data
+                .body
+                .as_ref()
+                .map(|b| String::from_utf8_lossy(b).trim().to_string())
+                .unwrap_or_default();
+            log!(
+                "NativeTextInput smoke: sse chunk status={} len={} text={:?}",
+                data.status_code,
+                data.body.as_ref().map(|b| b.len()).unwrap_or(0),
+                chunk
+            );
+        }
+    }
+
+    fn handle_http_stream_complete(
+        &mut self,
+        _cx: &mut Cx,
+        request_id: LiveId,
+        _data: &HttpResponse,
+    ) {
+        if request_id == live_id!(ohos_sse_smoke) {
+            log!("NativeTextInput smoke: sse stream complete");
+        }
     }
 
     fn handle_http_response(

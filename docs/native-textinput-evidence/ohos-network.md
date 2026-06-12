@@ -35,6 +35,24 @@ cx.http_request(live_id!(ohos_http_smoke), GET https://example.com/)
    late headers were dropped (first run recorded exactly that:
    "status=0 body_len=559").
 
+## Streaming (SSE) Verification
+
+`tools/ohos_sse_test_server.py` on the host (reachable from the emulator at
+10.0.2.2:8765) serves five SSE events one second apart. The example's
+streaming smoke (`is_streaming = true`) received each chunk in real time —
+hilog timestamps match the server's 1s cadence (.856/.714/.720/.713/.720),
+proving per-chunk delivery rather than end-of-request buffering:
+
+```
+sse chunk status=0 len=24 text="data: ohos sse event 0..4"  (5 chunks, 1s apart)
+sse stream complete
+```
+
+The concurrent aggregate HTTPS smoke completed with status=200 in the same
+run. Chunks carry status 0 because @ohos.net.http delivers the response code
+callback last (see ordering note above); SSE consumers read the body, and
+this matches the Linux backend chunk semantics.
+
 ## Notes
 
 - Streaming chunks may carry status_code 0 when they arrive before the
