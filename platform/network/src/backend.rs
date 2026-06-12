@@ -18,6 +18,8 @@ pub use self::android::{
 pub mod apple;
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod linux;
+#[cfg(target_env = "ohos")]
+pub mod ohos;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_os = "windows")]
@@ -177,9 +179,7 @@ pub fn default_backend() -> Arc<dyn NetworkBackend> {
 
 #[cfg(all(not(target_arch = "wasm32"), target_env = "ohos"))]
 pub fn default_backend() -> Arc<dyn NetworkBackend> {
-    Arc::new(UnsupportedBackend::new(
-        "no default OpenHarmony network backend implemented",
-    ))
+    ohos::create_backend()
 }
 
 #[cfg(not(any(

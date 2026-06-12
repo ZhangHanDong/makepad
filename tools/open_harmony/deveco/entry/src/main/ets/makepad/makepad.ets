@@ -1,4 +1,5 @@
 import display from '@ohos.display';
+import http from '@ohos.net.http';
 import deviceInfo from '@ohos.deviceInfo';
 import inputMethod from '@ohos.inputMethod';
 import { window } from '@kit.ArkUI';
@@ -15,6 +16,10 @@ export interface MakepadXComponentInterface{
   handleNativeTextInputChanged(inputId: string, text: string): void;
   handleNativeTextInputFocusChanged(inputId: string, hasFocus: boolean): void;
   handleNativeTextInputSelectionChanged(inputId: string, start: number, end: number): void;
+  handleHttpHeaders(requestId: string, statusCode: number, headersFlat: string): void;
+  handleHttpChunk(requestId: string, data: ArrayBuffer): void;
+  handleHttpComplete(requestId: string): void;
+  handleHttpError(requestId: string, message: string): void;
 }
 
 @Observed
@@ -224,6 +229,125 @@ export class ArkGlue{
 
   closeNativeLabel(inputId: string): void {
     this.nativeTextInputHost?.closeNativeLabel(inputId);
+  }
+
+  private httpRequests: Map<string, http.HttpRequest> = new Map<string, http.HttpRequest>();
+
+  private httpMethod(method: string): http.RequestMethod {
+    if (method === 'POST') {
+      return http.RequestMethod.POST;
+    }
+    if (method === 'PUT') {
+      return http.RequestMethod.PUT;
+    }
+    if (method === 'DELETE') {
+      return http.RequestMethod.DELETE;
+    }
+    if (method === 'HEAD') {
+      return http.RequestMethod.HEAD;
+    }
+    if (method === 'OPTIONS') {
+      return http.RequestMethod.OPTIONS;
+    }
+    if (method === 'TRACE') {
+      return http.RequestMethod.TRACE;
+    }
+    if (method === 'CONNECT') {
+      return http.RequestMethod.CONNECT;
+    }
+    return http.RequestMethod.GET;
+  }
+
+  // Headers cross the bridge as newline-delimited key/value pairs to avoid a
+  // JSON dependency on the Rust side.
+  private parseFlatHeaders(flat: string): Record<string, string> {
+    let header: Record<string, string> = {};
+    let lines = flat.split('\n');
+    for (let i = 0; i + 1 < lines.length; i += 2) {
+      if (lines[i].length > 0) {
+        header[lines[i]] = lines[i + 1];
+      }
+    }
+    return header;
+  }
+
+  private flattenHeaders(headers: Object): string {
+    let flat = '';
+    let record = headers as Record<string, Object>;
+    for (let key of Object.keys(record)) {
+      flat += key + '\n' + String(record[key]) + '\n';
+    }
+    return flat;
+  }
+
+  private finishHttpRequest(requestId: string): void {
+    let request = this.httpRequests.get(requestId);
+    if (request !== undefined) {
+      this.httpRequests.delete(requestId);
+      request.destroy();
+    }
+  }
+
+  httpStart(requestId: string, method: string, url: string, headersFlat: string, body: ArrayBuffer): void {
+    console.info('[MakepadNet] httpStart id=' + requestId + ' method=' + method + ' url=' + url + ' body_len=' + body.byteLength);
+    let request = http.createHttp();
+    this.httpRequests.set(requestId, request);
+    let headersStash = '';
+    // Observed @ohos.net.http ordering: headersReceive -> dataReceive ->
+    // dataEnd -> response-code callback (last). Completion must wait for
+    // both dataEnd and the status code, or the Rust side would finish the
+    // request with status 0 and drop the late headers.
+    let dataEnded = false;
+    let gotCode = false;
+    let maybeComplete = (): void => {
+      if (dataEnded && gotCode) {
+        console.info('[MakepadNet] complete id=' + requestId);
+        this.xComponentContext?.handleHttpComplete(requestId);
+        this.finishHttpRequest(requestId);
+      }
+    };
+    request.on('headersReceive', (header: Object) => {
+      headersStash = this.flattenHeaders(header);
+      console.info('[MakepadNet] headersReceive id=' + requestId);
+    });
+    request.on('dataReceive', (data: ArrayBuffer) => {
+      console.info('[MakepadNet] dataReceive id=' + requestId + ' len=' + data.byteLength);
+      this.xComponentContext?.handleHttpChunk(requestId, data);
+    });
+    request.on('dataEnd', () => {
+      console.info('[MakepadNet] dataEnd id=' + requestId);
+      dataEnded = true;
+      maybeComplete();
+    });
+    let options: http.HttpRequestOptions = {
+      method: this.httpMethod(method),
+      header: this.parseFlatHeaders(headersFlat),
+    };
+    if (body.byteLength > 0) {
+      options.extraData = body;
+    }
+    try {
+      request.requestInStream(url, options, (err: Error, responseCode: number) => {
+        if (err) {
+          console.error('[MakepadNet] request error id=' + requestId + ' err=' + JSON.stringify(err));
+          this.xComponentContext?.handleHttpError(requestId, JSON.stringify(err));
+          this.finishHttpRequest(requestId);
+          return;
+        }
+        console.info('[MakepadNet] response id=' + requestId + ' code=' + responseCode);
+        this.xComponentContext?.handleHttpHeaders(requestId, responseCode, headersStash);
+        gotCode = true;
+        maybeComplete();
+      });
+    } catch (err) {
+      console.error('[MakepadNet] requestInStream threw id=' + requestId + ' err=' + JSON.stringify(err));
+      this.xComponentContext?.handleHttpError(requestId, JSON.stringify(err));
+      this.finishHttpRequest(requestId);
+    }
+  }
+
+  httpCancel(requestId: string): void {
+    this.finishHttpRequest(requestId);
   }
 
   private async showTextInput(): Promise<void> {

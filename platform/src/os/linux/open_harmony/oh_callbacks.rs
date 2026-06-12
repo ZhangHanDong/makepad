@@ -32,10 +32,28 @@ thread_local! {
     static OHOS_MSG_TX: RefCell<Option<mpsc::Sender<FromOhosMessage>>> = RefCell::new(None);
 }
 
+// Senders for threads that never ran init_globals (e.g. the network backend
+// calling from an arbitrary caller thread). The thread_local above stays the
+// fast path; on a miss the sender is cloned from here and cached.
+static OHOS_MSG_TX_GLOBAL: std::sync::Mutex<Option<mpsc::Sender<FromOhosMessage>>> =
+    std::sync::Mutex::new(None);
+
 pub fn send_from_ohos_message(message: FromOhosMessage) {
     OHOS_MSG_TX.with(|tx| {
         let mut tx = tx.borrow_mut();
-        tx.as_mut().unwrap().send(message).unwrap();
+        if tx.is_none() {
+            *tx = OHOS_MSG_TX_GLOBAL
+                .lock()
+                .ok()
+                .and_then(|global| global.as_ref().cloned());
+        }
+        let Some(tx) = tx.as_mut() else {
+            crate::error!("send_from_ohos_message before init_globals; message dropped");
+            return;
+        };
+        if tx.send(message).is_err() {
+            crate::error!("send_from_ohos_message receiver gone; message dropped");
+        }
     });
 }
 
@@ -217,6 +235,9 @@ extern "C" fn on_frame_cb(
 }
 
 pub fn init_globals(from_ohos_tx: mpsc::Sender<FromOhosMessage>) {
+    if let Ok(mut global) = OHOS_MSG_TX_GLOBAL.lock() {
+        *global = Some(from_ohos_tx.clone());
+    }
     OHOS_MSG_TX.with(move |messages_tx| *messages_tx.borrow_mut() = Some(from_ohos_tx));
 }
 
@@ -284,6 +305,16 @@ pub fn debug_jsobject(obj: &JsObject, obj_name: &str) -> napi_ohos::Result<()> {
 
 #[derive(Debug)]
 pub enum FromOhosMessage {
+    HttpRequestStart {
+        request_id: crate::makepad_live_id::LiveId,
+        method: String,
+        url: String,
+        headers_flat: String,
+        body: Vec<u8>,
+    },
+    HttpRequestCancel {
+        request_id: crate::makepad_live_id::LiveId,
+    },
     Init {
         device_type: String,
         os_full_name: String,

@@ -37,6 +37,7 @@ pub enum ArkTsArg {
     Str(String),
     F64(f64),
     Bool(bool),
+    Bytes(Vec<u8>),
 }
 
 pub struct ArkTsObjRef {
@@ -126,6 +127,19 @@ impl ArkTsObjRef {
                     },
                     ArkTsArg::F64(f) => unsafe { napi_create_double(raw_env, *f, &mut value) },
                     ArkTsArg::Bool(b) => unsafe { napi_get_boolean(raw_env, *b, &mut value) },
+                    ArkTsArg::Bytes(bytes) => unsafe {
+                        let mut data: *mut c_void = null_mut();
+                        let status =
+                            napi_create_arraybuffer(raw_env, bytes.len(), &mut data, &mut value);
+                        if status == Status::napi_ok && !bytes.is_empty() {
+                            std::ptr::copy_nonoverlapping(
+                                bytes.as_ptr(),
+                                data as *mut u8,
+                                bytes.len(),
+                            );
+                        }
+                        status
+                    },
                 };
                 if status != Status::napi_ok {
                     crate::error!("failed to create napi arg for {}", fn_name);

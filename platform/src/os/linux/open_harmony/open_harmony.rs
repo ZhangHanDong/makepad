@@ -229,6 +229,11 @@ impl Cx {
         // Live edits
         self.run_live_edit_if_needed("open-harmony");
 
+        // Network runtime responses (HTTP/WS events emitted by the ArkTS
+        // bridge callbacks land in the runtime channel; drain them here like
+        // the other platforms do in their main loops)
+        self.dispatch_network_runtime_events();
+
         // Platform operations
         self.handle_platform_ops();
     }
@@ -255,6 +260,30 @@ impl Cx {
 
     fn handle_message(&mut self, msg: FromOhosMessage) {
         match msg {
+            FromOhosMessage::HttpRequestStart {
+                request_id,
+                method,
+                url,
+                headers_flat,
+                body,
+            } => {
+                self.oh_call_arkts_args(
+                    "httpStart",
+                    vec![
+                        ArkTsArg::Str(request_id.0.to_string()),
+                        ArkTsArg::Str(method),
+                        ArkTsArg::Str(url),
+                        ArkTsArg::Str(headers_flat),
+                        ArkTsArg::Bytes(body),
+                    ],
+                );
+            }
+            FromOhosMessage::HttpRequestCancel { request_id } => {
+                self.oh_call_arkts_args(
+                    "httpCancel",
+                    vec![ArkTsArg::Str(request_id.0.to_string())],
+                );
+            }
             FromOhosMessage::SurfaceCreated {
                 window,
                 width: _,
@@ -821,6 +850,7 @@ impl Cx {
 impl CxOsApi for Cx {
     fn init_cx_os(&mut self) {
         self.package_root = Some("makepad".to_string());
+        super::oh_network::register_ohos_network_backend();
         self.native_load_dependencies();
     }
 

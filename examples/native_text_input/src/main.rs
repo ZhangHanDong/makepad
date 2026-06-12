@@ -283,6 +283,35 @@ impl App {
 }
 
 impl MatchEvent for App {
+    fn handle_startup(&mut self, cx: &mut Cx) {
+        // OHOS network backend smoke: a real HTTPS GET through the system
+        // stack. Status/len land in the log for headless evidence.
+        let request = HttpRequest::new("https://example.com/".to_string(), HttpMethod::GET);
+        cx.http_request(live_id!(ohos_http_smoke), request);
+        log!("NativeTextInput smoke: http smoke request started");
+    }
+
+    fn handle_http_response(
+        &mut self,
+        _cx: &mut Cx,
+        request_id: LiveId,
+        response: &HttpResponse,
+    ) {
+        if request_id == live_id!(ohos_http_smoke) {
+            log!(
+                "NativeTextInput smoke: http response status={} body_len={}",
+                response.status_code,
+                response.body.as_ref().map(|b| b.len()).unwrap_or(0)
+            );
+        }
+    }
+
+    fn handle_http_request_error(&mut self, _cx: &mut Cx, request_id: LiveId, err: &HttpError) {
+        if request_id == live_id!(ohos_http_smoke) {
+            log!("NativeTextInput smoke: http error: {}", err.message);
+        }
+    }
+
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         self.dump_control_rects(cx);
         let input = self.ui.native_text_input(cx, ids!(native_input));
