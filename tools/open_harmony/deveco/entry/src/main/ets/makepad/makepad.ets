@@ -17,6 +17,17 @@ export interface MakepadXComponentInterface{
   handleNativeTextInputSelectionChanged(inputId: string, start: number, end: number): void;
 }
 
+@Observed
+export class NativeLabelState {
+  inputId: string = '';
+  text: string = '';
+  left: number = 0;
+  top: number = 0;
+  width: number = 1;
+  height: number = 1;
+  visible: boolean = false;
+}
+
 export interface NativeTextInputHost {
   createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean): void;
   updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void;
@@ -31,6 +42,11 @@ export interface NativeTextInputHost {
   cutNativeTextInput(inputId: string): void;
   pasteNativeTextInput(inputId: string): void;
   closeNativeTextInput(inputId: string): void;
+  createNativeLabel(inputId: string, text: string): void;
+  updateNativeLabel(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void;
+  setNativeLabelText(inputId: string, text: string): void;
+  detachNativeLabel(inputId: string): void;
+  closeNativeLabel(inputId: string): void;
 }
 
 // @Observed + @ObjectLink is required: the overlay list renders through
@@ -188,6 +204,26 @@ export class ArkGlue{
 
   closeNativeTextInput(inputId: string): void {
     this.nativeTextInputHost?.closeNativeTextInput(inputId);
+  }
+
+  createNativeLabel(inputId: string, text: string): void {
+    this.nativeTextInputHost?.createNativeLabel(inputId, text);
+  }
+
+  updateNativeLabel(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
+    this.nativeTextInputHost?.updateNativeLabel(inputId, left, top, width, height, visible);
+  }
+
+  setNativeLabelText(inputId: string, text: string): void {
+    this.nativeTextInputHost?.setNativeLabelText(inputId, text);
+  }
+
+  detachNativeLabel(inputId: string): void {
+    this.nativeTextInputHost?.detachNativeLabel(inputId);
+  }
+
+  closeNativeLabel(inputId: string): void {
+    this.nativeTextInputHost?.closeNativeLabel(inputId);
   }
 
   private async showTextInput(): Promise<void> {

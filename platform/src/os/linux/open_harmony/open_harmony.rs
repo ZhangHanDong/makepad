@@ -706,27 +706,54 @@ impl Cx {
                     //self.os.keyboard_visible = false;
                     //unsafe {android_jni::to_java_show_keyboard(false);}
                 }
-                CxOsOp::CreateNativeView { id, kind, props } => match (kind, props) {
-                    (
-                        NativeHostKind::TextInput,
-                        NativeHostProps::TextInput {
-                            text,
-                            placeholder,
-                            editable,
-                        },
-                    ) => self.oh_call_native_text_input_create(id, &text, &placeholder, editable),
-                    _ => {}
-                },
+                CxOsOp::CreateNativeView { id, kind, props } => {
+                    self.os.native_host_kinds.insert(id, kind);
+                    match (kind, props) {
+                        (
+                            NativeHostKind::TextInput,
+                            NativeHostProps::TextInput {
+                                text,
+                                placeholder,
+                                editable,
+                            },
+                        ) => {
+                            self.oh_call_native_text_input_create(id, &text, &placeholder, editable)
+                        }
+                        (NativeHostKind::Label, NativeHostProps::Label { text }) => self
+                            .oh_call_arkts_args(
+                                "createNativeLabel",
+                                vec![
+                                    ArkTsArg::Str(id.0.to_string()),
+                                    ArkTsArg::Str(text.to_string()),
+                                ],
+                            ),
+                        _ => {}
+                    }
+                }
                 CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
                     let rect = area.clipped_rect(self);
-                    self.oh_call_native_text_input_update(
-                        id,
-                        rect.pos.x,
-                        rect.pos.y,
-                        rect.size.x,
-                        rect.size.y,
-                        visible && rect.size.x > 0.0 && rect.size.y > 0.0,
-                    );
+                    let shown = visible && rect.size.x > 0.0 && rect.size.y > 0.0;
+                    match self.os.native_host_kinds.get(&id) {
+                        Some(NativeHostKind::Label) => self.oh_call_arkts_args(
+                            "updateNativeLabel",
+                            vec![
+                                ArkTsArg::Str(id.0.to_string()),
+                                ArkTsArg::F64(rect.pos.x),
+                                ArkTsArg::F64(rect.pos.y),
+                                ArkTsArg::F64(rect.size.x),
+                                ArkTsArg::F64(rect.size.y),
+                                ArkTsArg::Bool(shown),
+                            ],
+                        ),
+                        _ => self.oh_call_native_text_input_update(
+                            id,
+                            rect.pos.x,
+                            rect.pos.y,
+                            rect.size.x,
+                            rect.size.y,
+                            shown,
+                        ),
+                    }
                 }
                 CxOsOp::UpdateNativeViewProps { id, update } => match update {
                     NativeHostPropUpdate::TextInputText { text, programmatic } => {
@@ -744,7 +771,9 @@ impl Cx {
                             id,
                             editable,
                         ),
-                    NativeHostPropUpdate::LabelText { .. } => {}
+                    NativeHostPropUpdate::LabelText { text } => {
+                        self.oh_call_native_text_input_string_prop("setNativeLabelText", id, &text);
+                    }
                 },
                 CxOsOp::CommandNativeView { id, command } => match command {
                     NativeHostCommand::TextInput(NativeTextInputCommand::Focus) => {
@@ -767,10 +796,18 @@ impl Cx {
                     }
                 },
                 CxOsOp::DetachNativeView { id } => {
-                    self.oh_call_native_text_input_id("detachNativeTextInput", id);
+                    let name = match self.os.native_host_kinds.get(&id) {
+                        Some(NativeHostKind::Label) => "detachNativeLabel",
+                        _ => "detachNativeTextInput",
+                    };
+                    self.oh_call_native_text_input_id(name, id);
                 }
                 CxOsOp::CloseNativeView { id } => {
-                    self.oh_call_native_text_input_id("closeNativeTextInput", id);
+                    let name = match self.os.native_host_kinds.remove(&id) {
+                        Some(NativeHostKind::Label) => "closeNativeLabel",
+                        _ => "closeNativeTextInput",
+                    };
+                    self.oh_call_native_text_input_id(name, id);
                 }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
@@ -817,6 +854,9 @@ pub struct CxOhosDisplay {
 
 pub struct CxOs {
     pub first_after_resize: bool,
+    // CxOsOp layout/detach/close ops carry only the host id; this map,
+    // filled at CreateNativeView, routes them to the right ArkTS host method.
+    pub(crate) native_host_kinds: std::collections::HashMap<LiveId, NativeHostKind>,
     pub display_size: Vec2d,
     pub dpi_factor: f64,
     pub media: CxOpenHarmonyMedia,
@@ -838,6 +878,7 @@ impl Default for CxOs {
     fn default() -> Self {
         Self {
             first_after_resize: true,
+            native_host_kinds: std::collections::HashMap::new(),
             display_size: dvec2(1260 as f64, 2503 as f64),
             dpi_factor: 3.25,
             media: Default::default(),

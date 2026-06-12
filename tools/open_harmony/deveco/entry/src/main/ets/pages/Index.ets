@@ -2,9 +2,27 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import {
   ArkGlue,
   MakepadXComponentInterface,
+  NativeLabelState,
   NativeTextInputState,
   XComponentAttrs
 } from '../makepad/makepad';
+
+// Read-only native label overlay; same @Observed/@ObjectLink pattern as the
+// text input item so programmatic text/layout updates reach the screen.
+@Component
+struct NativeLabelItem {
+  @ObjectLink state: NativeLabelState;
+
+  build() {
+    Text(this.state.text)
+      .id('native_label_' + this.state.inputId)
+      .position({ x: this.state.left, y: this.state.top })
+      .width(this.state.width)
+      .height(this.state.height)
+      .fontColor('#334155')
+      .visibility(this.state.visible ? Visibility.Visible : Visibility.Hidden)
+  }
+}
 
 // Per-input overlay item. @ObjectLink is what makes programmatic state
 // changes (set_text, layout, visibility, editable) reach the on-screen
@@ -73,6 +91,7 @@ struct NativeTextInputItem {
 struct Index {
   xComponentContext: MakepadXComponentInterface | undefined = undefined;
   @State nativeTextInputs: NativeTextInputState[] = [];
+  @State nativeLabels: NativeLabelState[] = [];
   private pendingCommands: Map<string, string[]> = new Map<string, string[]>();
   xComponentAttrs: XComponentAttrs = {
     id: 'Entry',
@@ -391,6 +410,63 @@ struct Index {
     this.nativeTextInputs = this.nativeTextInputs.filter((input: NativeTextInputState) => input.inputId !== inputId);
   }
 
+  private nativeLabel(inputId: string): NativeLabelState | undefined {
+    return this.nativeLabels.find((item: NativeLabelState) => item.inputId === inputId);
+  }
+
+  createNativeLabel(inputId: string, text: string): void {
+    this.traceNTI('label_create id=' + inputId + ' len=' + text.length);
+    let existing = this.nativeLabel(inputId);
+    if (existing !== undefined) {
+      existing.text = text;
+      return;
+    }
+    let state = new NativeLabelState();
+    state.inputId = inputId;
+    state.text = text;
+    let labels = this.nativeLabels.slice();
+    labels.push(state);
+    this.nativeLabels = labels;
+  }
+
+  updateNativeLabel(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
+    let label = this.nativeLabel(inputId);
+    if (label === undefined) {
+      return;
+    }
+    this.traceNTI('label_layout id=' + inputId
+      + ' makepad_rect=' + left + ',' + top + ',' + width + ',' + height
+      + ' visible=' + visible + ' vp_px=' + vp2px(1));
+    label.left = left;
+    label.top = top;
+    label.width = Math.max(1, width);
+    label.height = Math.max(1, height);
+    label.visible = visible;
+  }
+
+  setNativeLabelText(inputId: string, text: string): void {
+    let label = this.nativeLabel(inputId);
+    if (label === undefined) {
+      this.traceNTI('label_set_text id=' + inputId + ' result=rejected_not_created');
+      return;
+    }
+    this.traceNTI('label_set_text id=' + inputId + ' len=' + text.length);
+    label.text = text;
+  }
+
+  detachNativeLabel(inputId: string): void {
+    this.traceNTI('label_detach id=' + inputId);
+    let label = this.nativeLabel(inputId);
+    if (label !== undefined) {
+      label.visible = false;
+    }
+  }
+
+  closeNativeLabel(inputId: string): void {
+    this.traceNTI('label_close id=' + inputId);
+    this.nativeLabels = this.nativeLabels.filter((label: NativeLabelState) => label.inputId !== inputId);
+  }
+
   build() {
     Stack() {
       Row() {
@@ -429,6 +505,10 @@ struct Index {
           }
         })
       }, (input: NativeTextInputState) => input.inputId)
+
+      ForEach(this.nativeLabels, (label: NativeLabelState) => {
+        NativeLabelItem({ state: label })
+      }, (label: NativeLabelState) => label.inputId)
     }
   }
 }
