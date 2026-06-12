@@ -20,7 +20,9 @@ require_pattern() {
 
 require_pattern "$index_ets" "import \\{ pasteboard \\} from '@kit\\.BasicServicesKit'" "pasteboard import"
 require_pattern "$index_ets" "existing\\.controller : new TextInputController\\(\\)" "per-input TextInputController with reuse on re-create"
-require_pattern "$index_ets" "TextInput\\(\\{ text: input\\.text, placeholder: input\\.placeholder, controller: input\\.controller \\}\\)" "TextInput controller binding"
+require_pattern "$index_ets" "TextInput\\(\\{ text: this\\.state\\.text, placeholder: this\\.state\\.placeholder, controller: this\\.state\\.controller \\}\\)" "TextInput controller binding"
+require_pattern "$index_ets" "@ObjectLink state: NativeTextInputState" "ObjectLink item state (ForEach reuse fix)"
+require_pattern "$makepad_ets" "@Observed" "Observed state class"
 require_pattern "$index_ets" "input\\.controller\\.setTextSelection\\(" "controller selection update"
 require_pattern "$index_ets" "pasteboard\\.createData\\(pasteboard\\.MIMETYPE_TEXT_PLAIN, text\\)" "clipboard write"
 require_pattern "$index_ets" "pasteboard\\.getSystemPasteboard\\(\\)\\.setDataSync\\(data\\)" "sync pasteboard set"

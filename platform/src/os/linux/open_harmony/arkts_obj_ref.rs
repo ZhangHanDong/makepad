@@ -25,6 +25,20 @@ impl From<NulError> for ArkTsObjErr {
     }
 }
 
+// Argument for a cross-thread ArkTS call. napi_value handles are only valid
+// on the JS thread inside a live handle scope, so callers on other threads
+// (e.g. the Makepad main loop in handle_platform_ops) must pass plain Rust
+// data; js_after_work_cb materializes the napi_values on the JS thread right
+// before napi_call_function. Passing pre-made napi_values across the
+// uv_queue_work hop lets GC reuse the handle slots, which surfaced as ArkTS
+// receiving unrelated objects (e.g. a function) in place of a string id.
+#[derive(Clone, Debug)]
+pub enum ArkTsArg {
+    Str(String),
+    F64(f64),
+    Bool(bool),
+}
+
 pub struct ArkTsObjRef {
     raw_env: napi_env,
     obj_ref: napi_ref,
@@ -35,6 +49,7 @@ pub struct ArkTsObjRef {
     fn_name: String,
     argc: usize,
     argv: *const napi_value,
+    typed_args: Option<Vec<ArkTsArg>>,
     worker: *mut uv_work_t,
 }
 
@@ -63,6 +78,7 @@ impl ArkTsObjRef {
             fn_name: "undefined".to_string(),
             argc: 0,
             argv: null_mut(),
+            typed_args: None,
             worker: req,
         }
     }
@@ -83,48 +99,84 @@ impl ArkTsObjRef {
     extern "C" fn js_after_work_cb(req: *mut uv_work_t, _status: c_int) {
         let ark_obj = unsafe { (*req).data as *const ArkTsObjRef };
         let fn_name = unsafe { (*ark_obj).fn_name.clone() };
-        let argc = unsafe { (*ark_obj).argc };
-        let argv = unsafe { (*ark_obj).argv };
+        let mut argc = unsafe { (*ark_obj).argc };
+        let mut argv = unsafe { (*ark_obj).argv };
+        let typed_args = unsafe { (*ark_obj).typed_args.clone() };
         let raw_env = unsafe { (*ark_obj).raw_env };
         let obj_ref = unsafe { (*ark_obj).obj_ref };
         let val_tx = unsafe { (*ark_obj).val_tx.clone() };
 
+        // Build napi_values for typed args here, on the JS thread, inside a
+        // handle scope, so the handles stay valid for the call below.
+        let mut scope = null_mut();
+        let _ = unsafe { napi_open_handle_scope(raw_env, &mut scope) };
+        let mut built_args: Vec<napi_value> = Vec::new();
+        if let Some(args) = &typed_args {
+            for arg in args {
+                let mut value: napi_value = null_mut();
+                let status = match arg {
+                    ArkTsArg::Str(s) => unsafe {
+                        // Explicit byte length keeps interior NUL bytes intact.
+                        napi_create_string_utf8(
+                            raw_env,
+                            s.as_ptr() as *const c_char,
+                            s.len(),
+                            &mut value,
+                        )
+                    },
+                    ArkTsArg::F64(f) => unsafe { napi_create_double(raw_env, *f, &mut value) },
+                    ArkTsArg::Bool(b) => unsafe { napi_get_boolean(raw_env, *b, &mut value) },
+                };
+                if status != Status::napi_ok {
+                    crate::error!("failed to create napi arg for {}", fn_name);
+                    let _ = val_tx.send(Err(ArkTsObjErr::CallJsFailed));
+                    let _ = unsafe { napi_close_handle_scope(raw_env, scope) };
+                    return;
+                }
+                built_args.push(value);
+            }
+            argc = built_args.len();
+            argv = built_args.as_ptr();
+        }
+
         let mut arkts_obj = null_mut();
 
-        let napi_status = unsafe { napi_get_reference_value(raw_env, obj_ref, &mut arkts_obj) };
-        if napi_status != Status::napi_ok {
-            crate::error!("failed to get value from reference");
-            let _ = val_tx.send(Err(ArkTsObjErr::InvalidObjectValue));
-            return;
-        }
+        let result = (|| {
+            let napi_status =
+                unsafe { napi_get_reference_value(raw_env, obj_ref, &mut arkts_obj) };
+            if napi_status != Status::napi_ok {
+                crate::error!("failed to get value from reference");
+                return Err(ArkTsObjErr::InvalidObjectValue);
+            }
 
-        let cname = CString::new(fn_name.clone()).unwrap();
-        let mut js_fn = null_mut();
-        let napi_status =
-            unsafe { napi_get_named_property(raw_env, arkts_obj, cname.as_ptr(), &mut js_fn) };
-        if napi_status != Status::napi_ok {
-            crate::error!("failed to get function {} from arkts object", fn_name);
-            let _ = val_tx.send(Err(ArkTsObjErr::InvalidProperty));
-            return;
-        }
+            let cname = CString::new(fn_name.replace('\0', "")).unwrap();
+            let mut js_fn = null_mut();
+            let napi_status =
+                unsafe { napi_get_named_property(raw_env, arkts_obj, cname.as_ptr(), &mut js_fn) };
+            if napi_status != Status::napi_ok {
+                crate::error!("failed to get function {} from arkts object", fn_name);
+                return Err(ArkTsObjErr::InvalidProperty);
+            }
 
-        let mut napi_type: napi_valuetype = 0;
-        let _ = unsafe { napi_typeof(raw_env, js_fn, &mut napi_type) };
-        if napi_type != ValueType::napi_function {
-            crate::error!("property {} is not function", fn_name);
-            let _ = val_tx.send(Err(ArkTsObjErr::InvalidFunction));
-            return;
-        }
+            let mut napi_type: napi_valuetype = 0;
+            let _ = unsafe { napi_typeof(raw_env, js_fn, &mut napi_type) };
+            if napi_type != ValueType::napi_function {
+                crate::error!("property {} is not function", fn_name);
+                return Err(ArkTsObjErr::InvalidFunction);
+            }
 
-        let mut call_result = null_mut();
-        let napi_status =
-            unsafe { napi_call_function(raw_env, arkts_obj, js_fn, argc, argv, &mut call_result) };
-        if napi_status != Status::napi_ok {
-            crate::error!("failed to call js function:{}", fn_name);
-            let _ = val_tx.send(Err(ArkTsObjErr::CallJsFailed));
-            return;
-        }
-        let _ = val_tx.send(Ok(call_result));
+            let mut call_result = null_mut();
+            let napi_status = unsafe {
+                napi_call_function(raw_env, arkts_obj, js_fn, argc, argv, &mut call_result)
+            };
+            if napi_status != Status::napi_ok {
+                crate::error!("failed to call js function:{}", fn_name);
+                return Err(ArkTsObjErr::CallJsFailed);
+            }
+            Ok(call_result)
+        })();
+        let _ = unsafe { napi_close_handle_scope(raw_env, scope) };
+        let _ = val_tx.send(result);
     }
 
     pub fn get_property(&self, name: &str) -> Result<napi_value, ArkTsObjErr> {
@@ -155,6 +207,22 @@ impl ArkTsObjRef {
         self as *const ArkTsObjRef
     }
 
+    /// Call an ArkTS method with plain Rust args. Safe to use from any
+    /// thread: the napi_values are created on the JS thread inside
+    /// js_after_work_cb. Prefer this over `call_js_function` for any call
+    /// that takes arguments.
+    pub fn call_js_function_args(
+        &mut self,
+        name: &str,
+        args: Vec<ArkTsArg>,
+    ) -> Result<napi_value, ArkTsObjErr> {
+        self.fn_name = name.to_string();
+        self.argc = 0;
+        self.argv = null_mut();
+        self.typed_args = Some(args);
+        self.queue_js_call(name)
+    }
+
     pub fn call_js_function(
         &mut self,
         name: &str,
@@ -164,6 +232,11 @@ impl ArkTsObjRef {
         self.fn_name = name.to_string();
         self.argc = argc;
         self.argv = argv;
+        self.typed_args = None;
+        self.queue_js_call(name)
+    }
+
+    fn queue_js_call(&mut self, name: &str) -> Result<napi_value, ArkTsObjErr> {
         unsafe {
             (*(self.worker)).data = self.as_ptr() as *mut c_void;
         }

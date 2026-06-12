@@ -212,11 +212,63 @@ pub struct App {
     diag_closed: bool,
     #[rust]
     diag_quit_requested: bool,
+    #[rust]
+    control_rects_dumped: bool,
 }
 
 impl App {
     fn set_label(&mut self, cx: &mut Cx, id: &[LiveId], text: &str) {
         self.ui.label(cx, id).set_text(cx, text);
+    }
+
+    // One-shot dump of every smoke-control rect so headless drivers (hdc
+    // uitest on the OHOS simulator, where Makepad's own pixels may be blank)
+    // can click controls by coordinate and verify hits from the log.
+    fn dump_control_rects(&mut self, cx: &mut Cx) {
+        if self.control_rects_dumped {
+            return;
+        }
+        let names = [
+            "focus_button",
+            "set_button",
+            "blur_button",
+            "select_button",
+            "copy_button",
+            "cut_button",
+            "paste_button",
+            "secondary_focus_button",
+            "secondary_set_button",
+            "secondary_blur_button",
+            "secondary_select_button",
+            "secondary_copy_button",
+            "secondary_cut_button",
+            "secondary_paste_button",
+            "label_button",
+            "set_both_button",
+        ];
+        let mut any_zero = false;
+        for name in names {
+            let rect = self
+                .ui
+                .button(cx, &[LiveId::from_str(name)])
+                .area()
+                .rect(cx);
+            if rect.size.x <= 0.0 || rect.size.y <= 0.0 {
+                any_zero = true;
+                continue;
+            }
+            log!(
+                "control_rect {} pos={},{} size={}x{}",
+                name,
+                rect.pos.x,
+                rect.pos.y,
+                rect.size.x,
+                rect.size.y
+            );
+        }
+        if !any_zero {
+            self.control_rects_dumped = true;
+        }
     }
 
     fn record_command(&mut self, cx: &mut Cx, status: &str) {
@@ -232,6 +284,7 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
+        self.dump_control_rects(cx);
         let input = self.ui.native_text_input(cx, ids!(native_input));
         let secondary_input = self.ui.native_text_input(cx, ids!(secondary_native_input));
         let native_label = self.ui.native_label(cx, ids!(native_label));

@@ -1,6 +1,9 @@
 use {
     self::super::{
-        super::gl_sys, super::gl_sys::LibGl, arkts_obj_ref::ArkTsObjRef, oh_callbacks::*,
+        super::gl_sys,
+        super::gl_sys::LibGl,
+        arkts_obj_ref::{ArkTsArg, ArkTsObjRef},
+        oh_callbacks::*,
         oh_media::CxOpenHarmonyMedia, raw_file::RawFileMgr,
     },
     crate::{
@@ -25,7 +28,7 @@ use {
     napi_ohos::{sys::*, Env, JsObject, NapiRaw},
     std::{
         ffi::CString,
-        os::raw::{c_char, c_void},
+        os::raw::c_void,
         ptr::null_mut,
         rc::Rc,
         sync::mpsc,
@@ -82,48 +85,11 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
 }
 
 impl Cx {
-    fn oh_make_string(raw_env: napi_env, value: &str) -> Option<napi_value> {
-        let mut result = null_mut();
-        let status = unsafe {
-            napi_create_string_utf8(
-                raw_env,
-                value.as_ptr() as *const c_char,
-                value.len(),
-                &mut result,
-            )
-        };
-        if status != Status::napi_ok {
-            crate::error!("failed to create OpenHarmony string argument");
-            return None;
-        }
-        Some(result)
-    }
-
-    fn oh_make_f64(raw_env: napi_env, value: f64) -> Option<napi_value> {
-        let mut result = null_mut();
-        let status = unsafe { napi_create_double(raw_env, value, &mut result) };
-        if status != Status::napi_ok {
-            crate::error!("failed to create OpenHarmony number argument");
-            return None;
-        }
-        Some(result)
-    }
-
-    fn oh_make_bool(raw_env: napi_env, value: bool) -> Option<napi_value> {
-        let mut result = null_mut();
-        let status = unsafe { napi_get_boolean(raw_env, value, &mut result) };
-        if status != Status::napi_ok {
-            crate::error!("failed to create OpenHarmony bool argument");
-            return None;
-        }
-        Some(result)
-    }
-
-    fn oh_call_arkts(&mut self, name: &str, argv: &[napi_value]) {
+    fn oh_call_arkts_args(&mut self, name: &str, args: Vec<ArkTsArg>) {
         let Some(arkts_obj) = self.os.arkts_obj.as_mut() else {
             return;
         };
-        if let Err(err) = arkts_obj.call_js_function(name, argv.len(), argv.as_ptr()) {
+        if let Err(err) = arkts_obj.call_js_function_args(name, args) {
             crate::error!("OpenHarmony ArkTS call `{}` failed: {:?}", name, err);
         }
     }
@@ -135,24 +101,15 @@ impl Cx {
         placeholder: &str,
         editable: bool,
     ) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let Some(text) = Self::oh_make_string(raw_env, text) else {
-            return;
-        };
-        let Some(placeholder) = Self::oh_make_string(raw_env, placeholder) else {
-            return;
-        };
-        let Some(editable) = Self::oh_make_bool(raw_env, editable) else {
-            return;
-        };
-        let argv = [id, text, placeholder, editable];
-        self.oh_call_arkts("createNativeTextInput", &argv);
+        self.oh_call_arkts_args(
+            "createNativeTextInput",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(text.to_string()),
+                ArkTsArg::Str(placeholder.to_string()),
+                ArkTsArg::Bool(editable),
+            ],
+        );
     }
 
     fn oh_call_native_text_input_update(
@@ -164,90 +121,49 @@ impl Cx {
         height: f64,
         visible: bool,
     ) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let Some(left) = Self::oh_make_f64(raw_env, left) else {
-            return;
-        };
-        let Some(top) = Self::oh_make_f64(raw_env, top) else {
-            return;
-        };
-        let Some(width) = Self::oh_make_f64(raw_env, width) else {
-            return;
-        };
-        let Some(height) = Self::oh_make_f64(raw_env, height) else {
-            return;
-        };
-        let Some(visible) = Self::oh_make_bool(raw_env, visible) else {
-            return;
-        };
-        let argv = [id, left, top, width, height, visible];
-        self.oh_call_arkts("updateNativeTextInput", &argv);
+        self.oh_call_arkts_args(
+            "updateNativeTextInput",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::F64(left),
+                ArkTsArg::F64(top),
+                ArkTsArg::F64(width),
+                ArkTsArg::F64(height),
+                ArkTsArg::Bool(visible),
+            ],
+        );
     }
 
     fn oh_call_native_text_input_text(&mut self, id: LiveId, text: &str, programmatic: bool) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let Some(text) = Self::oh_make_string(raw_env, text) else {
-            return;
-        };
-        let Some(programmatic) = Self::oh_make_bool(raw_env, programmatic) else {
-            return;
-        };
-        let argv = [id, text, programmatic];
-        self.oh_call_arkts("setNativeTextInputText", &argv);
+        self.oh_call_arkts_args(
+            "setNativeTextInputText",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(text.to_string()),
+                ArkTsArg::Bool(programmatic),
+            ],
+        );
     }
 
     fn oh_call_native_text_input_string_prop(&mut self, name: &str, id: LiveId, value: &str) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let Some(value) = Self::oh_make_string(raw_env, value) else {
-            return;
-        };
-        let argv = [id, value];
-        self.oh_call_arkts(name, &argv);
+        self.oh_call_arkts_args(
+            name,
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(value.to_string()),
+            ],
+        );
     }
 
     fn oh_call_native_text_input_bool_prop(&mut self, name: &str, id: LiveId, value: bool) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let Some(value) = Self::oh_make_bool(raw_env, value) else {
-            return;
-        };
-        let argv = [id, value];
-        self.oh_call_arkts(name, &argv);
+        self.oh_call_arkts_args(
+            name,
+            vec![ArkTsArg::Str(id.0.to_string()), ArkTsArg::Bool(value)],
+        );
     }
 
     fn oh_call_native_text_input_id(&mut self, name: &str, id: LiveId) {
-        let Some(arkts_obj) = self.os.arkts_obj.as_ref() else {
-            return;
-        };
-        let raw_env = arkts_obj.raw();
-        let Some(id) = Self::oh_make_string(raw_env, &id.0.to_string()) else {
-            return;
-        };
-        let argv = [id];
-        self.oh_call_arkts(name, &argv);
+        self.oh_call_arkts_args(name, vec![ArkTsArg::Str(id.0.to_string())]);
     }
 
     fn main_loop(&mut self, from_ohos_rx: mpsc::Receiver<FromOhosMessage>) {

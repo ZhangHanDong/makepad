@@ -6,6 +6,68 @@ import {
   XComponentAttrs
 } from '../makepad/makepad';
 
+// Per-input overlay item. @ObjectLink is what makes programmatic state
+// changes (set_text, layout, visibility, editable) reach the on-screen
+// TextInput: ForEach reuses items whose key is unchanged, so a plain
+// interface in the parent never re-renders the reused child. It also means
+// callbacks below always read the live state object, never a stale render
+// snapshot.
+@Component
+struct NativeTextInputItem {
+  @ObjectLink state: NativeTextInputState;
+  traceCb: (message: string) => void = (_message: string) => {};
+  changedCb: (inputId: string, value: string) => void = (_inputId: string, _value: string) => {};
+  focusCb: (inputId: string, hasFocus: boolean) => void = (_inputId: string, _hasFocus: boolean) => {};
+  selectionCb: (inputId: string, start: number, end: number) => void = (_inputId: string, _start: number, _end: number) => {};
+  appearCb: (inputId: string) => void = (_inputId: string) => {};
+
+  build() {
+    TextInput({ text: this.state.text, placeholder: this.state.placeholder, controller: this.state.controller })
+      .id('native_text_input_' + this.state.inputId)
+      .position({ x: this.state.left, y: this.state.top })
+      .width(this.state.width)
+      .height(this.state.height)
+      .enabled(this.state.editable)
+      .visibility(this.state.visible ? Visibility.Visible : Visibility.Hidden)
+      .onAppear(() => {
+        this.traceCb('attached id=' + this.state.inputId);
+        this.state.attached = true;
+        this.appearCb(this.state.inputId);
+      })
+      .onAreaChange((_oldValue: Area, newValue: Area) => {
+        this.traceCb('area id=' + this.state.inputId
+          + ' arkui_global=' + JSON.stringify(newValue.globalPosition)
+          + ' arkui_size=' + newValue.width + 'x' + newValue.height);
+      })
+      .onChange((value: string) => {
+        if (this.state.pendingProgrammaticEchoes > 0 && value === this.state.lastProgrammaticText) {
+          this.state.pendingProgrammaticEchoes -= 1;
+          this.state.text = value;
+          this.traceCb('changed id=' + this.state.inputId + ' programmatic_echo=true len=' + value.length);
+          return;
+        }
+        // A real user edit invalidates any echoes that never fired.
+        this.state.pendingProgrammaticEchoes = 0;
+        this.state.text = value;
+        this.state.selectionStart = Math.min(this.state.selectionStart, value.length);
+        this.state.selectionEnd = Math.min(this.state.selectionEnd, value.length);
+        this.traceCb('changed id=' + this.state.inputId + ' programmatic_echo=false len=' + value.length);
+        this.changedCb(this.state.inputId, value);
+      })
+      .onFocus(() => {
+        this.focusCb(this.state.inputId, true);
+      })
+      .onBlur(() => {
+        this.focusCb(this.state.inputId, false);
+      })
+      .onTextSelectionChange((start: number, end: number) => {
+        this.state.selectionStart = Math.min(start, end);
+        this.state.selectionEnd = Math.max(start, end);
+        this.selectionCb(this.state.inputId, start, end);
+      })
+  }
+}
+
 @Entry
 @Component
 struct Index {
@@ -37,14 +99,14 @@ struct Index {
     this.nativeTextInputs = inputs;
   }
 
-  private updateNativeTextInputState(inputId: string, updater: (input: NativeTextInputState) => NativeTextInputState): void {
-    let inputs = this.nativeTextInputs.slice();
-    let index = inputs.findIndex((item: NativeTextInputState) => item.inputId === inputId);
-    if (index < 0) {
+  // Mutates the live @Observed state object; @ObjectLink in the item
+  // component propagates the change to the rendered TextInput.
+  private updateNativeTextInputState(inputId: string, updater: (input: NativeTextInputState) => void): void {
+    let input = this.nativeTextInput(inputId);
+    if (input === undefined) {
       return;
     }
-    inputs[index] = updater(inputs[index]);
-    this.nativeTextInputs = inputs;
+    updater(input);
   }
 
   private nativeTextInput(inputId: string): NativeTextInputState | undefined {
@@ -68,11 +130,8 @@ struct Index {
     let selectionEnd = Math.max(0, Math.min(end, textLength));
     let nextStart = Math.min(selectionStart, selectionEnd);
     let nextEnd = Math.max(selectionStart, selectionEnd);
-    this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
-      current.selectionStart = nextStart;
-      current.selectionEnd = nextEnd;
-      return current;
-    });
+    input.selectionStart = nextStart;
+    input.selectionEnd = nextEnd;
     this.requestNativeFocus('native_text_input_' + input.inputId);
     try {
       input.controller.setTextSelection(nextStart, nextEnd);
@@ -122,17 +181,14 @@ struct Index {
     let end = selection[1];
     let nextText = input.text.substring(0, start) + replacement + input.text.substring(end);
     let nextSelection = start + replacement.length;
-    this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
-      current.text = nextText;
-      // The state-driven text change below re-renders the ArkUI TextInput and
-      // may fire onChange; arm an echo so the explicit changed callback here
-      // stays the single changed event for this edit.
-      current.pendingProgrammaticEchoes += 1;
-      current.lastProgrammaticText = nextText;
-      current.selectionStart = nextSelection;
-      current.selectionEnd = nextSelection;
-      return current;
-    });
+    // The state-driven text change re-renders the TextInput and may fire
+    // onChange; arm an echo so the explicit changed callback here stays the
+    // single changed event for this edit.
+    input.text = nextText;
+    input.pendingProgrammaticEchoes += 1;
+    input.lastProgrammaticText = nextText;
+    input.selectionStart = nextSelection;
+    input.selectionEnd = nextSelection;
     this.xComponentContext?.handleNativeTextInputChanged(input.inputId, nextText);
     this.xComponentContext?.handleNativeTextInputSelectionChanged(input.inputId, nextSelection, nextSelection);
     this.requestNativeFocus('native_text_input_' + input.inputId);
@@ -223,7 +279,7 @@ struct Index {
       }
       queue.push(command);
       this.pendingCommands.set(inputId, queue);
-      let reason = input === undefined ? 'not_created' : 'not_attached';
+      let reason: string = input === undefined ? 'not_created' : 'not_attached';
       this.traceNTI('command id=' + inputId + ' command=' + command + ' queued=true reason=' + reason);
       return;
     }
@@ -246,23 +302,14 @@ struct Index {
     let existing = this.nativeTextInput(inputId);
     let attached = existing !== undefined ? existing.attached : false;
     this.traceNTI('create id=' + inputId + ' editable=' + editable + ' attached=' + attached);
-    this.upsertNativeTextInput({
-      inputId: inputId,
-      text: text,
-      placeholder: placeholder,
-      editable: editable,
-      left: 0,
-      top: 0,
-      width: 1,
-      height: 1,
-      visible: false,
-      pendingProgrammaticEchoes: 0,
-      lastProgrammaticText: '',
-      attached: attached,
-      selectionStart: 0,
-      selectionEnd: 0,
-      controller: existing !== undefined ? existing.controller : new TextInputController()
-    });
+    let state = new NativeTextInputState();
+    state.inputId = inputId;
+    state.text = text;
+    state.placeholder = placeholder;
+    state.editable = editable;
+    state.attached = attached;
+    state.controller = existing !== undefined ? existing.controller : new TextInputController();
+    this.upsertNativeTextInput(state);
   }
 
   updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
@@ -273,27 +320,25 @@ struct Index {
       + ' applied_size=' + appliedWidth + 'x' + appliedHeight
       + ' visible=' + visible
       + ' vp_px=' + vp2px(1));
-    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.left = left;
       input.top = top;
       input.width = appliedWidth;
       input.height = appliedHeight;
       input.visible = visible;
-      return input;
     });
   }
 
   detachNativeTextInput(inputId: string): void {
     this.traceNTI('detach id=' + inputId);
-    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.visible = false;
-      return input;
     });
   }
 
   setNativeTextInputText(inputId: string, text: string, programmatic: boolean): void {
     this.traceNTI('set_text id=' + inputId + ' programmatic=' + programmatic + ' len=' + text.length);
-    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       if (programmatic && input.text !== text) {
         input.pendingProgrammaticEchoes += 1;
         input.lastProgrammaticText = text;
@@ -301,21 +346,18 @@ struct Index {
       input.text = text;
       input.selectionStart = Math.min(input.selectionStart, text.length);
       input.selectionEnd = Math.min(input.selectionEnd, text.length);
-      return input;
     });
   }
 
   setNativeTextInputPlaceholder(inputId: string, placeholder: string): void {
-    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.placeholder = placeholder;
-      return input;
     });
   }
 
   setNativeTextInputEditable(inputId: string, editable: boolean): void {
-    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): NativeTextInputState => {
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.editable = editable;
-      return input;
     });
   }
 
@@ -368,67 +410,24 @@ struct Index {
       .height('100%')
 
       ForEach(this.nativeTextInputs, (input: NativeTextInputState) => {
-        TextInput({ text: input.text, placeholder: input.placeholder, controller: input.controller })
-          .id('native_text_input_' + input.inputId)
-          .position({ x: input.left, y: input.top })
-          .width(input.width)
-          .height(input.height)
-          .enabled(input.editable)
-          .visibility(input.visible ? Visibility.Visible : Visibility.Hidden)
-          .onAppear(() => {
-            this.traceNTI('attached id=' + input.inputId);
-            this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
-              current.attached = true;
-              return current;
-            });
-            this.flushPendingCommands(input.inputId);
-          })
-          .onAreaChange((_oldValue: Area, newValue: Area) => {
-            this.traceNTI('area id=' + input.inputId
-              + ' arkui_global=' + JSON.stringify(newValue.globalPosition)
-              + ' arkui_size=' + newValue.width + 'x' + newValue.height);
-          })
-          .onChange((value: string) => {
-            // Re-resolve current state: the closure-captured `input` is the
-            // render-time snapshot and its guard fields may be stale.
-            let current = this.nativeTextInput(input.inputId);
-            if (current === undefined) {
-              return;
-            }
-            if (current.pendingProgrammaticEchoes > 0 && value === current.lastProgrammaticText) {
-              this.updateNativeTextInputState(input.inputId, (state: NativeTextInputState): NativeTextInputState => {
-                state.pendingProgrammaticEchoes -= 1;
-                state.text = value;
-                return state;
-              });
-              this.traceNTI('changed id=' + input.inputId + ' programmatic_echo=true len=' + value.length);
-              return;
-            }
-            this.updateNativeTextInputState(input.inputId, (state: NativeTextInputState): NativeTextInputState => {
-              // A real user edit invalidates any echoes that never fired.
-              state.pendingProgrammaticEchoes = 0;
-              state.text = value;
-              state.selectionStart = Math.min(state.selectionStart, value.length);
-              state.selectionEnd = Math.min(state.selectionEnd, value.length);
-              return state;
-            });
-            this.traceNTI('changed id=' + input.inputId + ' programmatic_echo=false len=' + value.length);
-            this.xComponentContext?.handleNativeTextInputChanged(input.inputId, value);
-          })
-          .onFocus(() => {
-            this.xComponentContext?.handleNativeTextInputFocusChanged(input.inputId, true);
-          })
-          .onBlur(() => {
-            this.xComponentContext?.handleNativeTextInputFocusChanged(input.inputId, false);
-          })
-          .onTextSelectionChange((start: number, end: number) => {
-            this.updateNativeTextInputState(input.inputId, (current: NativeTextInputState): NativeTextInputState => {
-              current.selectionStart = Math.min(start, end);
-              current.selectionEnd = Math.max(start, end);
-              return current;
-            });
-            this.xComponentContext?.handleNativeTextInputSelectionChanged(input.inputId, start, end);
-          })
+        NativeTextInputItem({
+          state: input,
+          traceCb: (message: string): void => {
+            this.traceNTI(message);
+          },
+          changedCb: (inputId: string, value: string): void => {
+            this.xComponentContext?.handleNativeTextInputChanged(inputId, value);
+          },
+          focusCb: (inputId: string, hasFocus: boolean): void => {
+            this.xComponentContext?.handleNativeTextInputFocusChanged(inputId, hasFocus);
+          },
+          selectionCb: (inputId: string, start: number, end: number): void => {
+            this.xComponentContext?.handleNativeTextInputSelectionChanged(inputId, start, end);
+          },
+          appearCb: (inputId: string): void => {
+            this.flushPendingCommands(inputId);
+          }
+        })
       }, (input: NativeTextInputState) => input.inputId)
     }
   }

@@ -33,29 +33,34 @@ export interface NativeTextInputHost {
   closeNativeTextInput(inputId: string): void;
 }
 
-export interface NativeTextInputState {
-  inputId: string;
-  text: string;
-  placeholder: string;
-  editable: boolean;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  visible: boolean;
+// @Observed + @ObjectLink is required: the overlay list renders through
+// ForEach keyed by inputId, and ArkUI reuses (does not rebuild) an item whose
+// key is unchanged. With a plain interface, programmatic state changes such
+// as set_text update the array but never reach the on-screen TextInput.
+@Observed
+export class NativeTextInputState {
+  inputId: string = '';
+  text: string = '';
+  placeholder: string = '';
+  editable: boolean = true;
+  left: number = 0;
+  top: number = 0;
+  width: number = 1;
+  height: number = 1;
+  visible: boolean = false;
   // ArkUI may or may not fire onChange for a programmatic text update
   // depending on version, so a boolean flag cannot pair sets with echoes.
   // Each programmatic set increments the echo count; onChange only swallows
   // a callback when the count is positive AND the value matches the last
   // programmatic text, so stale echoes can never eat newer user input.
-  pendingProgrammaticEchoes: number;
-  lastProgrammaticText: string;
+  pendingProgrammaticEchoes: number = 0;
+  lastProgrammaticText: string = '';
   // Commands arriving between state insertion and ArkUI component attach
   // (same Rust op batch) must be queued; onAppear flips this and flushes.
-  attached: boolean;
-  selectionStart: number;
-  selectionEnd: number;
-  controller: TextInputController;
+  attached: boolean = false;
+  selectionStart: number = 0;
+  selectionEnd: number = 0;
+  controller: TextInputController = new TextInputController();
 }
 
 function getDensity(): number {
