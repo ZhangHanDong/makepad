@@ -1200,6 +1200,11 @@ impl ActiveWorkspace {
 pub static ACTIVE_WORKSPACE: std::sync::RwLock<ActiveWorkspace> =
     std::sync::RwLock::new(ActiveWorkspace::Chat);
 
+// Extra directory searched for API key / config files (e.g. MOONSHOT_API_KEY,
+// MOONSHOT_BASE_URL). Desktop reads env or CWD; OHOS/mobile sets this to the
+// app sandbox data dir at startup since env/CWD are not usable there.
+pub static KEY_CONFIG_DIR: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
 // Global chat state accessible to ChatList widget
 pub static CHAT_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatData {
     messages: Vec::new(),
@@ -2628,13 +2633,26 @@ impl App {
     }
 
     fn read_key_file(path: &str) -> Option<String> {
+        // CWD first (desktop), then the platform key/config dir (mobile/OHOS,
+        // where CWD is not writable but the app sandbox data dir is). Set via
+        // set_key_config_dir() at startup with cx.get_data_dir().
         std::fs::read_to_string(path)
             .ok()
+            .or_else(|| {
+                KEY_CONFIG_DIR
+                    .read()
+                    .ok()
+                    .and_then(|dir| dir.clone())
+                    .and_then(|dir| {
+                        std::fs::read_to_string(std::path::Path::new(&dir).join(path)).ok()
+                    })
+            })
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     }
 
-    /// Read a key by trying env var first, then a file of the same name in CWD.
+    /// Read a key/config value: env var first, then a same-named file in CWD
+    /// or the platform key/config dir.
     fn read_key(name: &str) -> Option<String> {
         std::env::var(name)
             .ok()
@@ -2682,10 +2700,11 @@ impl App {
                 )))) as Box<dyn Agent>
             }),
             BackendType::Moonshot => Self::read_key("MOONSHOT_API_KEY").map(|key| {
-                let model =
-                    std::env::var("MOONSHOT_MODEL").unwrap_or_else(|_| "kimi-k2.6".to_string());
-                let base_url = std::env::var("MOONSHOT_BASE_URL")
-                    .unwrap_or_else(|_| "https://api.moonshot.ai/v1/chat/completions".to_string());
+                let model = Self::read_key("MOONSHOT_MODEL")
+                    .unwrap_or_else(|| "kimi-k2.6".to_string());
+                let base_url = Self::read_key("MOONSHOT_BASE_URL").unwrap_or_else(|| {
+                    "https://api.moonshot.ai/v1/chat/completions".to_string()
+                });
                 let thinking_enabled = self.moonshot_thinking_enabled;
                 let thinking = if thinking_enabled {
                     "enabled"
@@ -3383,6 +3402,17 @@ impl MatchEvent for App {
         self.active_workspace = ActiveWorkspace::Chat;
         *ACTIVE_WORKSPACE.write().unwrap() = self.active_workspace;
         self.app_state_timer = cx.start_interval(1.0);
+        // On platforms with a sandbox data dir (OHOS/mobile), point the key
+        // file search at it and re-detect backends now that the dir is known.
+        // detect_available_backends() ran in after_new_from_script without cx.
+        if let Some(data_dir) = cx.get_data_dir() {
+            if let Ok(mut dir) = KEY_CONFIG_DIR.write() {
+                *dir = Some(data_dir.clone());
+            }
+            log!("aichat: key/config dir set to {}", data_dir);
+            self.available_backends = Self::detect_available_backends();
+            log!("aichat: backends after re-detect: {:?}", self.available_backends);
+        }
         let default_backend = Self::default_backend(&self.available_backends);
         self.ui
             .popup_notification(cx, ids!(toolbar_overlay))
