@@ -1200,10 +1200,16 @@ impl ActiveWorkspace {
 pub static ACTIVE_WORKSPACE: std::sync::RwLock<ActiveWorkspace> =
     std::sync::RwLock::new(ActiveWorkspace::Chat);
 
-// Extra directory searched for API key / config files (e.g. MOONSHOT_API_KEY,
-// MOONSHOT_BASE_URL). Desktop reads env or CWD; OHOS/mobile sets this to the
-// app sandbox data dir at startup since env/CWD are not usable there.
-pub static KEY_CONFIG_DIR: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+// Extra directories searched for API key / config files (e.g.
+// MOONSHOT_API_KEY, MOONSHOT_BASE_URL). Desktop reads env or CWD; OHOS/mobile
+// sets these at startup since env/CWD are not usable there.
+pub static KEY_CONFIG_DIRS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+// In-memory key/config values used as a fallback source. On OHOS these are
+// loaded from a bundled `aichat_secrets.env` rawfile at startup, since the
+// app sandbox cannot see env vars, CWD, or hdc-pushed files.
+pub static KEY_VALUES: std::sync::RwLock<Option<std::collections::HashMap<String, String>>> =
+    std::sync::RwLock::new(None);
 
 // Global chat state accessible to ChatList widget
 pub static CHAT_DATA: std::sync::RwLock<ChatData> = std::sync::RwLock::new(ChatData {
@@ -2582,6 +2588,12 @@ pub struct App {
     moonshot_thinking_enabled: bool,
     #[rust]
     app_state_timer: Timer,
+    // One-shot LLM smoke (headless/OHOS): fires a single prompt after startup
+    // when AICHAT_SMOKE_PROMPT is provided via the bundled secrets rawfile.
+    #[rust]
+    smoke_timer: Timer,
+    #[rust]
+    smoke_prompt: Option<String>,
     #[rust]
     glass_ripple_next_frame: NextFrame,
     #[rust]
@@ -2639,13 +2651,11 @@ impl App {
         std::fs::read_to_string(path)
             .ok()
             .or_else(|| {
-                KEY_CONFIG_DIR
-                    .read()
-                    .ok()
-                    .and_then(|dir| dir.clone())
-                    .and_then(|dir| {
-                        std::fs::read_to_string(std::path::Path::new(&dir).join(path)).ok()
+                KEY_CONFIG_DIRS.read().ok().and_then(|dirs| {
+                    dirs.iter().find_map(|dir| {
+                        std::fs::read_to_string(std::path::Path::new(dir).join(path)).ok()
                     })
+                })
             })
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -2659,6 +2669,13 @@ impl App {
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.trim().to_string())
             .or_else(|| Self::read_key_file(name))
+            .or_else(|| {
+                KEY_VALUES
+                    .read()
+                    .ok()
+                    .and_then(|m| m.as_ref().and_then(|m| m.get(name).cloned()))
+                    .filter(|s| !s.is_empty())
+            })
     }
 
     fn create_agent(&self, backend: BackendType) -> Option<Box<dyn Agent>> {
@@ -3405,11 +3422,39 @@ impl MatchEvent for App {
         // On platforms with a sandbox data dir (OHOS/mobile), point the key
         // file search at it and re-detect backends now that the dir is known.
         // detect_available_backends() ran in after_new_from_script without cx.
+        let mut key_dirs: Vec<String> = Vec::new();
         if let Some(data_dir) = cx.get_data_dir() {
-            if let Ok(mut dir) = KEY_CONFIG_DIR.write() {
-                *dir = Some(data_dir.clone());
+            key_dirs.push(data_dir);
+        }
+        let mut config_changed = !key_dirs.is_empty();
+        if config_changed {
+            if let Ok(mut dirs) = KEY_CONFIG_DIRS.write() {
+                *dirs = key_dirs.clone();
             }
-            log!("aichat: key/config dir set to {}", data_dir);
+        }
+        // OHOS: the app sandbox cannot see env vars, CWD, or hdc-pushed paths,
+        // so secrets ride in a bundled `aichat_secrets.env` rawfile
+        // (KEY=VALUE per line). Loaded into the in-memory KEY_VALUES map.
+        if let Some(bytes) = cx.read_ohos_rawfile("aichat_secrets.env") {
+            if let Ok(text) = String::from_utf8(bytes) {
+                let mut map = std::collections::HashMap::new();
+                for line in text.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((k, v)) = line.split_once('=') {
+                        map.insert(k.trim().to_string(), v.trim().to_string());
+                    }
+                }
+                log!("aichat: loaded {} secrets from rawfile", map.len());
+                if let Ok(mut kv) = KEY_VALUES.write() {
+                    *kv = Some(map);
+                }
+                config_changed = true;
+            }
+        }
+        if config_changed {
             self.available_backends = Self::detect_available_backends();
             log!("aichat: backends after re-detect: {:?}", self.available_backends);
         }
@@ -3436,11 +3481,28 @@ impl MatchEvent for App {
         );
         self.apply_glass_opacity(cx, DEFAULT_GLASS_OPACITY);
         self.start_glass_ripple(cx);
+
+        // Headless LLM smoke: if a prompt was bundled, fire it once shortly
+        // after startup so the real streaming chat path can be verified from
+        // logs on a screen-less target (OHOS emulator).
+        self.smoke_prompt = Self::read_key("AICHAT_SMOKE_PROMPT");
+        if self.smoke_prompt.is_some() {
+            self.smoke_timer = cx.start_timeout(2.0);
+            log!("aichat: smoke prompt scheduled");
+        }
     }
 
     fn handle_timer(&mut self, cx: &mut Cx, event: &TimerEvent) {
         if self.app_state_timer.is_timer(event).is_some() && self.tick_timer_state() {
             self.refresh_visible_state_templates(cx);
+        }
+        if self.smoke_timer.is_timer(event).is_some() {
+            if let Some(prompt) = self.smoke_prompt.take() {
+                log!("aichat: smoke prompt sending: {:?}", prompt);
+                let workspace = self.active_workspace;
+                let prompt_text = self.prompt_for_workspace(workspace, &prompt);
+                self.send_prompt_to_agent(cx, workspace, prompt, prompt_text);
+            }
         }
     }
 }

@@ -1316,6 +1316,22 @@ impl Cx {
         self.os_type.get_data_dir()
     }
 
+    /// Read a file bundled in the app package's raw resources. On OHOS this
+    /// reads from the HAP `resources/rawfile/` directory (the only
+    /// app-readable bundled-config path, since the sandbox is fully isolated
+    /// from hdc-pushed paths). Returns None on platforms without this concept.
+    #[cfg(target_env = "ohos")]
+    pub fn read_ohos_rawfile(&mut self, path: &str) -> Option<Vec<u8>> {
+        let raw_file = self.os.raw_file.as_mut()?;
+        let mut buf = Vec::new();
+        raw_file.read_to_end(path, &mut buf).ok().map(|_| buf)
+    }
+
+    #[cfg(not(target_env = "ohos"))]
+    pub fn read_ohos_rawfile(&mut self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
+
     pub fn in_makepad_studio(&self) -> bool {
         self.in_makepad_studio
     }
