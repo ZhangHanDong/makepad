@@ -1090,7 +1090,7 @@ script_mod! {
                                     width: Fill
                                     height: 30
                                     popup_menu_position: PopupMenuPosition.BelowInput
-                                    labels: ["Claude Code" "Claude Splash" "Claude (ACP)" "Claude (API)" "Gemini" "Gemini Splash" "OpenAI" "Moonshot"]
+                                    labels: ["Claude Code" "Claude Splash" "Claude (ACP)" "Claude (API)" "Gemini" "Gemini Splash" "OpenAI" "Moonshot" "Octos"]
                                     popup_menu: PopupMenuFlat{
                                         width: 170
                                         padding: Inset{left: 4 right: 4 top: 4 bottom: 4}
@@ -2363,9 +2363,10 @@ enum BackendType {
     GeminiSplash,
     OpenAi,
     Moonshot,
+    Octos,
 }
 
-const ALL_BACKENDS: [BackendType; 8] = [
+const ALL_BACKENDS: [BackendType; 9] = [
     BackendType::ClaudeCode,
     BackendType::ClaudeSplash,
     BackendType::ClaudeAcp,
@@ -2374,6 +2375,7 @@ const ALL_BACKENDS: [BackendType; 8] = [
     BackendType::GeminiSplash,
     BackendType::OpenAi,
     BackendType::Moonshot,
+    BackendType::Octos,
 ];
 
 impl BackendType {
@@ -2395,6 +2397,7 @@ impl BackendType {
             Self::GeminiSplash => "Active: Gemini Splash (UI Agent)",
             Self::OpenAi => "Active: OpenAI",
             Self::Moonshot => "Active: Moonshot",
+            Self::Octos => "Active: Octos (agent host)",
         }
     }
 
@@ -2637,6 +2640,9 @@ impl App {
         if Self::read_key("MOONSHOT_API_KEY").is_some() {
             available_backends.push(BackendType::Moonshot);
         }
+        if Self::read_key("OCTOS_BASE_URL").is_some() {
+            available_backends.push(BackendType::Octos);
+        }
         available_backends
     }
 
@@ -2746,6 +2752,15 @@ impl App {
                         thinking: Some(thinking),
                         max_tokens,
                         temperature,
+                    },
+                )))) as Box<dyn Agent>
+            }),
+            BackendType::Octos => Self::read_key("OCTOS_BASE_URL").map(|base_url| {
+                let auth_token = Self::read_key("OCTOS_AUTH_TOKEN");
+                Box::new(StatelessBackendAdapter::new(Box::new(OctosBackend::new(
+                    BackendConfig::Octos {
+                        base_url,
+                        auth_token,
                     },
                 )))) as Box<dyn Agent>
             }),
