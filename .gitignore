@@ -51,3 +51,11 @@ examples/aichat/aichat_history.json
 
 # Opt-in streaming diagnostics (AICHAT_STREAM_LOG=1)
 examples/aichat/aichat_stream.log
+
+# aichat runtime state / app-generation history (per-run, not source)
+aichat_app_state.json
+aichat_appgen_history.json
+
+# OHOS DevEco / makepad build caches
+/.hvigor/
+/.makepad/
