@@ -55,7 +55,7 @@ validation summary:
 
 ```text
 [liquid-glass] standalone-native-example resize-probe=request current=820x560 target=980x700
-[liquid-glass] standalone-native-example resize-validation source=window-geom-change mode=Panels size=980x700 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28
+[liquid-glass] standalone-native-example resize-validation source=window-geom-change mode=Panels size=980x700 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28 dpi=2.00 scale_changed=false
 ```
 
 Verbose native container/panel update logs are off by default. Set
@@ -76,7 +76,11 @@ Accept the run only when:
 - No opaque root background covers the native underlay.
 - The three native panels track window resize.
 - `Resize Probe` toggles the window between the default and validation sizes and
-  logs `panels_fit=true`; in Controls mode it also logs `controls_fit=true`.
+  logs `panels_fit=true`; in Controls mode it also logs
+  `controls=5 controls_fit=true`.
+- Resize validation summaries include `dpi=... scale_changed=...` so
+  backing-scale changes are visible in logs when the window moves across
+  displays.
 - `Clear` and `Regular` styles are visibly different on macOS 26.
 - `Geometry` shows rounded-rect and capsule descriptor mapping.
 - `Container` changes native `setSpacing:` through Near / Threshold / Far.

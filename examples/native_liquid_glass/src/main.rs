@@ -916,6 +916,8 @@ struct NativeDemoResizeValidation {
     visible_control_count: usize,
     controls_fit: bool,
     spacing: f64,
+    dpi_factor: f64,
+    backing_scale_changed: bool,
 }
 
 fn native_liquid_glass_control_role_matrix() -> [NativeDemoControlRoleSpec; 5] {
@@ -1048,6 +1050,8 @@ fn native_liquid_glass_resize_validation(
     visual_mode: NativeDemoVisualMode,
     morph_state: NativeDemoMorphState,
     spacing: f64,
+    dpi_factor: f64,
+    backing_scale_changed: bool,
 ) -> NativeDemoResizeValidation {
     let scene = native_liquid_glass_visual_scene(visual_mode, morph_state);
     let panel_rects = native_liquid_glass_panel_resize_rects(window_size, scene);
@@ -1069,12 +1073,14 @@ fn native_liquid_glass_resize_validation(
         visible_control_count,
         controls_fit,
         spacing: clamp_native_demo_spacing(spacing),
+        dpi_factor,
+        backing_scale_changed,
     }
 }
 
 fn native_liquid_glass_resize_validation_summary(validation: NativeDemoResizeValidation) -> String {
     format!(
-        "mode={} size={:.0}x{:.0} panels={} panels_fit={} controls={} controls_fit={} spacing={:.0}",
+        "mode={} size={:.0}x{:.0} panels={} panels_fit={} controls={} controls_fit={} spacing={:.0} dpi={:.2} scale_changed={}",
         validation.visual_mode.label(),
         validation.window_size.x,
         validation.window_size.y,
@@ -1082,7 +1088,9 @@ fn native_liquid_glass_resize_validation_summary(validation: NativeDemoResizeVal
         validation.panels_fit,
         validation.visible_control_count,
         validation.controls_fit,
-        validation.spacing
+        validation.spacing,
+        validation.dpi_factor,
+        validation.backing_scale_changed
     )
 }
 
@@ -2179,10 +2187,15 @@ impl App {
     }
 
     fn current_resize_validation(&self, cx: &mut Cx) -> Option<NativeDemoResizeValidation> {
-        let size = self.ui.window(cx, ids!(main_window)).get_inner_size(cx);
+        let window = self.ui.window(cx, ids!(main_window));
+        let size = window.get_inner_size(cx);
         if size.x < 1.0 || size.y < 1.0 {
             return None;
         }
+        let dpi_factor = window
+            .window_id()
+            .map(|window_id| cx.windows[window_id].window_geom.dpi_factor)
+            .unwrap_or(1.0);
 
         let (mode_tint_alpha, mode_spacing, mode_radius) = native_liquid_glass_visual_mode_tuning(
             self.demo_mode,
@@ -2203,6 +2216,8 @@ impl App {
             self.demo_mode,
             self.morph_state,
             effective_spacing,
+            dpi_factor,
+            false,
         ))
     }
 
@@ -2276,6 +2291,8 @@ impl App {
             self.demo_mode,
             self.morph_state,
             effective_spacing,
+            event.new_geom.dpi_factor,
+            (event.old_geom.dpi_factor - event.new_geom.dpi_factor).abs() > 0.001,
         );
         self.log_resize_validation(validation, "window-geom-change", false);
     }
@@ -3069,6 +3086,8 @@ mod tests {
             NativeDemoVisualMode::Panels,
             NativeDemoMorphState::Near,
             DEFAULT_CONTAINER_SPACING,
+            2.0,
+            false,
         );
 
         assert_eq!(validation.panel_count, NATIVE_DEMO_PANEL_COUNT);
@@ -3077,8 +3096,42 @@ mod tests {
         assert!(validation.controls_fit);
         assert_eq!(
             native_liquid_glass_resize_validation_summary(validation),
-            "mode=Panels size=820x560 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28"
+            "mode=Panels size=820x560 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28 dpi=2.00 scale_changed=false"
         );
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_validation_reports_controls_fit() {
+        let validation = native_liquid_glass_resize_validation(
+            dvec2(980.0, 700.0),
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+            DEFAULT_CONTAINER_SPACING,
+            2.0,
+            false,
+        );
+
+        assert_eq!(validation.visible_control_count, 5);
+        assert!(validation.controls_fit);
+        let summary = native_liquid_glass_resize_validation_summary(validation);
+        assert!(summary.contains("controls=5 controls_fit=true"));
+        assert!(summary.contains("dpi=2.00 scale_changed=false"));
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_validation_reports_backing_scale_change() {
+        let validation = native_liquid_glass_resize_validation(
+            dvec2(980.0, 700.0),
+            NativeDemoVisualMode::Controls,
+            NativeDemoMorphState::Near,
+            DEFAULT_CONTAINER_SPACING,
+            1.5,
+            true,
+        );
+
+        assert!(validation.backing_scale_changed);
+        assert!(native_liquid_glass_resize_validation_summary(validation)
+            .contains("dpi=1.50 scale_changed=true"));
     }
 
     #[test]
@@ -3088,6 +3141,8 @@ mod tests {
             NativeDemoVisualMode::Controls,
             NativeDemoMorphState::Near,
             DEFAULT_CONTAINER_SPACING,
+            2.0,
+            false,
         );
 
         assert_eq!(validation.visible_control_count, 5);

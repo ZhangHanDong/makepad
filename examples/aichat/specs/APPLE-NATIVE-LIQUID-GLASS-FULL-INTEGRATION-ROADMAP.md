@@ -123,7 +123,7 @@ Remaining work:
   Makepad-rendered fallback.
 - Add icon-only native control support or explicitly document it as unsupported.
 - Reduce diagnostic/probe-only logs for normal app runs.
-- Validate control frame updates during resize and backing-scale changes.
+- Validate control frame updates during real backing-scale changes.
 - Decide if `GlassButton` should opt into native controls directly, or if native
   control is a separate explicit property.
 
@@ -144,14 +144,17 @@ Already working:
 - The standalone bench has a `Resize Probe` path that toggles the window between
   validation sizes and logs panel/control fit summaries after
   `WindowGeomChange`.
+- Controls mode resize validation now requires the full five-control matrix to
+  remain inside the window and logs `controls=5 controls_fit=true`.
+- Resize validation summaries include `dpi=... scale_changed=...` so
+  backing-scale transitions are auditable from runtime logs.
 
 Remaining work:
 
-- Broader manual resize validation across small windows, large windows, and
-  Controls mode.
+- Broader manual resize validation across small and large windows.
 - Fullscreen fallback policy.
 - Stage Manager behavior.
-- Multi-display and backing-scale changes.
+- Real multi-display backing-scale changes.
 - Active/inactive window material changes.
 - Reduce Transparency behavior.
 - Light and dark wallpaper readability.
