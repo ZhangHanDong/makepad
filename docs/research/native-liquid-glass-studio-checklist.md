@@ -50,12 +50,13 @@ Mode and toggle clicks should emit status lines like:
 [liquid-glass] standalone-native-example tuning Panels  Clear  tint 22%  spacing 28  radius 44  makepad-glint:on
 ```
 
-The `Resize Probe` button should emit a request line and a geometry-change
-validation summary:
+The `Resize Probe` button cycles through large / small / default validation
+sizes (`1120x780`, `760x520`, `820x560`) and should emit a request line with a
+target label plus a geometry-change validation summary:
 
 ```text
-[liquid-glass] standalone-native-example resize-probe=request current=820x560 target=980x700
-[liquid-glass] standalone-native-example resize-validation source=window-geom-change mode=Panels size=980x700 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28 dpi=2.00 scale_changed=false
+[liquid-glass] standalone-native-example resize-probe=request current=820x560 target=1120x780 target_label=large
+[liquid-glass] standalone-native-example resize-validation source=window-geom-change mode=Panels size=1120x780 panels=3 panels_fit=true controls=0 controls_fit=true spacing=28 dpi=2.00 scale_changed=false
 ```
 
 Verbose native container/panel update logs are off by default. Set
@@ -75,7 +76,7 @@ Accept the run only when:
 - Native glass is visible below the Makepad foreground layer.
 - No opaque root background covers the native underlay.
 - The three native panels track window resize.
-- `Resize Probe` toggles the window between the default and validation sizes and
+- `Resize Probe` cycles through small / default / large validation sizes and
   logs `panels_fit=true`; in Controls mode it also logs
   `controls=5 controls_fit=true`.
 - Resize validation summaries include `dpi=... scale_changed=...` so

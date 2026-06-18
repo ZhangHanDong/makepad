@@ -920,6 +920,12 @@ struct NativeDemoResizeValidation {
     backing_scale_changed: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NativeDemoResizeProbeTarget {
+    size: DVec2,
+    label: &'static str,
+}
+
 fn native_liquid_glass_control_role_matrix() -> [NativeDemoControlRoleSpec; 5] {
     [
         NativeDemoControlRoleSpec {
@@ -1719,11 +1725,43 @@ fn should_start_window_drag(abs: DVec2, size: DVec2) -> bool {
         && abs.x < size.x - EDGE_MARGIN
 }
 
-fn native_liquid_glass_resize_probe_target_size(current_size: DVec2) -> DVec2 {
-    if current_size.x >= 900.0 || current_size.y >= 640.0 {
-        dvec2(820.0, 560.0)
+fn native_liquid_glass_resize_probe_sweep_sizes() -> [DVec2; 3] {
+    [
+        dvec2(760.0, 520.0),
+        dvec2(820.0, 560.0),
+        dvec2(1120.0, 780.0),
+    ]
+}
+
+fn native_liquid_glass_size_matches_probe_target(size: DVec2, target: DVec2) -> bool {
+    const EPSILON: f64 = 2.0;
+    (size.x - target.x).abs() <= EPSILON && (size.y - target.y).abs() <= EPSILON
+}
+
+fn native_liquid_glass_resize_probe_target(current_size: DVec2) -> NativeDemoResizeProbeTarget {
+    let [small, default, large] = native_liquid_glass_resize_probe_sweep_sizes();
+
+    if native_liquid_glass_size_matches_probe_target(current_size, large)
+        || current_size.x >= large.x - 20.0
+        || current_size.y >= large.y - 20.0
+    {
+        NativeDemoResizeProbeTarget {
+            size: small,
+            label: "small",
+        }
+    } else if native_liquid_glass_size_matches_probe_target(current_size, small)
+        || current_size.x <= small.x + 20.0
+        || current_size.y <= small.y + 20.0
+    {
+        NativeDemoResizeProbeTarget {
+            size: default,
+            label: "default",
+        }
     } else {
-        dvec2(980.0, 700.0)
+        NativeDemoResizeProbeTarget {
+            size: large,
+            label: "large",
+        }
     }
 }
 
@@ -2253,15 +2291,16 @@ impl App {
     fn run_resize_probe(&mut self, cx: &mut Cx) {
         let window = self.ui.window(cx, ids!(main_window));
         let current_size = window.get_inner_size(cx);
-        let target_size = native_liquid_glass_resize_probe_target_size(current_size);
+        let target = native_liquid_glass_resize_probe_target(current_size);
         log!(
-            "[liquid-glass] standalone-native-example resize-probe=request current={:.0}x{:.0} target={:.0}x{:.0}",
+            "[liquid-glass] standalone-native-example resize-probe=request current={:.0}x{:.0} target={:.0}x{:.0} target_label={}",
             current_size.x,
             current_size.y,
-            target_size.x,
-            target_size.y
+            target.size.x,
+            target.size.y,
+            target.label
         );
-        window.resize(cx, target_size);
+        window.resize(cx, target.size);
     }
 
     fn handle_window_resize_validation(&mut self, cx: &mut Cx, event: &WindowGeomChangeEvent) {
@@ -3152,15 +3191,65 @@ mod tests {
     }
 
     #[test]
-    fn standalone_native_glass_resize_probe_toggles_between_validation_sizes() {
+    fn standalone_native_glass_resize_probe_cycles_through_sweep_sizes() {
         assert_eq!(
-            native_liquid_glass_resize_probe_target_size(dvec2(820.0, 560.0)),
-            dvec2(980.0, 700.0)
+            native_liquid_glass_resize_probe_target(dvec2(820.0, 560.0)).size,
+            dvec2(1120.0, 780.0)
         );
         assert_eq!(
-            native_liquid_glass_resize_probe_target_size(dvec2(980.0, 700.0)),
+            native_liquid_glass_resize_probe_target(dvec2(820.0, 560.0)).label,
+            "large"
+        );
+        assert_eq!(
+            native_liquid_glass_resize_probe_target(dvec2(1120.0, 780.0)).size,
+            dvec2(760.0, 520.0)
+        );
+        assert_eq!(
+            native_liquid_glass_resize_probe_target(dvec2(1120.0, 780.0)).label,
+            "small"
+        );
+        assert_eq!(
+            native_liquid_glass_resize_probe_target(dvec2(760.0, 520.0)).size,
             dvec2(820.0, 560.0)
         );
+        assert_eq!(
+            native_liquid_glass_resize_probe_target(dvec2(760.0, 520.0)).label,
+            "default"
+        );
+    }
+
+    #[test]
+    fn standalone_native_glass_resize_sweep_sizes_keep_panels_and_controls_fit() {
+        for size in native_liquid_glass_resize_probe_sweep_sizes() {
+            let panels = native_liquid_glass_resize_validation(
+                size,
+                NativeDemoVisualMode::Panels,
+                NativeDemoMorphState::Near,
+                DEFAULT_CONTAINER_SPACING,
+                2.0,
+                false,
+            );
+            assert!(
+                panels.panels_fit,
+                "panels should fit at {:.0}x{:.0}",
+                size.x, size.y
+            );
+
+            let controls = native_liquid_glass_resize_validation(
+                size,
+                NativeDemoVisualMode::Controls,
+                NativeDemoMorphState::Near,
+                DEFAULT_CONTAINER_SPACING,
+                2.0,
+                false,
+            );
+            assert_eq!(controls.visible_control_count, 5);
+            assert!(
+                controls.controls_fit,
+                "controls should fit at {:.0}x{:.0}",
+                size.x, size.y
+            );
+        }
     }
 
     #[test]
