@@ -111,6 +111,7 @@ impl Cx {
                     self.windows[id_zero].window_geom = new_geom;
                     //self.default_inner_window_size = self.os.window_geom.inner_size;
 
+                    self.set_physical_keyboard_state(true);
                     self.call_event_handler(&Event::Startup);
                     self.redraw_all();
                     //self.platform.from_wasm(FromWasmCreateThread{thread_id:1});
@@ -639,8 +640,10 @@ impl Cx {
                 CxOsOp::XrStopPresenting => {
                     self.os.from_wasm(FromWasmXrStopPresenting {});
                 }
-                CxOsOp::ShowTextIME(area, pos, _config) => {
-                    let pos = area.clipped_rect(self).pos + pos;
+                CxOsOp::ShowTextIME(area, cursor_rect, _config) => {
+                    // Bottom of the caret line (matches the pre-rect point); the
+                    // hidden-textarea IME anchor only takes a point.
+                    let pos = area.clipped_rect(self).pos + cursor_rect.pos + cursor_rect.size;
                     let window_id = self.get_window_id_of(&area).unwrap_or(CxWindowPool::id_zero());
                     let pos = self.windows[window_id].layout_vec2d_to_native_points(pos);
                     self.os

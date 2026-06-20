@@ -62,6 +62,7 @@ impl WaylandCx {
             custom_window_chrome: true,
         });
         cx.borrow_mut().gpu_info.performance = GpuPerformance::Tier1;
+        cx.borrow_mut().set_physical_keyboard_state(true);
 
         let wayland_cx = Rc::new(RefCell::new(WaylandCx {
             cx: cx.clone(),
@@ -245,29 +246,10 @@ impl WaylandCx {
                 cx.call_event_handler(&Event::WindowGeomChange(re));
             }
             XlibEvent::WindowClosed(wc) => {
-                let window_id = wc.window_id;
-                self.close_popup_children(state, window_id);
-
-                let mut cx = self.cx.borrow_mut();
-                cx.call_event_handler(&Event::WindowClosed(wc));
-                // lets remove the window from the set
-                cx.windows[window_id].is_created = false;
-                if state.pointer_window == Some(window_id) {
-                    state.pointer_window = None;
-                }
-                if state.keyboard_window == Some(window_id) {
-                    state.keyboard_window = None;
-                }
-                if let Some(index) = state.windows.iter().position(|w| w.window_id == window_id) {
-                    state.windows.remove(index);
-                    if state.windows.len() == 0 {
-                        cx.call_event_handler(&Event::Shutdown);
-                        return EventFlow::Exit;
-                    }
-                } else if let Some(index) =
-                    state.popups.iter().position(|w| w.window_id == window_id)
-                {
-                    state.popups.remove(index);
+                if let EventFlow::Exit = self.handle_window_closed(state, wc) {
+                    let mut cx = self.cx.borrow_mut();
+                    cx.call_event_handler(&Event::Shutdown);
+                    return EventFlow::Exit;
                 }
             }
             XlibEvent::PopupDismissed(event) => {
@@ -290,6 +272,19 @@ impl WaylandCx {
                 // ok here we send out to all our childprocesses
 
                 self.handle_repaint(state);
+
+                // Run script-VM garbage collection at a safe point after paint, matching
+                // the macOS backend. Without this the script object heap grows without
+                // bound: every `eval` / `script_apply_eval!` allocates script objects
+                // that are only reclaimed by `gc()`. `needs_gc()` gates the actual sweep.
+                {
+                    let mut cx = self.cx.borrow_mut();
+                    cx.with_vm(|vm| {
+                        if vm.heap().needs_gc() {
+                            vm.gc();
+                        }
+                    });
+                }
             }
             XlibEvent::MouseMove(mut e) => {
                 let mut cx = self.cx.borrow_mut();
@@ -324,9 +319,20 @@ impl WaylandCx {
                 cx.call_event_handler(&Event::WindowDragQuery(e))
             }
             XlibEvent::WindowCloseRequested(e) => {
+                let window_id = e.window_id;
+                let accept_close = e.accept_close.clone();
                 let mut cx = self.cx.borrow_mut();
-                state.windows.retain_mut(|win| win.window_id != e.window_id);
-                cx.call_event_handler(&Event::WindowCloseRequested(e))
+                cx.call_event_handler(&Event::WindowCloseRequested(e));
+                if accept_close.get() {
+                    drop(cx);
+                    if let EventFlow::Exit =
+                        self.handle_window_closed(state, WindowClosedEvent { window_id })
+                    {
+                        let mut cx = self.cx.borrow_mut();
+                        cx.call_event_handler(&Event::Shutdown);
+                        return EventFlow::Exit;
+                    }
+                }
             }
             XlibEvent::TextInput(e) => {
                 let mut cx = self.cx.borrow_mut();
@@ -481,6 +487,16 @@ impl WaylandCx {
                 }
 
                 cx.run_live_edit_if_needed("linux-wayland");
+                let has_platform_ops = !cx.platform_ops.is_empty();
+                drop(cx);
+                if has_platform_ops {
+                    if let EventFlow::Exit = self.handle_platform_ops(state) {
+                        let mut cx = self.cx.borrow_mut();
+                        cx.call_event_handler(&Event::Shutdown);
+                        state.event_loop_running = false;
+                        return EventFlow::Exit;
+                    }
+                }
                 return EventFlow::Wait;
             }
         }
@@ -529,6 +545,39 @@ impl WaylandCx {
         if let Some(index) = state.popups.iter().position(|w| w.window_id == window_id) {
             state.popups.remove(index);
         }
+    }
+
+    fn handle_window_closed(
+        &self,
+        state: &mut WaylandState,
+        event: WindowClosedEvent,
+    ) -> EventFlow {
+        let window_id = event.window_id;
+        if !state.windows.iter().any(|w| w.window_id == window_id)
+            && !state.popups.iter().any(|w| w.window_id == window_id)
+        {
+            return EventFlow::Poll;
+        }
+        self.close_popup_children(state, window_id);
+
+        let mut cx = self.cx.borrow_mut();
+        cx.call_event_handler(&Event::WindowClosed(event));
+        cx.windows[window_id].is_created = false;
+        if state.pointer_window == Some(window_id) {
+            state.pointer_window = None;
+        }
+        if state.keyboard_window == Some(window_id) {
+            state.keyboard_window = None;
+        }
+        if let Some(index) = state.windows.iter().position(|w| w.window_id == window_id) {
+            state.windows.remove(index);
+            if state.windows.is_empty() {
+                return EventFlow::Exit;
+            }
+        } else if let Some(index) = state.popups.iter().position(|w| w.window_id == window_id) {
+            state.popups.remove(index);
+        }
+        EventFlow::Poll
     }
 
     fn close_popup_children(&self, state: &mut WaylandState, parent_window_id: WindowId) {
@@ -635,9 +684,9 @@ impl WaylandCx {
                     }
                 }
                 CxOsOp::CloseWindow(window_id) => {
-                    self.close_popup_children(state, window_id);
+                    drop(cx);
                     if state.popups.iter().any(|w| w.window_id == window_id) {
-                        drop(cx);
+                        self.close_popup_children(state, window_id);
                         self.close_popup_window(state, window_id, None);
                         cx = self.cx.borrow_mut();
                         if state.windows.is_empty() {
@@ -646,15 +695,13 @@ impl WaylandCx {
                         continue;
                     }
 
-                    cx.call_event_handler(&Event::WindowClosed(WindowClosedEvent { window_id }));
-                    let windows = &mut state.windows;
-                    if let Some(index) = windows.iter().position(|w| w.window_id == window_id) {
-                        cx.windows[window_id].is_created = false;
-                        windows.remove(index);
-                        if windows.len() == 0 {
-                            ret = EventFlow::Exit
-                        }
+                    if let EventFlow::Exit =
+                        self.handle_window_closed(state, WindowClosedEvent { window_id })
+                    {
+                        ret = EventFlow::Exit;
+                        break;
                     }
+                    cx = self.cx.borrow_mut();
                 }
                 CxOsOp::Quit => ret = EventFlow::Exit,
                 CxOsOp::MinimizeWindow(window_id) => {
@@ -743,17 +790,24 @@ impl WaylandCx {
                 CxOsOp::CancelHttpRequest { request_id } => {
                     let _ = cx.net.http_cancel(request_id);
                 }
-                CxOsOp::ShowTextIME(area, pos, _config) => {
+                CxOsOp::ShowTextIME(area, cursor_rect, _config) => {
                     if let Some(_window) = state.keyboard_window.or(state.pointer_window) {
                         if let Some(text_input) = state.text_input.as_ref() {
                             text_input.enable();
 
-                            // todo: follow the cursor while input
+                            // Report the caret line's bounding box (surface-local
+                            // logical coords) so the compositor anchors the IME
+                            // candidate window directly above/below the line.
+                            // Inflate it vertically by a fraction of the line height
+                            // so the candidate keeps a gap from the text rather than
+                            // hugging it (matches the macOS clearance).
+                            let rect_pos = area.clipped_rect(&*cx).pos + cursor_rect.pos;
+                            let clearance = cursor_rect.size.y * 0.6;
                             text_input.set_cursor_rectangle(
-                                state.last_mouse_pos.x as i32,
-                                state.last_mouse_pos.y as i32,
-                                0,
-                                0,
+                                rect_pos.x as i32,
+                                (rect_pos.y - clearance) as i32,
+                                cursor_rect.size.x.max(1.0) as i32,
+                                (cursor_rect.size.y + 2.0 * clearance) as i32,
                             );
                             text_input.commit();
                         }
@@ -1048,6 +1102,12 @@ impl WaylandCx {
 
     pub(crate) fn handle_repaint(&self, state: &mut WaylandState) {
         let mut cx = self.cx.borrow_mut();
+        // Skip the eglMakeCurrent + full pass-list scan when there is nothing to draw.
+        // demo_time_repaint forces a redraw of time-animated passes (see
+        // compute_pass_repaint_order), so it must keep us rendering.
+        if !cx.any_passes_dirty() && !cx.demo_time_repaint {
+            return;
+        }
         cx.os.opengl_cx.as_ref().unwrap().make_current();
         let mut passes_todo = Vec::new();
         cx.compute_pass_repaint_order(&mut passes_todo);

@@ -46,6 +46,7 @@ impl Cx {
         // hack: store ID3D11Device in CxOs, so texture-related operations become possible on the makepad/studio side, yet don't completely destroy the code there
         cx.borrow_mut().os.d3d11_device = Some(d3d11_cx.borrow().device.clone());
 
+        cx.borrow_mut().set_physical_keyboard_state(true);
         if crate::app_main::should_run_stdin_loop_from_env() {
             let mut cx = cx.borrow_mut();
             cx.in_makepad_studio = true;
@@ -261,6 +262,16 @@ impl Cx {
                 // ok here we send out to all our childprocesses
 
                 self.handle_repaint(d3d11_windows, d3d11_cx);
+
+                // Run script-VM garbage collection at a safe point after paint, matching
+                // the macOS backend, so the script object heap doesn't grow without bound:
+                // every `eval` / `script_apply_eval!` allocates script objects that are
+                // only reclaimed by `gc()`. `needs_gc()` gates the actual sweep.
+                self.with_vm(|vm| {
+                    if vm.heap().needs_gc() {
+                        vm.gc();
+                    }
+                });
             }
             Win32Event::MouseDown(mut e) => {
                 self.dpi_override_scale(&mut e.abs, e.window_id);
@@ -610,19 +621,28 @@ impl Cx {
                 } => {
                     let _ = self.net.http_start(request_id, request);
                 }
-                CxOsOp::ShowTextIME(area, pos, _config) => {
-                    let pos = area.clipped_rect(self).pos + pos;
+                CxOsOp::ShowTextIME(area, cursor_rect, _config) => {
+                    // Convert both corners of the caret line rect so its height is
+                    // carried into native points along with the position.
+                    let area_pos = area.clipped_rect(self).pos;
                     let window_id = self.get_window_id_of(&area).unwrap_or(CxWindowPool::id_zero());
-                    let pos = self.windows[window_id].layout_vec2d_to_native_points(pos);
+                    let top_left = self.windows[window_id]
+                        .layout_vec2d_to_native_points(area_pos + cursor_rect.pos);
+                    let bottom_right = self.windows[window_id]
+                        .layout_vec2d_to_native_points(area_pos + cursor_rect.pos + cursor_rect.size);
+                    let ime_rect = Rect {
+                        pos: top_left,
+                        size: bottom_right - top_left,
+                    };
                     d3d11_windows.iter_mut().for_each(|w| {
                         w.win32_window.set_ime_active(true);
-                        w.win32_window.set_ime_spot(pos);
+                        w.win32_window.set_ime_rect(ime_rect);
                     });
                 }
                 CxOsOp::HideTextIME => {
                     d3d11_windows.iter_mut().for_each(|w| {
                         w.win32_window.set_ime_active(false);
-                        w.win32_window.set_ime_spot(Vec2d::default());
+                        w.win32_window.set_ime_rect(Rect::default());
                     });
                 }
                 CxOsOp::CheckPermission {
