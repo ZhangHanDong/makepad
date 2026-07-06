@@ -352,6 +352,9 @@ script_mod! {
             auto_tail: true
             smooth_tail: true
             selectable: true
+            // Drop items that leave the list so removed glass/overlay content
+            // does not leave stale overlay draw lists behind.
+            reuse_items: false
 
             User := RoundedView {
                 width: Fill
