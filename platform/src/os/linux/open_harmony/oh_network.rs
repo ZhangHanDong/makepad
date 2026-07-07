@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use makepad_network::backend::ohos::register_platform_backend;
 use makepad_network::{
-    EventSink, HttpError, HttpRequest, HttpResponse, NetworkBackend, NetworkError,
-    NetworkResponse, WsSend,
+    EventSink, HttpError, HttpRequest, HttpResponse, NetworkBackend, NetworkError, NetworkResponse,
+    WsSend,
 };
 use napi_derive_ohos::napi;
 
@@ -149,8 +149,15 @@ pub fn handle_http_headers(
     };
     if let Ok(mut live) = live_http_requests().lock() {
         if let Some(req) = live.get_mut(&id) {
-            req.status_code = status_code as u16;
-            req.headers = parse_flat_headers(&headers_flat);
+            // ArkTS sends headers twice: early from headersReceive with
+            // status 0 (the OS reveals the code only in its final callback),
+            // then again with the real code. Never downgrade either field.
+            if status_code != 0 {
+                req.status_code = status_code as u16;
+            }
+            if !headers_flat.is_empty() {
+                req.headers = parse_flat_headers(&headers_flat);
+            }
         }
     }
     Ok(())
@@ -193,7 +200,11 @@ pub fn handle_http_complete(request_id: String) -> napi_ohos::Result<()> {
     let Some(id) = parse_request_id(&request_id) else {
         return Ok(());
     };
-    let Some(req) = live_http_requests().lock().ok().and_then(|mut l| l.remove(&id)) else {
+    let Some(req) = live_http_requests()
+        .lock()
+        .ok()
+        .and_then(|mut l| l.remove(&id))
+    else {
         return Ok(());
     };
     let response = HttpResponse {
@@ -226,7 +237,11 @@ pub fn handle_http_error(request_id: String, message: String) -> napi_ohos::Resu
     let Some(id) = parse_request_id(&request_id) else {
         return Ok(());
     };
-    let Some(req) = live_http_requests().lock().ok().and_then(|mut l| l.remove(&id)) else {
+    let Some(req) = live_http_requests()
+        .lock()
+        .ok()
+        .and_then(|mut l| l.remove(&id))
+    else {
         return Ok(());
     };
     let _ = req.sink.emit(NetworkResponse::HttpError {

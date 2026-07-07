@@ -156,8 +156,7 @@ impl ArkTsObjRef {
         let mut arkts_obj = null_mut();
 
         let result = (|| {
-            let napi_status =
-                unsafe { napi_get_reference_value(raw_env, obj_ref, &mut arkts_obj) };
+            let napi_status = unsafe { napi_get_reference_value(raw_env, obj_ref, &mut arkts_obj) };
             if napi_status != Status::napi_ok {
                 crate::error!("failed to get value from reference");
                 return Err(ArkTsObjErr::InvalidObjectValue);
@@ -263,18 +262,32 @@ impl ArkTsObjRef {
                 Some(Self::js_after_work_cb),
             )
         };
-        let ret = match self.val_rx.recv() {
-            Ok(r) => r,
-            Err(e) => {
-                crate::error!(
-                    "failed to get result for js function {}, error = {}",
-                    name,
-                    e
-                );
-                Err(ArkTsObjErr::CallJsFailed)
+        // Watchdog on the blocking JS-thread round trip: the wait must not be
+        // abandoned (the single reused uv_work_t would be re-queued while
+        // still in flight), but a stalled JS thread should be loudly visible
+        // in hilog instead of a silent render-thread hang.
+        let mut waited_secs = 0u64;
+        loop {
+            match self.val_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(r) => return r,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    waited_secs += 2;
+                    crate::error!(
+                        "ArkTS call `{}` blocked for {}s waiting on the JS thread \
+                         (render thread stalled)",
+                        name,
+                        waited_secs
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    crate::error!(
+                        "failed to get result for js function {}, channel disconnected",
+                        name
+                    );
+                    return Err(ArkTsObjErr::CallJsFailed);
+                }
             }
-        };
-        ret
+        }
     }
 
     pub fn raw(&self) -> napi_env {

@@ -4,7 +4,8 @@ use {
         super::gl_sys::LibGl,
         arkts_obj_ref::{ArkTsArg, ArkTsObjRef},
         oh_callbacks::*,
-        oh_media::CxOpenHarmonyMedia, raw_file::RawFileMgr,
+        oh_media::CxOpenHarmonyMedia,
+        raw_file::RawFileMgr,
     },
     crate::{
         cx::{Cx, OpenHarmonyParams, OsType},
@@ -26,14 +27,7 @@ use {
     },
     napi_derive_ohos::napi,
     napi_ohos::{sys::*, Env, JsObject, NapiRaw},
-    std::{
-        ffi::CString,
-        os::raw::c_void,
-        ptr::null_mut,
-        rc::Rc,
-        sync::mpsc,
-        time::Instant,
-    },
+    std::{ffi::CString, os::raw::c_void, ptr::null_mut, rc::Rc, sync::mpsc, time::Instant},
 };
 
 #[napi(js_name = "onCreate")]
@@ -849,6 +843,16 @@ impl Cx {
 
 impl CxOsApi for Cx {
     fn init_cx_os(&mut self) {
+        // Emulator-only tolerance: MAKEPAD=ohos_sim builds park failed GL
+        // shader compiles instead of panicking (the desktop-hosted emulator
+        // GPU can't compile them). That mode silently masks real shader
+        // bugs, so scream if such a binary ever runs on a real device.
+        #[cfg(ohos_sim)]
+        crate::log!(
+            "WARNING: built with MAKEPAD=ohos_sim (tolerant shader mode). \
+             Emulator-only build — do NOT ship this to a real device; \
+             rebuild without MAKEPAD=ohos_sim."
+        );
         self.package_root = Some("makepad".to_string());
         super::oh_network::register_ohos_network_backend();
         self.native_load_dependencies();

@@ -56,6 +56,12 @@ pub struct NativeTextInput {
     last_placeholder: String,
     #[rust]
     last_editable: bool,
+    // Layout dedup: on OHOS every host call is a blocking JS-thread round
+    // trip, so update() must only fire when the resolved rect changed.
+    #[rust]
+    last_sync_rect: Option<Rect>,
+    #[rust]
+    native_detached: bool,
     #[rust]
     selection_start: usize,
     #[rust]
@@ -80,6 +86,7 @@ impl NativeTextInput {
             self.last_placeholder.clear();
             self.last_placeholder.push_str(placeholder);
             self.last_editable = self.editable;
+            self.last_sync_rect = None;
         }
         if self.last_text != text {
             cx.native_text_input(id).set_text(text, true);
@@ -95,8 +102,13 @@ impl NativeTextInput {
             cx.native_text_input(id).set_editable(self.editable);
             self.last_editable = self.editable;
         }
-        cx.native_text_input(id)
-            .update(self.draw_bg.area(), self.visible);
+        let rect = self.draw_bg.area().clipped_rect(cx);
+        if self.last_sync_rect != Some(rect) {
+            cx.native_text_input(id)
+                .update(self.draw_bg.area(), self.visible);
+            self.last_sync_rect = Some(rect);
+        }
+        self.native_detached = false;
     }
 
     fn set_text_internal(&mut self, cx: &mut Cx, text: &str) {
@@ -114,6 +126,8 @@ impl NativeTextInput {
         if self.spawned {
             cx.native_text_input(self.native_id()).close();
             self.spawned = false;
+            self.last_sync_rect = None;
+            self.native_detached = false;
         }
     }
 
@@ -230,6 +244,8 @@ impl Widget for NativeTextInput {
                 if self.spawned {
                     cx.native_text_input(self.native_id()).close();
                     self.spawned = false;
+                    self.last_sync_rect = None;
+                    self.native_detached = false;
                 }
             }
             Event::Actions(actions) => {
@@ -270,8 +286,11 @@ impl Widget for NativeTextInput {
         self.draw_bg.draw_walk(cx, walk);
         if self.visible {
             self.sync_native(cx);
-        } else if self.spawned {
+        } else if self.spawned && !self.native_detached {
             cx.native_text_input(self.native_id()).detach();
+            self.native_detached = true;
+            // Force a layout re-send when the input becomes visible again.
+            self.last_sync_rect = None;
         }
         DrawStep::done()
     }
@@ -430,6 +449,8 @@ mod tests {
             last_text: String::new(),
             last_placeholder: String::new(),
             last_editable: true,
+            last_sync_rect: None,
+            native_detached: false,
             selection_start: 0,
             selection_end: 0,
         }

@@ -294,9 +294,12 @@ export class ArkGlue{
     this.httpRequests.set(requestId, request);
     let headersStash = '';
     // Observed @ohos.net.http ordering: headersReceive -> dataReceive ->
-    // dataEnd -> response-code callback (last). Completion must wait for
-    // both dataEnd and the status code, or the Rust side would finish the
-    // request with status 0 and drop the late headers.
+    // dataEnd -> response-code callback (last). Headers are forwarded to
+    // Rust immediately on headersReceive (status 0 = not yet known; the OS
+    // only reveals the code in the final callback) so streaming consumers
+    // see them before body chunks. Completion must still wait for both
+    // dataEnd and the status code, or the Rust side would finish the
+    // request with status 0.
     let dataEnded = false;
     let gotCode = false;
     let maybeComplete = (): void => {
@@ -309,6 +312,7 @@ export class ArkGlue{
     request.on('headersReceive', (header: Object) => {
       headersStash = this.flattenHeaders(header);
       console.info('[MakepadNet] headersReceive id=' + requestId);
+      this.xComponentContext?.handleHttpHeaders(requestId, 0, headersStash);
     });
     request.on('dataReceive', (data: ArrayBuffer) => {
       console.info('[MakepadNet] dataReceive id=' + requestId + ' len=' + data.byteLength);
