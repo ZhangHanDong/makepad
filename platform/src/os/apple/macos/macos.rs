@@ -1254,10 +1254,17 @@ impl Cx {
                             text,
                             placeholder,
                             editable,
+                            secure,
                         },
                     ) => {
                         self.os.native_hosts.entry(id).or_insert_with(|| {
-                            Box::new(MacosNativeTextInput::new(id, &text, &placeholder, editable))
+                            Box::new(MacosNativeTextInput::new(
+                                id,
+                                &text,
+                                &placeholder,
+                                editable,
+                                secure,
+                            ))
                         });
                     }
                     (NativeHostKind::Label, NativeHostProps::Label { text }) => {
@@ -1321,6 +1328,13 @@ impl Cx {
                             host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
                         }) {
                             input.set_editable(editable);
+                        }
+                    }
+                    NativeHostPropUpdate::TextInputSecure { secure } => {
+                        if let Some(input) = self.os.native_hosts.get_mut(&id).and_then(|host| {
+                            host.as_any_mut().downcast_mut::<MacosNativeTextInput>()
+                        }) {
+                            input.set_secure(secure);
                         }
                     }
                     NativeHostPropUpdate::LabelText { text } => {

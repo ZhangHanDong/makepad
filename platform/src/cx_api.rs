@@ -166,6 +166,7 @@ pub enum NativeHostProps {
         text: String,
         placeholder: String,
         editable: bool,
+        secure: bool,
     },
     Label {
         text: String,
@@ -177,6 +178,7 @@ pub enum NativeHostPropUpdate {
     TextInputText { text: String, programmatic: bool },
     TextInputPlaceholder { placeholder: String },
     TextInputEditable { editable: bool },
+    TextInputSecure { secure: bool },
     LabelText { text: String },
 }
 
@@ -327,6 +329,7 @@ enum NativeHostPropUpdateKind {
     TextInputText,
     TextInputPlaceholder,
     TextInputEditable,
+    TextInputSecure,
     LabelText,
 }
 
@@ -336,6 +339,7 @@ impl NativeHostPropUpdate {
             Self::TextInputText { .. } => NativeHostPropUpdateKind::TextInputText,
             Self::TextInputPlaceholder { .. } => NativeHostPropUpdateKind::TextInputPlaceholder,
             Self::TextInputEditable { .. } => NativeHostPropUpdateKind::TextInputEditable,
+            Self::TextInputSecure { .. } => NativeHostPropUpdateKind::TextInputSecure,
             Self::LabelText { .. } => NativeHostPropUpdateKind::LabelText,
         }
     }
@@ -476,7 +480,7 @@ pub struct CxNativeTextInput<'a> {
 }
 
 impl<'a> CxNativeTextInput<'a> {
-    pub fn spawn(&mut self, text: &str, placeholder: &str, editable: bool) {
+    pub fn spawn(&mut self, text: &str, placeholder: &str, editable: bool, secure: bool) {
         self.cx
             .queue_native_mount_mutation(NativeMountMutation::Create {
                 id: self.id.0,
@@ -485,6 +489,7 @@ impl<'a> CxNativeTextInput<'a> {
                     text: text.to_string(),
                     placeholder: placeholder.to_string(),
                     editable,
+                    secure,
                 },
             });
     }
@@ -529,6 +534,14 @@ impl<'a> CxNativeTextInput<'a> {
             .queue_native_mount_mutation(NativeMountMutation::Props {
                 id: self.id.0,
                 update: NativeHostPropUpdate::TextInputEditable { editable },
+            });
+    }
+
+    pub fn set_secure(&mut self, secure: bool) {
+        self.cx
+            .queue_native_mount_mutation(NativeMountMutation::Props {
+                id: self.id.0,
+                update: NativeHostPropUpdate::TextInputSecure { secure },
             });
     }
 
@@ -2288,6 +2301,7 @@ mod tests {
                 text: "a".to_string(),
                 placeholder: "p".to_string(),
                 editable: true,
+                secure: false,
             },
         });
         queue.push(NativeMountMutation::Layout {
@@ -2601,7 +2615,7 @@ mod tests {
         let id = NativeTextInputId(live_id!(native_text_input_api_mount_test));
 
         cx.native_text_input(id)
-            .spawn("initial", "placeholder", true);
+            .spawn("initial", "placeholder", true, false);
         cx.native_text_input(id).update(Area::Empty, true);
         cx.native_text_input(id).set_text("next", true);
         cx.native_text_input(id).command(live_id!(focus));
@@ -2617,8 +2631,8 @@ mod tests {
             Some(CxOsOp::CreateNativeView {
                 id: op_id,
                 kind: NativeHostKind::TextInput,
-                props: NativeHostProps::TextInput { text, placeholder, editable },
-            }) if op_id == id.0 && text == "initial" && placeholder == "placeholder" && editable
+                props: NativeHostProps::TextInput { text, placeholder, editable, secure },
+            }) if op_id == id.0 && text == "initial" && placeholder == "placeholder" && editable && !secure
         ));
         assert!(matches!(
             cx.platform_ops.pop(),
@@ -2651,13 +2665,14 @@ mod tests {
 
         cx.native_text_input(id).set_placeholder("hint");
         cx.native_text_input(id).set_editable(false);
+        cx.native_text_input(id).set_secure(true);
         cx.native_text_input(id).command(live_id!(blur));
         cx.native_text_input(id).detach();
 
         assert!(cx.platform_ops.is_empty());
         cx.flush_native_mount_queue();
 
-        assert_eq!(cx.platform_ops.len(), 4);
+        assert_eq!(cx.platform_ops.len(), 5);
         assert!(matches!(
             cx.platform_ops.pop(),
             Some(CxOsOp::UpdateNativeViewProps {
@@ -2671,6 +2686,13 @@ mod tests {
                 id: op_id,
                 update: NativeHostPropUpdate::TextInputEditable { editable },
             }) if op_id == id.0 && !editable
+        ));
+        assert!(matches!(
+            cx.platform_ops.pop(),
+            Some(CxOsOp::UpdateNativeViewProps {
+                id: op_id,
+                update: NativeHostPropUpdate::TextInputSecure { secure },
+            }) if op_id == id.0 && secure
         ));
         assert!(matches!(
             cx.platform_ops.pop(),
@@ -2829,12 +2851,14 @@ mod tests {
             text: String::new(),
             placeholder: String::new(),
             editable: true,
+            secure: false,
         };
         match text_input {
             NativeHostProps::TextInput {
                 text: _,
                 placeholder: _,
                 editable: _,
+                secure: _,
             } => {
                 assert_eq!(
                     field_schema("TextInput", "text"),
@@ -2846,6 +2870,10 @@ mod tests {
                 );
                 assert_eq!(
                     field_schema("TextInput", "editable"),
+                    Some(NativeHostFieldType::Bool)
+                );
+                assert_eq!(
+                    field_schema("TextInput", "secure"),
                     Some(NativeHostFieldType::Bool)
                 );
             }
@@ -2877,6 +2905,7 @@ mod tests {
                 placeholder: String::new(),
             },
             NativeHostPropUpdate::TextInputEditable { editable: true },
+            NativeHostPropUpdate::TextInputSecure { secure: true },
             NativeHostPropUpdate::LabelText {
                 text: String::new(),
             },
@@ -2897,6 +2926,10 @@ mod tests {
                 ),
                 NativeHostPropUpdate::TextInputEditable { editable: _ } => assert_eq!(
                     prop_update_schema("TextInput", "editable"),
+                    Some(NativeHostFieldType::Bool)
+                ),
+                NativeHostPropUpdate::TextInputSecure { secure: _ } => assert_eq!(
+                    prop_update_schema("TextInput", "secure"),
                     Some(NativeHostFieldType::Bool)
                 ),
                 NativeHostPropUpdate::LabelText { text: _ } => assert_eq!(

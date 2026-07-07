@@ -20,6 +20,7 @@ script_mod! {
         width: Fill
         height: 32
         editable: true
+        secure: false
         draw_bg +: {
             color: #0000
         }
@@ -43,6 +44,8 @@ pub struct NativeTextInput {
     placeholder: ArcStringMut,
     #[live(true)]
     editable: bool,
+    #[live(false)]
+    secure: bool,
     #[visible]
     #[live(true)]
     visible: bool,
@@ -56,6 +59,8 @@ pub struct NativeTextInput {
     last_placeholder: String,
     #[rust]
     last_editable: bool,
+    #[rust]
+    last_secure: bool,
     // Layout dedup: on OHOS every host call is a blocking JS-thread round
     // trip, so update() must only fire when the resolved rect changed.
     #[rust]
@@ -79,13 +84,14 @@ impl NativeTextInput {
         let placeholder = self.placeholder.as_ref();
         if !self.spawned {
             cx.native_text_input(id)
-                .spawn(text, placeholder, self.editable);
+                .spawn(text, placeholder, self.editable, self.secure);
             self.spawned = true;
             self.last_text.clear();
             self.last_text.push_str(text);
             self.last_placeholder.clear();
             self.last_placeholder.push_str(placeholder);
             self.last_editable = self.editable;
+            self.last_secure = self.secure;
             self.last_sync_rect = None;
         }
         if self.last_text != text {
@@ -101,6 +107,10 @@ impl NativeTextInput {
         if self.last_editable != self.editable {
             cx.native_text_input(id).set_editable(self.editable);
             self.last_editable = self.editable;
+        }
+        if self.last_secure != self.secure {
+            cx.native_text_input(id).set_secure(self.secure);
+            self.last_secure = self.secure;
         }
         let rect = self.draw_bg.area().clipped_rect(cx);
         if self.last_sync_rect != Some(rect) {
@@ -443,12 +453,14 @@ mod tests {
             text: Default::default(),
             placeholder: Default::default(),
             editable: true,
+            secure: false,
             visible: true,
             on_change: None,
             spawned: false,
             last_text: String::new(),
             last_placeholder: String::new(),
             last_editable: true,
+            last_secure: false,
             last_sync_rect: None,
             native_detached: false,
             selection_start: 0,

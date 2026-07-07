@@ -46,6 +46,7 @@ struct NativeTextInputItem {
       .width(this.state.width)
       .height(this.state.height)
       .enabled(this.state.editable)
+      .type(this.state.secure ? InputType.Password : InputType.Normal)
       .visibility(this.state.visible ? Visibility.Visible : Visibility.Hidden)
       .onAppear(() => {
         this.traceCb('attached id=' + this.state.inputId);
@@ -321,15 +322,16 @@ struct Index {
     }
   }
 
-  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean): void {
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean): void {
     let existing = this.nativeTextInput(inputId);
     let attached = existing !== undefined ? existing.attached : false;
-    this.traceNTI('create id=' + inputId + ' editable=' + editable + ' attached=' + attached);
+    this.traceNTI('create id=' + inputId + ' editable=' + editable + ' secure=' + secure + ' attached=' + attached);
     let state = new NativeTextInputState();
     state.inputId = inputId;
     state.text = text;
     state.placeholder = placeholder;
     state.editable = editable;
+    state.secure = secure;
     state.attached = attached;
     state.controller = existing !== undefined ? existing.controller : new TextInputController();
     this.upsertNativeTextInput(state);
@@ -381,6 +383,13 @@ struct Index {
   setNativeTextInputEditable(inputId: string, editable: boolean): void {
     this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.editable = editable;
+    });
+  }
+
+  setNativeTextInputSecure(inputId: string, secure: boolean): void {
+    this.traceNTI('set_secure id=' + inputId + ' secure=' + secure);
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
+      input.secure = secure;
     });
   }
 

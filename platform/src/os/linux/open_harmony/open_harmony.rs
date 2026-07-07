@@ -94,6 +94,7 @@ impl Cx {
         text: &str,
         placeholder: &str,
         editable: bool,
+        secure: bool,
     ) {
         self.oh_call_arkts_args(
             "createNativeTextInput",
@@ -102,6 +103,7 @@ impl Cx {
                 ArkTsArg::Str(text.to_string()),
                 ArkTsArg::Str(placeholder.to_string()),
                 ArkTsArg::Bool(editable),
+                ArkTsArg::Bool(secure),
             ],
         );
     }
@@ -738,10 +740,15 @@ impl Cx {
                                 text,
                                 placeholder,
                                 editable,
+                                secure,
                             },
-                        ) => {
-                            self.oh_call_native_text_input_create(id, &text, &placeholder, editable)
-                        }
+                        ) => self.oh_call_native_text_input_create(
+                            id,
+                            &text,
+                            &placeholder,
+                            editable,
+                            secure,
+                        ),
                         (NativeHostKind::Label, NativeHostProps::Label { text }) => self
                             .oh_call_arkts_args(
                                 "createNativeLabel",
@@ -797,6 +804,12 @@ impl Cx {
                             "setNativeTextInputEditable",
                             id,
                             editable,
+                        ),
+                    NativeHostPropUpdate::TextInputSecure { secure } => self
+                        .oh_call_native_text_input_bool_prop(
+                            "setNativeTextInputSecure",
+                            id,
+                            secure,
                         ),
                     NativeHostPropUpdate::LabelText { text } => {
                         self.oh_call_native_text_input_string_prop("setNativeLabelText", id, &text);

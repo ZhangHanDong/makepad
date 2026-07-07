@@ -1099,6 +1099,7 @@ impl Cx {
                             text,
                             placeholder,
                             editable,
+                            secure: _,
                         },
                     ) = (kind, props)
                     {
@@ -1146,6 +1147,11 @@ impl Cx {
                         {
                             input.set_editable(editable);
                         }
+                    }
+                    NativeHostPropUpdate::TextInputSecure { .. } => {
+                        crate::log!(
+                            "NativeTextInput: secure toggle not implemented on iOS host yet"
+                        );
                     }
                     NativeHostPropUpdate::LabelText { .. } => {}
                 },

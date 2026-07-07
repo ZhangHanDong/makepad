@@ -2417,6 +2417,7 @@ impl Cx {
                             text,
                             placeholder,
                             editable,
+                            secure: _,
                         },
                     ) = (kind, props)
                     {
@@ -2452,6 +2453,11 @@ impl Cx {
                     NativeHostPropUpdate::TextInputEditable { editable } => unsafe {
                         android_jni::to_java_set_native_text_input_editable(id, editable);
                     },
+                    NativeHostPropUpdate::TextInputSecure { .. } => {
+                        crate::log!(
+                            "NativeTextInput: secure toggle not implemented on Android host yet"
+                        );
+                    }
                     NativeHostPropUpdate::LabelText { .. } => {}
                 },
                 CxOsOp::CommandNativeView { id, command } => match command {

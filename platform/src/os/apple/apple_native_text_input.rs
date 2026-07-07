@@ -138,6 +138,7 @@ pub(crate) struct MacosNativeTextInput {
     text: String,
     placeholder: String,
     editable: bool,
+    secure: bool,
     #[cfg(feature = "diag-native-leak-count")]
     counted: bool,
 }
@@ -149,6 +150,7 @@ impl MacosNativeTextInput {
         text: &str,
         placeholder: &str,
         editable: bool,
+        secure: bool,
     ) -> Self {
         let mut input = Self {
             text_input_id,
@@ -159,6 +161,7 @@ impl MacosNativeTextInput {
             text: String::new(),
             placeholder: String::new(),
             editable,
+            secure,
             #[cfg(feature = "diag-native-leak-count")]
             counted: true,
         };
@@ -188,7 +191,16 @@ impl MacosNativeTextInput {
                 self.delegate = delegate;
             }
 
-            let field: ObjcId = msg_send![class!(NSTextField), alloc];
+            // NSTextField cannot toggle secure entry at runtime without
+            // swapping the cell class, so the secure/plain distinction is
+            // baked in at alloc time via the class choice here. Runtime
+            // toggling is handled as a logged no-op (see set_secure below).
+            let field_class = if self.secure {
+                class!(NSSecureTextField)
+            } else {
+                class!(NSTextField)
+            };
+            let field: ObjcId = msg_send![field_class, alloc];
             let field: ObjcId = msg_send![field, initWithFrame: NSRect {
                 origin: NSPoint { x: 0.0, y: 0.0 },
                 size: NSSize { width: 1.0, height: 22.0 },
@@ -347,6 +359,18 @@ impl MacosNativeTextInput {
                 let () = msg_send![self.field, setEditable: if editable { YES } else { NO }];
             }
         }
+    }
+
+    /// NSTextField cannot switch between secure (NSSecureTextField) and
+    /// plain entry at runtime without swapping the underlying cell class,
+    /// which would require rebuilding the field and its delegate wiring.
+    /// The secure flag is only applied at construction time (see `new`);
+    /// this is a logged no-op until that refactor is worth doing.
+    pub(crate) fn set_secure(&mut self, secure: bool) {
+        if self.secure == secure {
+            return;
+        }
+        crate::log!("NativeTextInput: secure toggle not implemented on macOS host yet");
     }
 
     pub(crate) fn focus(&mut self) {

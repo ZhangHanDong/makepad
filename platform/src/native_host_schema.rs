@@ -44,6 +44,10 @@ pub const NATIVE_TEXT_INPUT_PROPS: &[NativeHostFieldSchema] = &[
         name: "editable",
         ty: NativeHostFieldType::Bool,
     },
+    NativeHostFieldSchema {
+        name: "secure",
+        ty: NativeHostFieldType::Bool,
+    },
 ];
 
 pub const NATIVE_TEXT_INPUT_PROP_UPDATES: &[NativeHostFieldSchema] = &[
@@ -57,6 +61,10 @@ pub const NATIVE_TEXT_INPUT_PROP_UPDATES: &[NativeHostFieldSchema] = &[
     },
     NativeHostFieldSchema {
         name: "editable",
+        ty: NativeHostFieldType::Bool,
+    },
+    NativeHostFieldSchema {
+        name: "secure",
         ty: NativeHostFieldType::Bool,
     },
 ];
@@ -188,7 +196,7 @@ mod tests {
     #[test]
     fn native_host_schema_covers_current_components() {
         let text_input = native_host_component("TextInput").unwrap();
-        assert_eq!(text_input.props.len(), 3);
+        assert_eq!(text_input.props.len(), 4);
         assert!(text_input
             .commands
             .iter()
@@ -222,8 +230,8 @@ mod tests {
             manifest,
             "\
 component TextInput
-props text:String placeholder:String editable:bool
-prop_updates text:String placeholder:String editable:bool
+props text:String placeholder:String editable:bool secure:bool
+prop_updates text:String placeholder:String editable:bool secure:bool
 commands focus blur select_all copy cut paste
 changed text:String
 focus_changed has_focus:bool
