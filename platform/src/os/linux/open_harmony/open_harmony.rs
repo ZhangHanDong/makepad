@@ -768,13 +768,17 @@ impl Cx {
                                 ArkTsArg::Bool(shown),
                             ],
                         ),
-                        _ => self.oh_call_native_text_input_update(
+                        Some(NativeHostKind::TextInput) => self.oh_call_native_text_input_update(
                             id,
                             rect.pos.x,
                             rect.pos.y,
                             rect.size.x,
                             rect.size.y,
                             shown,
+                        ),
+                        None => crate::error!(
+                            "UpdateNativeViewLayout for unknown native host id {:?}",
+                            id
                         ),
                     }
                 }
@@ -818,20 +822,24 @@ impl Cx {
                         self.oh_call_native_text_input_id("pasteNativeTextInput", id);
                     }
                 },
-                CxOsOp::DetachNativeView { id } => {
-                    let name = match self.os.native_host_kinds.get(&id) {
-                        Some(NativeHostKind::Label) => "detachNativeLabel",
-                        _ => "detachNativeTextInput",
-                    };
-                    self.oh_call_native_text_input_id(name, id);
-                }
-                CxOsOp::CloseNativeView { id } => {
-                    let name = match self.os.native_host_kinds.remove(&id) {
-                        Some(NativeHostKind::Label) => "closeNativeLabel",
-                        _ => "closeNativeTextInput",
-                    };
-                    self.oh_call_native_text_input_id(name, id);
-                }
+                CxOsOp::DetachNativeView { id } => match self.os.native_host_kinds.get(&id) {
+                    Some(NativeHostKind::Label) => {
+                        self.oh_call_native_text_input_id("detachNativeLabel", id)
+                    }
+                    Some(NativeHostKind::TextInput) => {
+                        self.oh_call_native_text_input_id("detachNativeTextInput", id)
+                    }
+                    None => crate::error!("DetachNativeView for unknown native host id {:?}", id),
+                },
+                CxOsOp::CloseNativeView { id } => match self.os.native_host_kinds.remove(&id) {
+                    Some(NativeHostKind::Label) => {
+                        self.oh_call_native_text_input_id("closeNativeLabel", id)
+                    }
+                    Some(NativeHostKind::TextInput) => {
+                        self.oh_call_native_text_input_id("closeNativeTextInput", id)
+                    }
+                    None => crate::error!("CloseNativeView for unknown native host id {:?}", id),
+                },
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 }

@@ -393,8 +393,17 @@ impl NativeMountQueue {
                     }
                 }
                 NativeMountMutation::Close { id } => {
+                    // If this batch also created the view, the whole
+                    // lifecycle happened within one flush: drop everything
+                    // including the Close, or the host would receive a Close
+                    // for a view it never saw created.
+                    let had_create = coalesced.iter().any(|existing| {
+                        matches!(existing, NativeMountMutation::Create { id: cid, .. } if cid == id)
+                    });
                     coalesced.retain(|existing: &NativeMountMutation| existing.id() != *id);
-                    coalesced.push(mutation);
+                    if !had_create {
+                        coalesced.push(mutation);
+                    }
                 }
                 NativeMountMutation::Create { .. } | NativeMountMutation::Command { .. } => {
                     coalesced.push(mutation);
@@ -2346,7 +2355,9 @@ mod tests {
     }
 
     #[test]
-    fn native_mount_queue_close_drops_prior_same_host_mutations() {
+    fn native_mount_queue_create_and_close_in_one_flush_emit_nothing() {
+        // The whole lifecycle happened within one flush: the host never saw
+        // the view, so it must not receive a Close for it either.
         let mut queue = NativeMountQueue::default();
         let id = live_id!(native_mount_queue_close_test);
 
@@ -2361,6 +2372,32 @@ mod tests {
             id,
             area: Area::Empty,
             visible: true,
+        });
+        queue.push(NativeMountMutation::Close { id });
+
+        let mut ops = Vec::new();
+        queue.flush_into(&mut ops);
+
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn native_mount_queue_close_without_create_drops_prior_and_keeps_close() {
+        // Created in an earlier flush: pending mutations are dropped but the
+        // Close itself must still reach the host.
+        let mut queue = NativeMountQueue::default();
+        let id = live_id!(native_mount_queue_close_keep_test);
+
+        queue.push(NativeMountMutation::Layout {
+            id,
+            area: Area::Empty,
+            visible: true,
+        });
+        queue.push(NativeMountMutation::Props {
+            id,
+            update: NativeHostPropUpdate::LabelText {
+                text: "pending".to_string(),
+            },
         });
         queue.push(NativeMountMutation::Close { id });
 
@@ -2743,11 +2780,23 @@ mod tests {
         let mut cx = test_cx();
         let id = NativeLabelId(live_id!(native_label_api_mount_test));
 
+        // Spawned and closed within one flush: the host never saw the label,
+        // so nothing — not even the Close — crosses the bridge.
         cx.native_label(id).spawn("label");
         cx.native_label(id).set_text("updated");
         cx.native_label(id).close();
 
         assert!(cx.platform_ops.is_empty());
+        cx.flush_native_mount_queue();
+        assert!(cx.platform_ops.is_empty());
+
+        // Spawned in an earlier flush: a later close must reach the host.
+        cx.native_label(id).spawn("label");
+        cx.flush_native_mount_queue();
+        cx.platform_ops.clear();
+
+        cx.native_label(id).set_text("pending");
+        cx.native_label(id).close();
         cx.flush_native_mount_queue();
 
         assert_eq!(cx.platform_ops.len(), 1);

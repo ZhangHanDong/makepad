@@ -123,6 +123,10 @@ struct Index {
   private updateNativeTextInputState(inputId: string, updater: (input: NativeTextInputState) => void): void {
     let input = this.nativeTextInput(inputId);
     if (input === undefined) {
+      // Unlike commands, state updates have no pre-create queue: Rust must
+      // create before updating. Trace instead of silently dropping so an
+      // ordering violation is visible in the evidence logs.
+      this.traceNTI('update id=' + inputId + ' dropped=unknown_id');
       return;
     }
     updater(input);
@@ -432,6 +436,7 @@ struct Index {
   updateNativeLabel(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
     let label = this.nativeLabel(inputId);
     if (label === undefined) {
+      this.traceNTI('label_layout id=' + inputId + ' dropped=unknown_id');
       return;
     }
     this.traceNTI('label_layout id=' + inputId

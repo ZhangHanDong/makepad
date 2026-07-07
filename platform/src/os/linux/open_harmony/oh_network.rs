@@ -99,6 +99,10 @@ impl NetworkBackend for OhosNetworkBackend {
     }
 
     fn http_cancel(&self, request_id: LiveId) -> Result<(), NetworkError> {
+        // The registry entry is removed before the ArkTS-side cancel lands,
+        // so chunks/completions racing the cancel silently no-op (their
+        // handlers find no entry). Intentional: the caller asked to cancel,
+        // so no further events — including a cancel-ack — are emitted.
         if let Ok(mut live) = live_http_requests().lock() {
             live.remove(&request_id.0);
         }
