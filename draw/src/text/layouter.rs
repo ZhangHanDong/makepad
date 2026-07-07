@@ -23,6 +23,7 @@ use {
         mem,
         rc::Rc,
     },
+    unicode_script::Script,
     unicode_segmentation::UnicodeSegmentation,
 };
 
@@ -31,6 +32,32 @@ const PTS_PER_INCH: f32 = 72.0;
 const LAYOUT_CACHE_MAX_TEXT_LEN: usize = 512;
 const LAYOUT_CACHE_MULTILINE_TEXT_LEN: usize = 192;
 const LAYOUT_CACHE_MULTILINE_LINE_COUNT: usize = 4;
+// Tier-2 cache for large/multiline text that `should_cache_text` refuses. Such
+// text is typically a handful of big static Labels redrawn every frame, so a
+// tiny bound suffices; each entry holds one verification copy plus a shared
+// `Rc<LaidoutText>` (the `Rc` is the same one the widget already holds).
+const PTR_CACHE_SIZE: usize = 32;
+
+/// Cheap identity key for the tier-2 (large-text) cache: the borrowed text's
+/// address + length plus the layout parameters. Pointer+len is only a fast
+/// pre-filter — a full content compare on hit guards against pointer reuse
+/// (see `get_or_layout`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PtrLayoutKey {
+    ptr: usize,
+    len: usize,
+    style: Style,
+    options: LayoutOptions,
+}
+
+#[derive(Debug)]
+struct PtrCacheEntry {
+    // Independent snapshot of the exact bytes that produced `result`. This is
+    // what makes a pointer-keyed hit safe: it is compared against the current
+    // text before the cached result is trusted.
+    text: Box<str>,
+    result: Rc<LaidoutText>,
+}
 
 #[derive(Debug)]
 pub struct Layouter {
@@ -38,6 +65,10 @@ pub struct Layouter {
     cache_size: usize,
     cached_params: VecDeque<OwnedLayoutParams>,
     cached_results: FxHashMap<OwnedLayoutParams, Rc<LaidoutText>>,
+    // Tier-2 cache: catches large static text that tier-1 (`should_cache_text`)
+    // refuses, keyed on cheap pointer identity + verified content.
+    ptr_cache: FxHashMap<PtrLayoutKey, PtrCacheEntry>,
+    ptr_cache_order: VecDeque<PtrLayoutKey>,
 }
 
 impl Layouter {
@@ -68,6 +99,8 @@ impl Layouter {
                 settings.cache_size,
                 Default::default(),
             ),
+            ptr_cache: FxHashMap::default(),
+            ptr_cache_order: VecDeque::with_capacity(PTR_CACHE_SIZE),
         }
     }
 
@@ -95,6 +128,10 @@ impl Layouter {
         self.loader.set_font_family_definition(id, definition);
         self.cached_params.clear();
         self.cached_results.clear();
+        // A font-family redefinition changes glyph geometry, so every cached
+        // `LaidoutText` in both tiers is stale.
+        self.ptr_cache.clear();
+        self.ptr_cache_order.clear();
     }
 
     pub fn define_font(&mut self, id: FontId, definition: FontDefinition) {
@@ -106,21 +143,61 @@ impl Layouter {
     }
 
     pub fn get_or_layout(&mut self, params: impl LayoutParams) -> Rc<LaidoutText> {
-        if self.cache_size == 0 || !Self::should_cache_text(params.text()) {
+        if self.cache_size == 0 {
             return Rc::new(self.layout(params.to_owned()));
         }
-        if let Some(result) = self.cached_results.get(&params as &dyn LayoutParams) {
-            return result.clone();
+        if Self::should_cache_text(params.text()) {
+            // Tier-1: content-hashed LRU for small text. Unchanged behavior.
+            if let Some(result) = self.cached_results.get(&params as &dyn LayoutParams) {
+                return result.clone();
+            }
+            if self.cached_params.len() == self.cache_size {
+                let params = self.cached_params.pop_front().unwrap();
+                self.cached_results.remove(&params);
+            }
+            let params = params.to_owned();
+            let cache_key = params.clone();
+            let result = Rc::new(self.layout(params));
+            self.cached_params.push_back(cache_key.clone());
+            self.cached_results.insert(cache_key, result.clone());
+            return result;
         }
-        if self.cached_params.len() == self.cache_size {
-            let params = self.cached_params.pop_front().unwrap();
-            self.cached_results.remove(&params);
+
+        // Tier-2: large/multiline text tier-1 refuses. Keyed on the borrowed
+        // text's pointer+len (stable across frames for unchanged Label text)
+        // plus style/options. The pointer is only a fast pre-filter: a full
+        // content compare on a key match guards against pointer reuse (a freed
+        // buffer's address reoccupied by different bytes of the same length),
+        // so a stale/wrong layout can never be returned.
+        let key = PtrLayoutKey {
+            ptr: params.text().as_ptr() as usize,
+            len: params.text().len(),
+            style: params.style(),
+            options: params.options(),
+        };
+        if let Some(entry) = self.ptr_cache.get(&key) {
+            if entry.text.as_bytes() == params.text().as_bytes() {
+                return entry.result.clone();
+            }
+            // Pointer/len collided but content differs: recompute and overwrite.
         }
-        let params = params.to_owned();
-        let cache_key = params.clone();
-        let result = Rc::new(self.layout(params));
-        self.cached_params.push_back(cache_key.clone());
-        self.cached_results.insert(cache_key, result.clone());
+        // Snapshot the input bytes for future verification before `to_owned`.
+        let verify_text: Box<str> = Box::from(params.text());
+        let result = Rc::new(self.layout(params.to_owned()));
+        if !self.ptr_cache.contains_key(&key) {
+            if self.ptr_cache_order.len() == PTR_CACHE_SIZE {
+                let old = self.ptr_cache_order.pop_front().unwrap();
+                self.ptr_cache.remove(&old);
+            }
+            self.ptr_cache_order.push_back(key);
+        }
+        self.ptr_cache.insert(
+            key,
+            PtrCacheEntry {
+                text: verify_text,
+                result: result.clone(),
+            },
+        );
         result
     }
 
@@ -222,6 +299,11 @@ struct LayoutContext {
     current_row_end: usize,
     rows: Vec<LaidoutRow>,
     glyphs: Vec<LaidoutGlyph>,
+    /// De-duplicated Unicode scripts of characters that no font in the family
+    /// could cover during this layout (accumulated from each shaped run). The
+    /// Cx-aware caller (`DrawText::layout`) reads this from the produced
+    /// `LaidoutText` to ask the OS for covering fonts.
+    missing_scripts: Vec<Script>,
 }
 
 impl LayoutContext {
@@ -241,6 +323,17 @@ impl LayoutContext {
             current_row_end: 0,
             rows: Vec::new(),
             glyphs: Vec::new(),
+            missing_scripts: Vec::new(),
+        }
+    }
+
+    /// Merges the scripts a shaped run could not cover into the running set,
+    /// de-duplicating. Called from every path that consumes a `ShapedText`.
+    fn accumulate_missing_scripts(&mut self, scripts: &[Script]) {
+        for &script in scripts {
+            if !self.missing_scripts.contains(&script) {
+                self.missing_scripts.push(script);
+            }
         }
     }
 
@@ -377,6 +470,7 @@ impl LayoutContext {
     }
 
     fn append_text(&mut self, text: &ShapedText) {
+        self.accumulate_missing_scripts(&text.missing_scripts);
         for glyph in &text.glyphs {
             let mut glyph = LaidoutGlyph {
                 origin_in_lpxs: Point::ZERO,
@@ -398,10 +492,25 @@ impl LayoutContext {
     fn finish_current_row(&mut self, newline: bool) {
         let font = self.font_family.fonts().first();
         let font_size_in_lpxs = self.style.font_size_in_lpxs();
-        let ascender_in_lpxs = font.map_or(0.0, |font| font.ascender_in_ems()) * font_size_in_lpxs;
-        let descender_in_lpxs =
+        // The primary font's metrics are the floor (so empty rows still get a
+        // sensible height). Then expand to the largest ascent / deepest descent /
+        // widest line-gap across the fonts actually used by this row's glyphs:
+        // fallback fonts (notably color emoji, whose bitmaps span a full 1.0 em
+        // above the baseline) can be taller than the primary text font, and
+        // reserving only the primary font's ascent would clip their tops.
+        let mut ascender_in_lpxs =
+            font.map_or(0.0, |font| font.ascender_in_ems()) * font_size_in_lpxs;
+        let mut descender_in_lpxs =
             font.map_or(0.0, |font| font.descender_in_ems()) * font_size_in_lpxs;
-        let line_gap_in_lpxs = font.map_or(0.0, |font| font.line_gap_in_ems()) * font_size_in_lpxs;
+        let mut line_gap_in_lpxs =
+            font.map_or(0.0, |font| font.line_gap_in_ems()) * font_size_in_lpxs;
+        for glyph in &self.glyphs {
+            ascender_in_lpxs = ascender_in_lpxs.max(glyph.ascender_in_lpxs());
+            // Descender is negative (below baseline); the deepest row descent is
+            // the minimum.
+            descender_in_lpxs = descender_in_lpxs.min(glyph.descender_in_lpxs());
+            line_gap_in_lpxs = line_gap_in_lpxs.max(glyph.line_gap_in_lpxs());
+        }
 
         let text = self
             .text
@@ -439,18 +548,20 @@ impl LayoutContext {
 
     fn finish_with(self, is_truncated: bool) -> LaidoutText {
         let last_row = self.rows.last().unwrap();
+        let size_in_lpxs = Size::new(
+            self.rows
+                .iter()
+                .map(|row| row.width_in_lpxs)
+                .reduce(f32::max)
+                .unwrap_or(0.0),
+            last_row.origin_in_lpxs.y - last_row.descender_in_lpxs,
+        );
         LaidoutText {
             text: self.text,
-            size_in_lpxs: Size::new(
-                self.rows
-                    .iter()
-                    .map(|row| row.width_in_lpxs)
-                    .reduce(f32::max)
-                    .unwrap_or(0.0),
-                last_row.origin_in_lpxs.y - last_row.descender_in_lpxs,
-            ),
+            size_in_lpxs,
             rows: self.rows,
             is_truncated,
+            missing_scripts: self.missing_scripts,
         }
     }
 
@@ -503,6 +614,7 @@ impl LayoutContext {
     /// Truncates the last row to fit within `max_width` and appends an ellipsis glyph.
     fn truncate_last_row_with_ellipsis(&mut self, max_width: f32) {
         let ellipsis_shaped = self.font_family.get_or_shape("…".into());
+        self.accumulate_missing_scripts(&ellipsis_shaped.missing_scripts);
         let font_size_in_lpxs = self.style.font_size_in_lpxs();
         let ellipsis_width: f32 = ellipsis_shaped
             .glyphs
@@ -970,6 +1082,11 @@ pub struct LaidoutText {
     pub rows: Vec<LaidoutRow>,
     /// True when the text was truncated (e.g., due to `max_rows` or ellipsis).
     pub is_truncated: bool,
+    /// De-duplicated Unicode scripts of characters that no font in the family
+    /// could cover. Empty in the common case. The Cx-aware caller
+    /// (`DrawText::layout`) reads this to dynamically fetch system fonts that
+    /// cover these scripts and reshape on the next frame.
+    pub missing_scripts: Vec<Script>,
 }
 
 impl LaidoutText {

@@ -13,6 +13,7 @@ use {
         mem,
         rc::Rc,
     },
+    unicode_script::{Script, UnicodeScript},
     unicode_segmentation::UnicodeSegmentation,
 };
 
@@ -47,6 +48,43 @@ fn is_definitely_ltr(text: &str) -> bool {
             // Mathematical Alphabetic Symbols, etc.).
             || (0x1E800..=0x1EFFF).contains(&c)
     })
+}
+
+/// Scan shaped glyphs for any that fell back to `.notdef` (id 0 — no font in
+/// the family covered them) and return the de-duplicated Unicode scripts of the
+/// characters they came from. `Common`/`Inherited`/`Unknown` are filtered out:
+/// they belong to whitespace, combining marks and shared punctuation, which give
+/// no useful signal about which language font to fetch.
+///
+/// `cluster` is the byte offset of the glyph's source character in `text`;
+/// we decode the `char` starting there to obtain its script.
+///
+/// Takes `(glyph_id, cluster)` pairs rather than `&[ShapedGlyph]` so the
+/// script-detection logic can be unit-tested without constructing real fonts.
+fn collect_missing_scripts(
+    text: &str,
+    glyphs: impl IntoIterator<Item = (GlyphId, usize)>,
+) -> Vec<Script> {
+    let mut scripts: Vec<Script> = Vec::new();
+    for (id, cluster) in glyphs {
+        if id != 0 {
+            continue;
+        }
+        let Some(rest) = text.get(cluster..) else {
+            continue;
+        };
+        let Some(ch) = rest.chars().next() else {
+            continue;
+        };
+        let script = ch.script();
+        if matches!(script, Script::Common | Script::Inherited | Script::Unknown) {
+            continue;
+        }
+        if !scripts.contains(&script) {
+            scripts.push(script);
+        }
+    }
+    scripts
 }
 
 /// Float wrapper that supports Hash and Eq via bit representation.
@@ -134,9 +172,10 @@ impl Shaper {
 
     fn shape(&mut self, params: ShapeParams) -> ShapedText {
         let mut glyphs = Vec::new();
-        if params.fonts.is_empty() {
-            println!("WARNING: encountered empty font family");
-        } else {
+        // An empty font family is a normal state, not an error: on platforms
+        // without a system-font API (e.g. wasm) UI text may resolve to no fonts
+        // at all. Shape to zero glyphs (renders nothing) instead of warning.
+        if !params.fonts.is_empty() {
             let text: &str = &params.text;
             // Fast path: when the text is guaranteed to contain no RTL
             // characters, skip the Unicode Bidirectional Algorithm entirely
@@ -219,10 +258,14 @@ impl Shaper {
             }
         }
 
+        let missing_scripts =
+            collect_missing_scripts(&params.text, glyphs.iter().map(|g| (g.id, g.cluster)));
+
         ShapedText {
             text: params.text,
             width_in_ems: glyphs.iter().map(|glyph| glyph.advance_in_ems).sum(),
             glyphs,
+            missing_scripts,
         }
     }
 
@@ -428,6 +471,13 @@ pub struct ShapedText {
     pub text: Substr,
     pub width_in_ems: f32,
     pub glyphs: Vec<ShapedGlyph>,
+    /// Unicode scripts of characters that no font in the family could cover
+    /// (they shaped to `.notdef` / id 0). De-duplicated and free of the
+    /// `Common`/`Inherited`/`Unknown` scripts (whitespace, combining marks,
+    /// punctuation), which carry no useful fallback signal. Higher layers use
+    /// this to ask the OS for a font covering each script (see
+    /// `DrawText::layout` per-glyph system-font fallback).
+    pub missing_scripts: Vec<Script>,
 }
 
 #[derive(Clone, Debug)]
@@ -438,4 +488,63 @@ pub struct ShapedGlyph {
     pub advance_in_ems: f32,
     pub offset_in_ems: f32,
     pub y_offset_in_ems: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_missing_scripts, GlyphId, Script};
+
+    // Helper: byte offset of the nth char in `s`.
+    fn byte_at(s: &str, n: usize) -> usize {
+        s.char_indices().nth(n).unwrap().0
+    }
+
+    #[test]
+    fn missing_thai_with_latin_only_reports_thai() {
+        // Simulates the family covering Latin but not Thai: the Latin chars
+        // shaped to real glyph ids, the Thai chars fell back to `.notdef` (0).
+        let text = "Hi สวัสดี";
+        let glyphs: Vec<(GlyphId, usize)> = vec![
+            (10, byte_at(text, 0)), // H
+            (11, byte_at(text, 1)), // i
+            (0, byte_at(text, 3)),  // ส  -> notdef
+            (0, byte_at(text, 4)),  // ว  -> notdef
+        ];
+        assert_eq!(collect_missing_scripts(text, glyphs), vec![Script::Thai]);
+    }
+
+    #[test]
+    fn covered_text_reports_nothing() {
+        // No `.notdef` glyphs -> no missing scripts.
+        let text = "Hello";
+        let glyphs: Vec<(GlyphId, usize)> =
+            vec![(10, 0), (11, 1), (12, 2), (13, 3), (14, 4)];
+        assert!(collect_missing_scripts(text, glyphs).is_empty());
+    }
+
+    #[test]
+    fn deduplicates_and_preserves_first_seen_order() {
+        let text = "नमस्ते สวัสดี";
+        let deva0 = byte_at(text, 0); // न Devanagari
+        let deva1 = byte_at(text, 1); // म Devanagari
+        let thai = byte_at(text, 7); // ส Thai
+        let glyphs: Vec<(GlyphId, usize)> =
+            vec![(0, deva0), (0, deva1), (0, thai)];
+        assert_eq!(
+            collect_missing_scripts(text, glyphs),
+            vec![Script::Devanagari, Script::Thai]
+        );
+    }
+
+    #[test]
+    fn filters_common_inherited_unknown() {
+        // A space (Common) and a digit (Common) that fell back to notdef carry
+        // no useful fallback signal and must be filtered out.
+        let text = "a 1";
+        let glyphs: Vec<(GlyphId, usize)> = vec![
+            (0, byte_at(text, 1)), // ' ' Common
+            (0, byte_at(text, 2)), // '1' Common
+        ];
+        assert!(collect_missing_scripts(text, glyphs).is_empty());
+    }
 }

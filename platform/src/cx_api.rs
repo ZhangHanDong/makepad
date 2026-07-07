@@ -39,6 +39,69 @@ pub enum OpenUrlInPlace {
     No,
 }
 
+/// The semantic role of a system font we want the OS to resolve for us.
+///
+/// We don't ask the OS for a specific typeface by name; instead we ask for the
+/// platform's default font for a given role (and optionally a language hint, e.g.
+/// "zh" for Chinese), the way Flutter delegates glyph coverage to the platform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SystemFontRole {
+    /// The default UI / sans-serif font (Latin and the platform's primary script).
+    #[default]
+    Ui,
+    /// A serif font.
+    Serif,
+    /// A monospace font.
+    Mono,
+    /// The CJK fallback font (Chinese / Japanese / Korean).
+    Cjk,
+    /// The color emoji font.
+    Emoji,
+}
+
+/// A request for a system font. Resolved at runtime by the per-platform
+/// [`CxOsApi::os_load_system_font`] implementation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SystemFontQuery {
+    pub role: SystemFontRole,
+    /// OpenType weight (100..=900). 400 = regular, 700 = bold.
+    pub weight: u32,
+    pub italic: bool,
+    /// Optional BCP-47-ish language hint (e.g. "zh", "ja", "ko") used to bias CJK
+    /// resolution. Empty means "no hint".
+    pub lang: String,
+    /// Optional sample text the resolved font must be able to render. Used by
+    /// per-glyph system-font fallback: when a script isn't covered by any
+    /// declared family member, we ask the OS for a font that covers these exact
+    /// characters (macOS `CTFontCreateForString`, Linux `FcCharSet`, Windows
+    /// `IDWriteFont::HasCharacter` sweep, Android cmap matching). Empty preserves the old
+    /// role/lang-only behaviour. Also keys the negative cache per script.
+    pub sample: String,
+}
+
+impl Default for SystemFontQuery {
+    fn default() -> Self {
+        Self {
+            role: SystemFontRole::Ui,
+            weight: 400,
+            italic: false,
+            lang: String::new(),
+            sample: String::new(),
+        }
+    }
+}
+
+impl std::hash::Hash for SystemFontQuery {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.role.hash(state);
+        self.weight.hash(state);
+        self.italic.hash(state);
+        self.lang.hash(state);
+        self.sample.hash(state);
+    }
+}
+impl Eq for SystemFontQuery {}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CxThreadPriority {
     #[default]
@@ -148,6 +211,16 @@ impl<'a> CxSystemBrowser<'a> {
 
 pub trait CxOsApi {
     fn init_cx_os(&mut self);
+
+    /// Resolve a system font for the given query and return its raw bytes
+    /// (a single TTF/OTF/TTC face's file contents).
+    ///
+    /// Returns `None` when the platform cannot resolve the font (or has no system
+    /// font access, e.g. wasm). Callers must tolerate `None` — a font family member
+    /// that fails to resolve is simply skipped, and the remaining members render.
+    fn os_load_system_font(&mut self, _query: &SystemFontQuery) -> Option<Vec<u8>> {
+        None
+    }
 
     fn spawn_thread<F>(&mut self, f: F)
     where
@@ -769,6 +842,43 @@ impl Cx {
         self.get_resource(handle).map(SharedBytes::from_owned)
     }
 
+    /// Whether the script resource `handle` has reached a terminal state —
+    /// either `Loaded` or `Error` — and will not change again.
+    ///
+    /// `NotLoaded` / `Loading` are still in flight (e.g. an async fetch on wasm)
+    /// and count as *not* settled. An unknown handle is treated as settled so a
+    /// caller polling it never loops forever. Used by the font loader to stop
+    /// re-attempting resource loads every frame once every member has settled.
+    pub fn is_script_resource_settled(&self, handle: ScriptHandle) -> bool {
+        let resources = self.script_data.resources.resources.borrow();
+        match resources.iter().find(|res| res.handle == handle) {
+            Some(res) => matches!(
+                res.data,
+                crate::script::res::CxScriptResourceData::Loaded(_)
+                    | crate::script::res::CxScriptResourceData::Error(_)
+            ),
+            None => true,
+        }
+    }
+
+    /// Resolve a system font for `query`, caching the result by query.
+    ///
+    /// Returns the font file bytes the OS handed back, or `None` if the platform
+    /// has no system-font API (e.g. wasm) or the OS could not satisfy the query.
+    /// The result (including the negative case) is cached so we ask the OS at
+    /// most once per distinct query.
+    pub fn resolve_system_font(&mut self, query: &SystemFontQuery) -> Option<Rc<Vec<u8>>> {
+        if let Some(cached) = self.script_data.system_font_bytes.borrow().get(query) {
+            return cached.clone();
+        }
+        let bytes = self.os_load_system_font(query).map(Rc::new);
+        self.script_data
+            .system_font_bytes
+            .borrow_mut()
+            .insert(query.clone(), bytes.clone());
+        bytes
+    }
+
     pub fn null_texture(&self) -> Texture {
         self.null_texture.clone()
     }
@@ -1336,34 +1446,15 @@ impl Cx {
     }
 
     pub fn redraw_list_in_draw(&mut self, draw_list_id: DrawListId) {
-        if self
-            .new_draw_event
-            .draw_lists
-            .iter()
-            .position(|v| *v == draw_list_id)
-            .is_some()
-        {
-            return;
-        }
-        self.new_draw_event.draw_lists.push(draw_list_id);
+        self.new_draw_event.push_draw_list(draw_list_id);
     }
 
     pub fn redraw_list_and_children(&mut self, draw_list_id: DrawListId) {
         if self.in_draw_event {
             return;
         }
-        if self
-            .new_draw_event
-            .draw_lists_and_children
-            .iter()
-            .position(|v| *v == draw_list_id)
-            .is_some()
-        {
-            return;
-        }
         self.new_draw_event
-            .draw_lists_and_children
-            .push(draw_list_id);
+            .push_draw_list_and_children(draw_list_id);
     }
 
     pub fn get_ime_area_rect(&self) -> Rect {
