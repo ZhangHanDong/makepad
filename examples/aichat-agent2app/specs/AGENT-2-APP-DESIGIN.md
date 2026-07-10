@@ -3,7 +3,7 @@
 ## Status
 
 This is the current implementation design for the first `agent2app` demo in
-`makepad-example-aichat`.
+`makepad-example-aichat-agent2app`.
 
 The goal is not to implement the full Robrix-style schema/template/reconciler
 architecture. The goal is to add the smallest reliable live wire between
@@ -109,7 +109,7 @@ between the script VM and rendered UI.
 The action type must be visible to both:
 
 - `Splash`, which posts it.
-- `examples/aichat`, which handles it.
+- `examples/aichat-agent2app`, which handles it.
 
 The action is a global/bare action, not a widget action:
 
@@ -195,7 +195,7 @@ This is intentionally a bare action.
 
 Target file:
 
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 Because `Cx::post_action` produces a bare action, aichat must not use
 `as_widget_action()` for this event.
@@ -220,13 +220,13 @@ if let Some(widget_action) = action.as_widget_action() {
 }
 ```
 
-Allowed D1 events:
+Capability manifest D1 events:
 
 ```text
-inc
-dec
-reset
-ask_ai
+inc        AutoExecutable
+dec        AutoExecutable
+reset      AutoExecutable
+ask_ai     RequiresConfirmation
 ```
 
 Behavior:
@@ -234,17 +234,20 @@ Behavior:
 - `inc`: increment local count, persist state, re-render generated UI.
 - `dec`: decrement local count, persist state, re-render generated UI.
 - `reset`: set local count to `0`, persist state, re-render generated UI.
-- `ask_ai`: send the current state and event payload to the active LLM.
-- Unknown events: log and ignore.
+- `ask_ai`: park a pending confirmation; after `host.confirm`, send the current state and event payload to the active LLM.
+- `host.confirm` / `host.deny`: AutoExecutable host confirmation controls.
+- Unknown events: treat as Forbidden, log and ignore.
 
-Use a direct `match event_id.as_str()` for D1. A `HashMap` dispatch table is not
-needed until there are many actions.
+Use the CFP v0.3 L4 permission vocabulary only as manifest terminology:
+`ReadOnly`, `RequiresConfirmation`, `AutoExecutable`, `Forbidden`. Do not
+introduce CFP Claim/Commitment objects, ReviewChain, signatures, or event
+sourcing for D1.
 
 ## D1 State Model
 
 Target file:
 
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 Initial state:
 
@@ -259,7 +262,7 @@ Implementation options:
 - Prefer a small D1 state struct if only counter is required.
 - Use `serde_json::Value` only if D2 Todo/Dashboard will follow immediately.
 - If `serde_json` is added, mark it as a demo dependency in
-  `examples/aichat/Cargo.toml`.
+  `examples/aichat-agent2app/Cargo.toml`.
 
 Persistence:
 
@@ -463,15 +466,15 @@ Label{ text: "Count: {{state.count}}" }
 Do not hardcode mutable state when the UI should reflect host state.
 ```
 
-Do not introduce schema, capability declarations, or Robrix terminology in the
-D1 prompt.
+Expose the capability manifest in the D1 prompt. Do not introduce Robrix
+terminology or CFP runtime objects in generated Splash instructions.
 
 ## Validation
 
 Non-UI validation:
 
 ```bash
-cargo check -p makepad-example-aichat
+cargo check -p makepad-example-aichat-agent2app
 ```
 
 Runtime validation must use Studio remote release runs, not raw `cargo run`.
@@ -486,7 +489,7 @@ Before rerunning:
 Launch:
 
 ```json
-{"RunItem":{"mount":"makepad","name":"makepad-example-aichat"}}
+{"RunItem":{"mount":"makepad","name":"makepad-example-aichat-agent2app"}}
 ```
 
 Manual acceptance flow:
@@ -530,7 +533,7 @@ D1 is complete when:
 
 1. Add `SplashAction` in `widgets/src/splash.rs`.
 2. Register/inject `agent.notify` in `widgets/src/splash.rs`.
-3. Handle bare `SplashAction` in `examples/aichat/src/main.rs`.
+3. Handle bare `SplashAction` in `examples/aichat-agent2app/src/main.rs`.
 4. Phase 1 gate: hardcode a minimal Splash button path and verify
    `agent.notify("test", {})` reaches aichat as a bare
    `SplashAction::Notify`. Do this before prompt or state work.
@@ -539,7 +542,7 @@ D1 is complete when:
 7. Route chat display through rendered markdown while preserving raw history.
 8. Add `inc`, `dec`, `reset`, and `ask_ai` handlers.
 9. Update system prompt.
-10. Run `cargo check -p makepad-example-aichat`.
+10. Run `cargo check -p makepad-example-aichat-agent2app`.
 11. Validate in Studio release run.
 
 ## Later Extensions

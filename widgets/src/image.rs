@@ -475,9 +475,7 @@ impl Image {
     /// Returns `None` if the image has not been loaded into a texture yet.
     pub fn size_in_pixels(&self, cx: &mut Cx) -> Option<(usize, usize)> {
         if let Some(draw_svg) = self.draw_svg.as_ref() {
-            return draw_svg
-                .svg_size()
-                .map(|sz| (sz.x as usize, sz.y as usize));
+            return draw_svg.svg_size().map(|sz| (sz.x as usize, sz.y as usize));
         }
         self.texture
             .as_ref()
@@ -589,12 +587,7 @@ impl Image {
             }
             ImageFit::Stretch => {}
             ImageFit::CropToFill => {
-                self.set_crop_to_fill_transform(
-                    width,
-                    height,
-                    rect.size.x,
-                    avail_height,
-                );
+                self.set_crop_to_fill_transform(width, height, rect.size.x, avail_height);
             }
             ImageFit::Horizontal => {
                 walk.height = Size::Fixed(rect.size.x / aspect);

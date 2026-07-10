@@ -5,7 +5,7 @@ tags: [makepad, aichat, ui, liquid-glass]
 
 ## Intent
 
-Refine `makepad-example-aichat` into a dark emerald liquid-glass desktop chat UI
+Refine `makepad-example-aichat-agent2app` into a dark emerald liquid-glass desktop chat UI
 matching the approved reference direction: a semi-transparent borderless window,
 left navigation rail, main chat workspace, unified top toolbar, scrollable output
 cards, and an integrated composer. The UI must remain usable over visible desktop
@@ -29,10 +29,10 @@ and restrained cyan/gold accents.
 
 ### Allowed Changes
 
-- examples/aichat/src/main.rs
-- examples/aichat/resources/**
-- examples/aichat/specs/**
-- examples/aichat/README.md
+- examples/aichat-agent2app/src/main.rs
+- examples/aichat-agent2app/resources/**
+- examples/aichat-agent2app/specs/**
+- examples/aichat-agent2app/README.md
 - widgets/src/markdown.rs
 
 ### Forbidden
@@ -56,7 +56,7 @@ and restrained cyan/gold accents.
 
 Scenario: Borderless liquid-glass shell
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_shell_contract
   Given the AI Chat window is launched
   When the root window shell is rendered
@@ -68,7 +68,7 @@ Scenario: Borderless liquid-glass shell
 
 Scenario: Unified top toolbar
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_top_toolbar_contract
   Given the main workspace is rendered
   When the top toolbar is inspected
@@ -79,7 +79,7 @@ Scenario: Unified top toolbar
 
 Scenario: Glass opacity can be adjusted at runtime
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_glass_opacity_slider_contract
   Given the window is visible with default opacity
   When the user drags the `Glass` slider
@@ -90,7 +90,7 @@ Scenario: Glass opacity can be adjusted at runtime
 
 Scenario: Sidebar matches the target navigation rail
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_sidebar_contract
   Given the sidebar is rendered
   When the nav rail is inspected
@@ -102,7 +102,7 @@ Scenario: Sidebar matches the target navigation rail
 
 Scenario: Main content cards preserve readability over wallpaper
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_output_card_readability_contract
   Given a response contains prose, code, and a diagram block
   When the content is rendered over a bright or detailed desktop wallpaper
@@ -113,7 +113,7 @@ Scenario: Main content cards preserve readability over wallpaper
 
 Scenario: Wide rendered content is horizontally scrollable
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_horizontal_scroll_contract
   Given a diagram or code block is wider than the visible main column
   When the block is rendered
@@ -123,7 +123,7 @@ Scenario: Wide rendered content is horizontally scrollable
 
 Scenario: Composer is a single integrated input panel
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_composer_contract
   Given the user is ready to type
   When the bottom composer is rendered
@@ -135,7 +135,7 @@ Scenario: Composer is a single integrated input panel
 
 Scenario: Minimum usable window size
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_min_window_layout_contract
   Given the user resizes the window near its minimum supported size
   When the layout recomputes
@@ -146,7 +146,7 @@ Scenario: Minimum usable window size
 
 Scenario: UI task does not change backend behavior
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_backend_behavior_unchanged_contract
   Given the user selects an existing backend and sends a prompt
   When the request is submitted
@@ -156,7 +156,7 @@ Scenario: UI task does not change backend behavior
 
 Scenario: Network failure remains visible and non-destructive
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_network_failure_ui_contract
   Level: integration
   Test Double: fake backend transport returning a connection-lost error

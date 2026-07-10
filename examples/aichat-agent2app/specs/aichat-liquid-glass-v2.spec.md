@@ -6,7 +6,7 @@ supersedes: aichat-liquid-glass-ui.spec.md
 
 ## Intent
 
-Refine `makepad-example-aichat` so it actually looks like the approved 4/27
+Refine `makepad-example-aichat-agent2app` so it actually looks like the approved 4/27
 mountain-wallpaper reference: a desktop-transparent emerald liquid-glass shell
 where the wallpaper is **visibly seen through every layer**, with a stack of
 distinguishable glass panels (shell / sidebar / main area / cards / composer),
@@ -100,9 +100,9 @@ it produces the per-layer values in the table above.
 
 ### Allowed Changes
 
-- `examples/aichat/src/main.rs`
-- `examples/aichat/specs/**`
-- `examples/aichat/issues/**`
+- `examples/aichat-agent2app/src/main.rs`
+- `examples/aichat-agent2app/specs/**`
+- `examples/aichat-agent2app/issues/**`
 - `widgets/src/glass_panel.rs`
 - `widgets/src/lib.rs` (only if a new instance parameter requires re-export)
 
@@ -126,7 +126,7 @@ it produces the per-layer values in the table above.
 
 Scenario: Desktop wallpaper is visible通过 the shell
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_desktop_visible_through_shell
   Given the AI Chat window is launched over a desktop with a high-contrast wallpaper
   When the rendered window is captured and sampled
@@ -136,7 +136,7 @@ Scenario: Desktop wallpaper is visible通过 the shell
 
 Scenario: Glass layers stack with distinguishable alphas
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_layer_alpha_stack
   Given the default Glass slider value (90%)
   When the rendered window is sampled at one pixel inside the sidebar interior,
@@ -147,7 +147,7 @@ Scenario: Glass layers stack with distinguishable alphas
 
 Scenario: Outer shell has a cyan rim halo
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_shell_rim_halo
   Given the shell is rendered
   When the pixels in a 12-pixel band immediately outside the shell rounded
@@ -157,7 +157,7 @@ Scenario: Outer shell has a cyan rim halo
 
 Scenario: Each panel has a top highlight band
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_top_highlight_band
   Given a panel is rendered (sidebar, main area, card, composer)
   When the pixel row 1 below the panel's rounded top edge is sampled
@@ -166,7 +166,7 @@ Scenario: Each panel has a top highlight band
 
 Scenario: Glass slider scales per-layer alpha non-uniformly
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_slider_scales_per_layer
   Given the slider is at 30%
   When the same three sample points from the layer-stack scenario are sampled
@@ -176,7 +176,7 @@ Scenario: Glass slider scales per-layer alpha non-uniformly
 
 Scenario: Window-level transparency must not regress
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_window_transparency_preserved
   Given the script_mod source for `main_window`
   When parsed
@@ -187,7 +187,7 @@ Scenario: Window-level transparency must not regress
 
 Scenario: v1 acceptance criteria still pass
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v1_regression_suite
   Given v2 changes are applied
   When the v1 acceptance criteria are re-run (sidebar, top toolbar, composer,
@@ -196,7 +196,7 @@ Scenario: v1 acceptance criteria still pass
 
 Scenario: Backdrop blur is intentionally absent
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_liquid_glass_v2_no_backdrop_blur_yet
   Given v2 is in effect
   When the GlassPanel shader source is inspected

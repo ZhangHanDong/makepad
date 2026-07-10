@@ -14,7 +14,7 @@ assertion failure: "place == NSWindowBelow || place == NSWindowAbove" -> %llu
 0   libsystem_kernel.dylib  __abort_with_payload
 3   libsystem_c.dylib       _os_crash_msg
 4   AppKit                  -[NSView addSubview:positioned:relativeTo:] + 988
-5   makepad-example-aichat  msg_send invoke
+5   makepad-example-aichat-agent2app  msg_send invoke
 7   makepad-platform        macos_window::set_window_visuals + 4952
 ```
 
@@ -70,7 +70,7 @@ This second fix is more invasive but is the canonical NSVisualEffectView pattern
 
 ## Workaround applied to aichat
 
-`examples/aichat/src/main.rs` `main_window` declaration: the two `window.backdrop` / `window.backdrop_intensity` lines are commented out with a pointer to this issue. v2 visual ships without real backdrop blur; v3 unlocks once this is fixed.
+`examples/aichat-agent2app/src/main.rs` `main_window` declaration: the two `window.backdrop` / `window.backdrop_intensity` lines are commented out with a pointer to this issue. v2 visual ships without real backdrop blur; v3 unlocks once this is fixed.
 
 ## Plan to fix
 
@@ -87,7 +87,7 @@ Recommended sequence: A first; if A unblocks the crash but blur isn't visible, t
 
 After fix, in aichat:
 
-1. Re-enable `window.backdrop: WindowBackdrop.Blur` and `window.backdrop_intensity: 1.0` in `examples/aichat/src/main.rs`
+1. Re-enable `window.backdrop: WindowBackdrop.Blur` and `window.backdrop_intensity: 1.0` in `examples/aichat-agent2app/src/main.rs`
 2. Run over a real desktop wallpaper
 3. Confirm: wallpaper visible behind glass panels is **blurred**, not crisp
 4. Confirm: app does not crash on launch

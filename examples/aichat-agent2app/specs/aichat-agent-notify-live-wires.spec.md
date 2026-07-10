@@ -5,7 +5,7 @@ tags: [makepad, aichat, splash, agent-notify, state, demo]
 
 ## Intent
 
-Add the smallest useful agent-to-app demo path to `makepad-example-aichat`: LLMs
+Add the smallest useful agent-to-app demo path to `makepad-example-aichat-agent2app`: LLMs
 can generate interactive `runsplash` UI, generated buttons can call
 `agent.notify(event_id, payload)`, the host can receive those events, update
 local state, and re-render the generated UI from that state.
@@ -91,7 +91,7 @@ runsplash Button
 - `agent.notify` registration lives in `widgets/src/splash.rs`, not
   `platform/script/src`.
 - `SplashAction` also lives in `widgets/src/splash.rs`, so both `Splash` and
-  `examples/aichat` can use the same action type.
+  `examples/aichat-agent2app` can use the same action type.
 - `makepad-script` must not depend on `Cx::post_action` or any Splash/aichat
   action type.
 - `Cx::post_action` emits a bare/global action, not a widget action.
@@ -179,7 +179,7 @@ vm.add_method(
 
 Target file:
 
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 Because `Cx::post_action` produces a bare action, aichat must not use
 `as_widget_action()` for this event.
@@ -208,8 +208,8 @@ if let Some(widget_action) = action.as_widget_action() {
 
 Target files:
 
-- `examples/aichat/src/main.rs`
-- optionally `examples/aichat/Cargo.toml`
+- `examples/aichat-agent2app/src/main.rs`
+- optionally `examples/aichat-agent2app/Cargo.toml`
 
 Initial state shape:
 
@@ -231,7 +231,7 @@ Acceptable persistence:
 - A demo-simple JSON file next to the existing chat history save file.
 - Or the existing project style with `makepad_micro_serde`.
 
-If `serde_json` is added, update `examples/aichat/Cargo.toml` explicitly.
+If `serde_json` is added, update `examples/aichat-agent2app/Cargo.toml` explicitly.
 
 ## State Template Rendering
 
@@ -307,7 +307,7 @@ Non-requirements:
 
 Target file:
 
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 Allowed D1 actions:
 
@@ -446,7 +446,7 @@ Rules:
 
 Minimum non-UI checks:
 
-- `cargo check -p makepad-example-aichat`
+- `cargo check -p makepad-example-aichat-agent2app`
 - Focused unit tests if helper functions are extracted:
   - `render_state_templates("Count: {{state.count}}")`
   - unknown placeholders
@@ -459,7 +459,7 @@ Runtime validation:
 - Launch the release runnable item:
 
 ```json
-{"RunItem":{"mount":"makepad","name":"makepad-example-aichat"}}
+{"RunItem":{"mount":"makepad","name":"makepad-example-aichat-agent2app"}}
 ```
 
 Before each rerun:
@@ -511,7 +511,7 @@ D1 is complete when:
 
 1. Add `SplashAction` in `widgets/src/splash.rs`.
 2. Register/inject `agent.notify` in `widgets/src/splash.rs`.
-3. Handle bare `SplashAction` in `examples/aichat/src/main.rs`.
+3. Handle bare `SplashAction` in `examples/aichat-agent2app/src/main.rs`.
 4. Phase 1 gate: hardcode a minimal Splash button path and verify
    `agent.notify("test", {})` reaches aichat as a bare
    `SplashAction::Notify`. Do this before prompt or state work.
@@ -521,5 +521,5 @@ D1 is complete when:
 8. Add `inc`, `dec`, `reset`, and `ask_ai` handlers.
 9. Add state prompt injection.
 10. Update system prompt.
-11. Run `cargo check -p makepad-example-aichat`.
+11. Run `cargo check -p makepad-example-aichat-agent2app`.
 12. Run Studio release validation.

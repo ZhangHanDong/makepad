@@ -5,6 +5,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
 use super::types::*;
+use super::envelope::{click_envelope, notify_envelope, NotifyEnvelope};
 
 /// Canvas server — Splash rendering + event bridge.
 ///
@@ -12,7 +13,7 @@ use super::types::*;
 ///
 /// WS:  ws://localhost:PORT
 ///   Send: {"splash": "..."} or {"splash_stream": "begin/append/end"}
-///   Recv: {"event": "click", "widget": "btn_name"}
+///   Recv: {"type": "click", "name": "btn_name"} or {"type":"notify",...}
 ///
 /// HTTP: http://localhost:PORT
 ///   POST /splash          body=Splash code     → render
@@ -76,11 +77,7 @@ impl StdioBridge {
         }
     }
 
-    /// Send a widget event back to connected clients (WS + HTTP queue).
-    pub fn send_event(&self, widget_name: &str) {
-        let msg = serde_json::json!({"event": "click", "widget": widget_name});
-        let json = serde_json::to_string(&msg).unwrap_or_default();
-
+    fn send_event_json(&self, json: String) {
         // WS broadcast: send to all connected clients, remove dead ones
         if let Ok(mut senders) = self.event_senders.lock() {
             senders.retain(|(tx, _)| tx.send(json.clone()).is_ok());
@@ -91,6 +88,22 @@ impl StdioBridge {
             q.push_back(json);
         }
         self.event_notify.notify_one();
+    }
+
+    /// Send a widget click event back to connected clients (WS + HTTP queue).
+    pub fn send_event(&self, widget_name: &str) {
+        self.send_event_json(click_envelope(widget_name));
+    }
+
+    /// Send a typed agent.notify event back to connected clients (WS + HTTP queue).
+    pub fn send_notify_event(&self, event_id: &str, payload: &str) -> Result<(), String> {
+        match notify_envelope(event_id, payload) {
+            NotifyEnvelope::Send(json) => {
+                self.send_event_json(json);
+                Ok(())
+            }
+            NotifyEnvelope::Skip { log } => Err(log),
+        }
     }
 
     pub fn start(self: &Arc<Self>) {

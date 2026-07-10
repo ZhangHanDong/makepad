@@ -643,6 +643,7 @@ pub fn widgets_mod(vm: &mut ScriptVm) {
 pub fn script_mod(vm: &mut ScriptVm) {
     theme_mod(vm);
     widgets_mod(vm);
+    crate::splash::register_agent_module(vm);
 }
 
 #[cfg(test)]

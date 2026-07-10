@@ -49,7 +49,7 @@ So **no platform changes needed**. v3 can ship without touching `platform/src/` 
 Critical files:
 - `widgets/src/glass_panel.rs` (rewrite — full liquid-glass shader)
 - `widgets/src/blur_pass.rs` (new — encapsulates the two-direction Gaussian)
-- `examples/aichat/src/main.rs` (wire scene + blur → expose blurred texture as `theme.texture_backdrop_blur`)
+- `examples/aichat-agent2app/src/main.rs` (wire scene + blur → expose blurred texture as `theme.texture_backdrop_blur`)
 
 Cost: medium. The blur shader is straightforward (13-tap separable, weights from `Blur.glsl` lifted as-is). The scaffolding is mostly `Texture` + `DrawPass` setup, mirroring `examples/exf`.
 
@@ -169,6 +169,6 @@ v3 changes are confined to:
 - `widgets/src/glass_panel.rs` (rewrite)
 - `widgets/src/blur_pass.rs` (new)
 - `widgets/src/lib.rs` (export blur_pass module)
-- `examples/aichat/src/main.rs` (instantiate scene + blur passes; bind blurred texture to glass panels)
+- `examples/aichat-agent2app/src/main.rs` (instantiate scene + blur passes; bind blurred texture to glass panels)
 
 Reverting these files restores v2. No platform code touched.

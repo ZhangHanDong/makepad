@@ -1,6 +1,6 @@
 use {
-    crate::makepad_draw::*,
     crate::makepad_draw::makepad_platform::script::std::ScriptStd,
+    crate::makepad_draw::*,
     crate::makepad_script::{script_err_not_found, ScriptFnRef, ScriptThreadId},
     crate::widget::{WidgetRef, WidgetUid},
     crate::widget_tree::CxWidgetExt,
@@ -277,7 +277,11 @@ impl CxSplashVmExt for Cx {
             return self.with_vm(f);
         }
 
-        let Some(mut isolated) = self.global::<CxWidgetAsync>().isolated_vms.vms.remove(&vm_id)
+        let Some(mut isolated) = self
+            .global::<CxWidgetAsync>()
+            .isolated_vms
+            .vms
+            .remove(&vm_id)
         else {
             // VM no longer exists (Splash gone / not yet allocated). Do NOT panic
             // (that would abort from a timer/async callback); fall back to the
@@ -326,7 +330,11 @@ impl CxSplashVmExt for Cx {
             return self.with_vm_thread(thread_id, f);
         }
 
-        let Some(mut isolated) = self.global::<CxWidgetAsync>().isolated_vms.vms.remove(&vm_id)
+        let Some(mut isolated) = self
+            .global::<CxWidgetAsync>()
+            .isolated_vms
+            .vms
+            .remove(&vm_id)
         else {
             return self.with_vm_thread(thread_id, f);
         };
@@ -1045,7 +1053,8 @@ fn pump_widget_async(cx: &mut Cx) -> bool {
                         result: ret,
                     },
                 );
-            let result = cx.with_script_vm_id_thread(req.vm_id, req.caller_thread, |vm| vm.resume());
+            let result =
+                cx.with_script_vm_id_thread(req.vm_id, req.caller_thread, |vm| vm.resume());
             let is_paused = cx.with_script_vm_id_thread(req.vm_id, req.caller_thread, |vm| {
                 vm.thread().is_paused()
             });
@@ -1090,4 +1099,234 @@ fn pump_widget_async_hook(host: &mut dyn Any) -> bool {
     host.downcast_mut::<Cx>()
         .map(pump_widget_async)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod agent2app_multi_instance_tests {
+    use super::*;
+    use crate::widget::{Widget, WidgetNode};
+
+    // Headless coverage locks scoped `ui` lookup, isolate ownership, and isolate GC.
+    // The P1 `net.http_request` resume smoke test still needs a live Cx/Studio run
+    // because network pumping is driven by runtime app ticks.
+
+    struct TestWidget {
+        uid: WidgetUid,
+        children: Vec<(LiveId, WidgetRef)>,
+    }
+
+    impl ScriptApply for TestWidget {
+        fn script_apply(
+            &mut self,
+            _vm: &mut ScriptVm,
+            _apply: &Apply,
+            _scope: &mut Scope,
+            _value: ScriptValue,
+        ) {
+        }
+    }
+
+    impl WidgetNode for TestWidget {
+        fn widget_uid(&self) -> WidgetUid {
+            self.uid
+        }
+
+        fn children(&self, visit: &mut dyn FnMut(LiveId, WidgetRef)) {
+            for (name, child) in &self.children {
+                visit(*name, child.clone());
+            }
+        }
+
+        fn walk(&mut self, _cx: &mut Cx) -> Walk {
+            Walk::default()
+        }
+
+        fn area(&self) -> Area {
+            Area::Empty
+        }
+
+        fn redraw(&mut self, _cx: &mut Cx) {}
+    }
+
+    impl Widget for TestWidget {}
+
+    fn name(value: &str) -> LiveId {
+        LiveId::from_str_lc(value)
+    }
+
+    fn test_widget(uid: WidgetUid, children: Vec<(LiveId, WidgetRef)>) -> WidgetRef {
+        WidgetRef::new_with_inner(Box::new(TestWidget { uid, children }))
+    }
+
+    struct TestSplashTree {
+        first_splash_uid: WidgetUid,
+        second_splash_uid: WidgetUid,
+        first_display_uid: WidgetUid,
+        second_display_uid: WidgetUid,
+        _root: WidgetRef,
+        _first_splash: WidgetRef,
+        _second_splash: WidgetRef,
+        _first_display: WidgetRef,
+        _second_display: WidgetRef,
+    }
+
+    fn build_two_splash_tree(cx: &mut Cx) -> TestSplashTree {
+        let root_uid = WidgetUid::new();
+        let first_splash_uid = WidgetUid::new();
+        let second_splash_uid = WidgetUid::new();
+        let first_display_uid = WidgetUid::new();
+        let second_display_uid = WidgetUid::new();
+
+        let first_display = test_widget(first_display_uid, vec![]);
+        let second_display = test_widget(second_display_uid, vec![]);
+        let first_splash = test_widget(
+            first_splash_uid,
+            vec![(name("display"), first_display.clone())],
+        );
+        let second_splash = test_widget(
+            second_splash_uid,
+            vec![(name("display"), second_display.clone())],
+        );
+        let root = test_widget(
+            root_uid,
+            vec![
+                (name("first_splash"), first_splash.clone()),
+                (name("second_splash"), second_splash.clone()),
+            ],
+        );
+
+        crate::widget_tree::set_ui_root(cx, &root);
+        cx.widget_tree()
+            .observe_node(root_uid, name("root"), root.clone(), None);
+        cx.widget_tree().observe_node(
+            first_splash_uid,
+            name("first_splash"),
+            first_splash.clone(),
+            Some(root_uid),
+        );
+        cx.widget_tree().observe_node(
+            first_display_uid,
+            name("display"),
+            first_display.clone(),
+            Some(first_splash_uid),
+        );
+        cx.widget_tree().observe_node(
+            second_splash_uid,
+            name("second_splash"),
+            second_splash.clone(),
+            Some(root_uid),
+        );
+        cx.widget_tree().observe_node(
+            second_display_uid,
+            name("display"),
+            second_display.clone(),
+            Some(second_splash_uid),
+        );
+
+        TestSplashTree {
+            first_splash_uid,
+            second_splash_uid,
+            first_display_uid,
+            second_display_uid,
+            _root: root,
+            _first_splash: first_splash,
+            _second_splash: second_splash,
+            _first_display: first_display,
+            _second_display: second_display,
+        }
+    }
+
+    fn resolve_display_uid(cx: &mut Cx, vm_id: SplashVmId) -> WidgetUid {
+        cx.with_script_vm_id(vm_id, |vm| {
+            let value = vm.eval(script! { ui.display });
+            assert!(
+                !value.is_err(),
+                "ui.display should resolve in the scoped splash subtree"
+            );
+            let handle = value
+                .as_handle()
+                .expect("ui.display should return a widget handle");
+            vm.downcast_handle_gc::<CxWidgetHandleGc>(handle)
+                .expect("ui.display should be a CxWidgetHandleGc")
+                .uid
+        })
+    }
+
+    #[test]
+    fn test_scoped_ui_resolves_per_splash_instance() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let tree = build_two_splash_tree(&mut cx);
+        let first_vm = cx.alloc_splash_vm();
+        let second_vm = cx.alloc_splash_vm();
+
+        inject_splash_ui_handle(&mut cx, first_vm, tree.first_splash_uid);
+        inject_splash_ui_handle(&mut cx, second_vm, tree.second_splash_uid);
+
+        assert_eq!(resolve_display_uid(&mut cx, first_vm), tree.first_display_uid);
+        assert_eq!(
+            resolve_display_uid(&mut cx, second_vm),
+            tree.second_display_uid
+        );
+    }
+
+    #[test]
+    fn test_first_instance_survives_second_instance() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let tree = build_two_splash_tree(&mut cx);
+        let first_vm = cx.alloc_splash_vm();
+
+        inject_splash_ui_handle(&mut cx, first_vm, tree.first_splash_uid);
+        assert_eq!(resolve_display_uid(&mut cx, first_vm), tree.first_display_uid);
+
+        let second_vm = cx.alloc_splash_vm();
+        inject_splash_ui_handle(&mut cx, second_vm, tree.second_splash_uid);
+
+        assert_eq!(resolve_display_uid(&mut cx, first_vm), tree.first_display_uid);
+    }
+
+    #[test]
+    fn test_dead_splash_isolate_is_gc_reclaimed() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let vm_id = cx.alloc_splash_vm();
+        let thread_index =
+            cx.with_script_vm_id(vm_id, |vm| vm.thread().thread_id().to_index());
+        let target_uid = WidgetUid::new();
+        let async_id = ScriptAsyncId::new();
+
+        {
+            let state = cx.global::<CxWidgetAsync>();
+            state.thread_map.insert((vm_id, thread_index), (target_uid, async_id));
+            assert!(state.isolated_vms.vms.contains_key(&vm_id));
+            assert!(state.thread_map.contains_key(&(vm_id, thread_index)));
+        }
+
+        mark_splash_isolate_dead(vm_id);
+        let replacement_vm_id = cx.alloc_splash_vm();
+        assert_ne!(replacement_vm_id, vm_id);
+
+        let state = cx.global::<CxWidgetAsync>();
+        assert!(!state.isolated_vms.vms.contains_key(&vm_id));
+        assert!(!state.heap_to_vm.values().any(|owner| *owner == vm_id));
+        assert!(!state.thread_map.keys().any(|(owner, _)| *owner == vm_id));
+    }
+
+    #[test]
+    fn test_ui_lookup_missing_widget_errors() {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        let tree = build_two_splash_tree(&mut cx);
+        let first_vm = cx.alloc_splash_vm();
+
+        inject_splash_ui_handle(&mut cx, first_vm, tree.first_splash_uid);
+
+        let result = cx.with_script_vm_id(first_vm, |vm| vm.eval(script! { ui.nonexistent }));
+        assert!(result.is_err(), "missing widget lookup should error");
+        assert!(
+            result.as_handle().is_none(),
+            "missing lookup must not return a widget from another instance"
+        );
+    }
+
+    #[test]
+    #[ignore = "Manual P1 smoke: run aichat in Studio and render two runsplash apps, including one net.http_request path."]
+    fn test_multi_instance_manual_smoke() {}
 }

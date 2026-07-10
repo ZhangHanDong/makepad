@@ -342,8 +342,7 @@ impl Widget for KeyboardView {
             // blink redraws the KeyboardView but not the field). A genuine
             // field move always redraws the field, so this never misses one.
             if cx.get_ime_area_rect().size.y > 0.0 {
-                let height_changed = (self.keyboard_height
-                    - self.last_reconciled_keyboard_height)
+                let height_changed = (self.keyboard_height - self.last_reconciled_keyboard_height)
                     .abs()
                     > KEYBOARD_SHIFT_EPSILON;
                 self.last_reconciled_keyboard_height = self.keyboard_height;

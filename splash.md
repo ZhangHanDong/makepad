@@ -438,15 +438,14 @@ RoundedView{
 
 ## Interactivity that ACTUALLY works (read this for calculators / counters / forms)
 
-The `ui` object is only injected into the scope of an **`on_click` / `on_return` / `on_change` closure**. It is **NOT visible inside a separately-declared `fn`**. So:
+The `ui` object is injected as a global for the current `runsplash` app. It is visible inside callbacks and separately-declared helper `fn`s, and `ui.<id>` resolves within the widget tree emitted by that same app before any global lookup. Multiple interactive `runsplash` apps can coexist, so ids like `display` may be reused safely inside each app.
 
-- ✅ Do all `ui.<id>.set_text(...)` / `ui.<id>.text()` calls **inline inside the closure**.
-- ❌ Do NOT call a helper `fn` that itself references `ui` — it will fail with "variable ui not found".
-- Shared state lives in top-level `let` variables (these persist across clicks). Mutate them inline.
+- ✅ Use `ui.<id>.set_text(...)` / `ui.<id>.text()` inline or from helper `fn`s.
+- ✅ Give every widget you update a `:=` id that is reachable as `ui.<id>`.
+- Shared state lives in top-level `let` variables (these persist across clicks). Mutate them from callbacks or helper `fn`s.
 - Arithmetic must stay **numeric** — never store a number as a string and add it (string `+` concatenates: `"5"+"3"=="53"`). Build numbers with `acc = acc*10 + digit`. Display with `"" + number`. Never use `as int` (produces NaN).
-- The widget you update with `set_text` must be reachable as `ui.<id>` — give it a `:=` id and keep it directly addressable.
 
-### Working glass calculator (numeric, inline `ui`, copy this shape)
+### Working glass calculator (numeric scoped `ui`, copy this shape)
 
 ```splash
 let acc = 0.0       // number currently being entered
@@ -489,7 +488,7 @@ View{ width: Fill height: Fit flow: Down spacing: 12 padding: 18
   }
 ```
 
-Every digit/operator handler is **inline** (no helper `fn`), so `ui.display` is in scope, and all arithmetic is numeric. This pattern computes correctly AND looks glassy.
+Every digit/operator handler keeps arithmetic numeric and updates the scoped `ui.display`; helper `fn`s can also use `ui` when that keeps the script clearer. This pattern computes correctly AND looks glassy.
 
 ## Glass gotchas
 

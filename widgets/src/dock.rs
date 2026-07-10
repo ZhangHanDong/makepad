@@ -631,7 +631,9 @@ impl Dock {
     /// existing ID, so subsequent allocations can't collide.
     fn next_internal_id(&mut self) -> LiveId {
         if self.next_internal_id < INTERNAL_ID_FLOOR {
-            let max = self.dock_items.keys()
+            let max = self
+                .dock_items
+                .keys()
                 .map(|k| k.0)
                 .filter(|v| *v >= INTERNAL_ID_FLOOR)
                 .max();
@@ -1061,7 +1063,11 @@ impl Dock {
             target_tabs_id
         };
 
-        let split_id = if target_tabs_id == root { root } else { new_split_id };
+        let split_id = if target_tabs_id == root {
+            root
+        } else {
+            new_split_id
+        };
         let split = match part {
             DropPart::Left => DockItem::Splitter {
                 axis: SplitterAxis::Horizontal,
@@ -1120,7 +1126,14 @@ impl Dock {
             part,
         );
         if did_split {
-            self.redraw_item(cx, if target_tabs_id == root { root } else { new_split_id });
+            self.redraw_item(
+                cx,
+                if target_tabs_id == root {
+                    root
+                } else {
+                    new_split_id
+                },
+            );
             self.area.redraw(cx);
         }
         did_split
@@ -2138,4 +2151,3 @@ impl DockRef {
         cx.start_dragging(vec![item]);
     }
 }
-

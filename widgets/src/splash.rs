@@ -192,10 +192,55 @@ impl Splash {
             cx.widget_tree_mark_dirty(self.uid);
         }
 
-        // If the Splash code defines fn tick(), auto-start a 1s interval
-        if body.contains("fn tick(") || body.contains("fn tick (") {
+        // Start the 1s tick timer only if `tick` actually resolves as a
+        // callable function in the eval'd scope. The old string test
+        // body.contains("fn tick(") is NOT equivalent: it could start a timer
+        // for a `tick` that isn't callable at top level (e.g. nested in a
+        // View{}/widget block, or view-wrapped because is_full_script picked
+        // view mode), producing a misleading `variable tick not found` every
+        // second with no working timer.
+        let tick_found = self.resolves_fn(cx, id!(tick));
+        if tick_found {
             self.tick_timer = cx.start_interval(1.0);
         }
+        log!(
+            "[SPLASH] eval done: uid={}, gen={}, tick_found={}",
+            unique_id,
+            self.eval_generation,
+            tick_found
+        );
+    }
+
+    /// Whether `name` resolves to a non-nil, non-error value (a callable
+    /// function) at the scope of the current (last-eval'd) body. Mirrors the
+    /// lookup `call_fn` performs, so the tick timer only runs when `tick` is
+    /// actually invokable.
+    fn resolves_fn(&mut self, cx: &mut Cx, name: LiveId) -> bool {
+        let unique_id = self.last_unique_id;
+        if unique_id == 0 {
+            return false;
+        }
+        cx.with_script_vm_id(self.vm_id, |vm| {
+            let scope_obj = {
+                let bodies = vm.bx.code.bodies.borrow();
+                let mut found = None;
+                for body in bodies.iter() {
+                    if let ScriptSource::Mod(m) = &body.source {
+                        if m.line == unique_id {
+                            found = Some(body.scope.as_object());
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            if let Some(scope) = scope_obj {
+                let f = vm.bx.heap.scope_value(scope, name, vm.trap());
+                !f.is_nil() && !f.is_err()
+            } else {
+                false
+            }
+        })
     }
 
     /// Call a named function defined in the Splash code's scope.
@@ -380,5 +425,75 @@ impl SplashRef {
         if let Some(mut inner) = self.borrow_mut() {
             inner.stream_append(cx, chunk);
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_module_tests {
+    use super::*;
+
+    fn with_widgets_vm<R>(f: impl FnOnce(&mut ScriptVm) -> R) -> R {
+        let mut cx = Cx::new(Box::new(|_, _| {}));
+        cx.with_vm(|vm| {
+            crate::makepad_draw::makepad_platform::script::script_mod(vm);
+            crate::script_mod(vm);
+            f(vm)
+        })
+    }
+
+    #[test]
+    fn test_script_mod_injects_agent_global() {
+        with_widgets_vm(|vm| {
+            let agent = vm.eval(script! { agent });
+            assert!(agent.is_object(), "agent should resolve to a module object");
+
+            let notify = vm.eval(script! { agent.notify });
+            assert!(
+                notify.is_object(),
+                "agent.notify should resolve to a callable function object"
+            );
+        });
+    }
+
+    #[test]
+    fn test_register_agent_module_twice_keeps_notify_callable() {
+        with_widgets_vm(|vm| {
+            register_agent_module(vm);
+
+            let notify = vm.eval(script! { agent.notify });
+            assert!(
+                notify.is_object(),
+                "agent.notify should remain callable after double registration"
+            );
+        });
+    }
+
+    #[test]
+    fn test_aichat_has_no_explicit_agent_registration() {
+        let aichat = include_str!("../../examples/aichat/src/main.rs");
+
+        assert!(
+            !aichat.contains("register_agent_module"),
+            "aichat should rely on makepad_widgets::script_mod for agent registration"
+        );
+    }
+
+    #[test]
+    fn test_agent_notify_missing_args_returns_nil() {
+        with_widgets_vm(|vm| {
+            let result = vm.eval(script! { agent.notify() });
+            assert!(result.is_nil(), "agent.notify() should return NIL");
+            assert!(
+                !result.is_err(),
+                "agent.notify() without arguments should not error"
+            );
+
+            let subsequent = vm.eval(script! { 123 });
+            assert_eq!(
+                subsequent.as_number(),
+                Some(123.0),
+                "VM should evaluate normally after agent.notify()"
+            );
+        });
     }
 }

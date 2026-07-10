@@ -2,14 +2,14 @@
 
 Status: open
 Severity: visual / spec compliance
-Spec: [examples/aichat/specs/aichat-liquid-glass-ui.spec.md](../specs/aichat-liquid-glass-ui.spec.md)
+Spec: [examples/aichat-agent2app/specs/aichat-liquid-glass-ui.spec.md](../specs/aichat-liquid-glass-ui.spec.md)
 Reference image: 4/24 ChatGPT mountain-wallpaper mock + 4/27 mountain-wallpaper redesign mock
 Owner: aichat
 Discovered: 2026-04-27 via `/screenshot` verification of running build
 
 ## Symptom
 
-Running `makepad-example-aichat` and capturing the window over a non-trivial desktop produces a chat shell that looks like a flat dark green rectangle. Compared to the approved reference mocks, four visual properties are missing or wrong:
+Running `makepad-example-aichat-agent2app` and capturing the window over a non-trivial desktop produces a chat shell that looks like a flat dark green rectangle. Compared to the approved reference mocks, four visual properties are missing or wrong:
 
 | Reference mock | Current build |
 |---|---|
@@ -29,7 +29,7 @@ Two independent problems compound:
 
 ### 1. Window is transparent at the OS layer, but panels are nearly opaque
 
-`examples/aichat/src/main.rs:467-498`:
+`examples/aichat-agent2app/src/main.rs:467-498`:
 
 ```
 main_window := Window{
@@ -101,9 +101,9 @@ A common false alarm here is "we need a backdrop blur pass like NSVisualEffectVi
 
 | # | Change | File | Cost | Visual gain |
 |---|---|---|---|---|
-| 1 | Lower per-panel `tint_alpha` (shell ~0.55, sidebar ~0.72, main ~0.62, card ~0.82, composer ~0.78) | `examples/aichat/src/main.rs` | trivial | ★★★ desktop透出立刻显形 |
+| 1 | Lower per-panel `tint_alpha` (shell ~0.55, sidebar ~0.72, main ~0.62, card ~0.82, composer ~0.78) | `examples/aichat-agent2app/src/main.rs` | trivial | ★★★ desktop透出立刻显形 |
 | 2 | Rewrite `GlassPanel` shader: top highlight band + external rim halo + chromatic edge | `widgets/src/glass_panel.rs` | medium | ★★★ glass shape stops looking like a colored rectangle |
-| 3 | Per-layer halo / border / highlight tuning | `examples/aichat/src/main.rs` | low | ★★ depth stack reads correctly |
+| 3 | Per-layer halo / border / highlight tuning | `examples/aichat-agent2app/src/main.rs` | low | ★★ depth stack reads correctly |
 | 4 | Real backdrop blur (NSVisualEffectView injection on macOS, framebuffer pass blur on other platforms) | `platform/src/os/apple/...` + new `Pass` | high | ★★ frosting; deferred |
 
 `#1 + #2 + #3` together close ~85% of the gap and are scoped to two files. `#4` is genuine new infrastructure and can ship later without breaking the spec.

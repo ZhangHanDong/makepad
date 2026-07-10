@@ -5,7 +5,7 @@ tags: [makepad, aichat, claude-code, backend, agent]
 
 ## Intent
 
-Add Claude Code as a selectable `makepad-example-aichat` backend through the existing
+Add Claude Code as a selectable `makepad-example-aichat-agent2app` backend through the existing
 `makepad_ai::Agent` abstraction. The first implementation must use Claude CLI's
 headless stream-json mode rather than terminal automation, so aichat can receive
 structured streaming text without depending on terminal screen scraping.
@@ -34,8 +34,8 @@ structured streaming text without depending on terminal screen scraping.
 - old/studio/ai/src/agent.rs
 - old/studio/ai/src/lib.rs
 - old/studio/ai/Cargo.toml
-- examples/aichat/src/main.rs
-- examples/aichat/specs/**
+- examples/aichat-agent2app/src/main.rs
+- examples/aichat-agent2app/specs/**
 - docs/research/aichat-claude-code-backend.md
 - docs/superpowers/plans/**
 
@@ -154,7 +154,7 @@ Scenario: Claude Code process or JSON failure is surfaced
 
 Scenario: aichat dropdown exposes Claude Code when available
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_backend_type_includes_claude_code
   Given `ClaudeCodeCliAgent::is_available()` is true through a test hook
   When available backends are detected
@@ -164,7 +164,7 @@ Scenario: aichat dropdown exposes Claude Code when available
 
 Scenario: aichat creates a Claude Code Agent without changing other backends
   Test:
-    Package: makepad-example-aichat
+    Package: makepad-example-aichat-agent2app
     Filter: aichat_create_claude_code_agent
   Given the `Claude Code` backend is selected
   When aichat creates an agent

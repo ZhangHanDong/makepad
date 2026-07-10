@@ -331,9 +331,9 @@ impl ScrollBars {
             // Turtle::compute_final_size, so subtract the margin for the visible height.
             let margin = cx.turtle().walk().margin.height();
             rect_now.size.y = match height {
-                Size::Fit { max: Some(max), .. } => {
-                    max.eval_height(cx).map_or(view_total.y, |m| view_total.y.min(m - margin))
-                }
+                Size::Fit { max: Some(max), .. } => max
+                    .eval_height(cx)
+                    .map_or(view_total.y, |m| view_total.y.min(m - margin)),
                 _ => view_total.y,
             };
         }
@@ -341,9 +341,9 @@ impl ScrollBars {
             let width = cx.turtle().walk().width;
             let margin = cx.turtle().walk().margin.width();
             rect_now.size.x = match width {
-                Size::Fit { max: Some(max), .. } => {
-                    max.eval_width(cx).map_or(view_total.x, |m| view_total.x.min(m - margin))
-                }
+                Size::Fit { max: Some(max), .. } => max
+                    .eval_width(cx)
+                    .map_or(view_total.x, |m| view_total.x.min(m - margin)),
                 _ => view_total.x,
             };
         }

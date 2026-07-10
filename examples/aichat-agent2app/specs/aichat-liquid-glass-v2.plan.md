@@ -16,15 +16,15 @@ Cost summary:
 
 | Phase | Files | Effort | Risk |
 |---|---|---|---|
-| 1. Per-layer alpha rebalance | `examples/aichat/src/main.rs` | trivial | low |
+| 1. Per-layer alpha rebalance | `examples/aichat-agent2app/src/main.rs` | trivial | low |
 | 2. GlassPanel shader rewrite | `widgets/src/glass_panel.rs` | medium | low — additive instance params |
-| 3. Per-panel halo / highlight tuning | `examples/aichat/src/main.rs` | low | low |
-| 4. Slider scaling curve | `examples/aichat/src/main.rs` | trivial | low |
+| 3. Per-panel halo / highlight tuning | `examples/aichat-agent2app/src/main.rs` | low | low |
+| 4. Slider scaling curve | `examples/aichat-agent2app/src/main.rs` | trivial | low |
 
 ## Phase 1 — per-layer alpha rebalance
 
 ### Critical files
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 ### Current state
 ```rust
@@ -104,7 +104,7 @@ hex colors to match spec table (prose `#x05221BD2`, code `#x021511EB`).
 - New test verifying `glass_opacity_values(0.10).shell ≈ 0.55 * 0.595 ≈ 0.327`.
 
 ### Verification
-- `cargo run -p makepad-example-aichat`
+- `cargo run -p makepad-example-aichat-agent2app`
 - `/screenshot` — desktop wallpaper visible through every panel; sidebar tone
   distinguishably warmer than main area when over a wallpaper with vertical
   color variation.
@@ -234,7 +234,7 @@ mod.widgets.GlassPanel = View{
 ## Phase 3 — per-panel halo / highlight tuning
 
 ### Critical files
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 ### Changes
 At each existing `GlassPanel` declaration, add:
@@ -257,7 +257,7 @@ drop them now). Also remove `specular_strength` since it's deprecated.
 ## Phase 4 — slider behavior + acceptance test wiring
 
 ### Critical files
-- `examples/aichat/src/main.rs`
+- `examples/aichat-agent2app/src/main.rs`
 
 ### Changes
 - Update slider min/max/default to match v2 spec (slider is `[0%, 100%]`,
@@ -272,7 +272,7 @@ drop them now). Also remove `specular_strength` since it's deprecated.
   spec scenario notes (already done — spec says "captured and sampled").
 
 ### Verification
-- `cargo test -p makepad-example-aichat` passes.
+- `cargo test -p makepad-example-aichat-agent2app` passes.
 - Manual sweep: drag slider 10% → 100%, observe smooth ghost-to-opaque
   transition with desktop visible at low end, near-opaque at 100%.
 
@@ -280,7 +280,7 @@ drop them now). Also remove `specular_strength` since it's deprecated.
 
 End-to-end visual check vs reference:
 
-1. Run `cargo run -p makepad-example-aichat` over a desktop with a wallpaper
+1. Run `cargo run -p makepad-example-aichat-agent2app` over a desktop with a wallpaper
    that has clear regional color variation (the spec example uses mountain
    landscape).
 2. `/screenshot` and compare to the 4/27 reference image.
@@ -293,7 +293,7 @@ End-to-end visual check vs reference:
    - Composer暖金 send button still warm-gold against the panel.
 
 If any of those fail, file a follow-up issue under
-`examples/aichat/issues/` and link it from this plan.
+`examples/aichat-agent2app/issues/` and link it from this plan.
 
 ## What v2 does **not** do
 
@@ -308,7 +308,7 @@ If any of those fail, file a follow-up issue under
 ## Rollback
 
 All changes are local to two files (`widgets/src/glass_panel.rs` +
-`examples/aichat/src/main.rs`). Revert these two files to restore v1 visual.
+`examples/aichat-agent2app/src/main.rs`). Revert these two files to restore v1 visual.
 The deprecated `use_scene_blur` / `blur_amount` instance params are kept as
 no-ops in this commit, so any other consumer of `GlassPanel` (none exist
 in-tree at present) won't break.
