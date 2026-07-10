@@ -68,7 +68,7 @@ GenUI（实现层）的飞轮，去填"设备原生 A2App"这个对位空缺。
 | OHOS 网络（Agent 路由打通） | 桥能力 | OHOS NetworkBackend（HTTP+SSE，requestInStream）跨 NAPI 跑通 | **达到，超出 deck 既有清单** |
 | Agent 作为应用后端（thin client 拓扑） | 贯穿 | aichat → octos agent host → Moonshot，data-only SSE replace/token/done 流式回渲 | **拓扑达到** |
 | **Splash DSL 流式生成 UI（核心命题）** | M3–M6③ / M6–M9 | aichat 是手写应用；无 Agent 生成 widget subtree、无 Splash VM 上机、无增量 parse→骨架→填充→patch | **未做（核心 gap）** |
-| Splash Isolate 沙箱（预算/trap/闸门/审批） | M3–M6 | 仓库有 `splash.rs`/`examples/isolate`，未在 OHOS 上机 | **未做** |
+| Splash Isolate 沙箱（预算/trap/闸门/审批） | M3–M6 | 仓库有 `splash.rs`/`examples/splash`（isolate 沙箱 example 尚不存在），未在 OHOS 上机 | **未做** |
 | 玻璃设计系统 / 多 pass shader 管线 | M3–M6 | 模拟器 GLES3-on-Metal 自绘起不来；玻璃/blur/SDF 未做 | **未做（真机解锁）** |
 | Demo 一 / Demo 二 + 指标 | M6–M9 | 无 | **未做** |
 | AppUI v1（turn/context/tool/ledger API 表面） | M6–M9 | 用 makepad_ai 的 AiBackend，非 deck 定义的 AppUI 表面 | **未做** |

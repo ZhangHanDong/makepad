@@ -4,7 +4,7 @@
 需求对照见 `docs/a2app-requirements-gap.md`；本文件是执行顺序与状态的
 唯一权威，随进度更新。
 
-## 当前状态（更新于 2026-06-17）
+## 当前状态（更新于 2026-07-10）
 
 已完成并提交（未推送时在此标注）：
 
@@ -23,26 +23,69 @@ P0+P1 全部修复；P2 结构债排入 R1。
 真机构建必须无此 flag；`tools/ohos_device_run.sh` 用 `env -u MAKEPAD`
 强制隔离并在检测到时拒绝运行，`init_cx_os` 亦有启动告警兜底。
 
-## R0 · 真机收口（当前阻塞点：两步人工操作）
+## R0 · 真机收口（当前阻塞点：环境 + 两步人工操作 + 审计接线）
+
+**第 0 步 · 工具链前置（2026-07-10 审查发现，先于一切）**：本机当前
+**没有 DevEco Studio、没有 hdc、任何 rustup 工具链下都没有 OHOS
+target**——`tools/ohos_device_run.sh` 第一道文件检查即退出。模拟器
+证据是在别的环境产出的。先装 DevEco Studio（或换到有环境的机器），
+再谈下面的步骤。
 
 等待用户：① 手机 USB 连接 + 开发者模式/USB 调试 ② DevEco 打开生成
-工程登录华为账号做一次 AGC 自动签名（注册设备 UDID、生成 .p12/.cer/.p7b）。
+工程登录华为账号做一次 AGC 自动签名（自动注册设备 UDID、生成
+.p12/.cer/.p7b）。完整操作步骤与签名环境变量
+（`OHOS_SIGN_P12/P12_PWD/CERT/PROFILE` 等）见
+`tools/ohos_device_run.sh` 头注释。
+
+**已知接线缺陷（跑真机前必须修，否则步骤 1 的产出关不掉步骤 4）**：
+
+- completion audit 的 P5 闸门硬性要求证据 `Command:` 匹配
+  `native_textinput_device_runtime_evidence.sh`。但该脚本是 **Studio
+  证据脚本**：本身只经 `cargo-makepad studio` 桥向运行中的 Studio
+  实例发 RunItem（不直接构建/签名/安装/抓 hilog，transcript 是
+  Studio 协议流）；Studio 收到后按 `makepad.splash` 的
+  `RunOhosPackage` 以 `MAKEPAD=ohos` 触发 `cargo-makepad ohos run`，
+  而这条 run 路径不做签名、只认预置的 `makepad-default-signed.hap`。
+  `ohos_device_run.sh` 签出的却是 `makepad-default-device-signed.hap`
+  （故意不同名）。两条管道从未接线：照步骤 1 跑真机，产出的证据
+  过不了本闸门。修法二选一：审计的 `Command:` 模式放行
+  `ohos_device_run.sh` + hilog 转录，或让 evidence 脚本接入真机
+  签名步骤。
+- 审计的 OHOS `Device:` 占位符检查不拒绝 `127.0.0.1:*` 回环地址，
+  模拟器证据（格式修正后）可冒充真机证据通过 P5。需加回环拒绝，
+  且要同步改两处（`native_textinput_completion_audit.sh` 与
+  `native_textinput_device_runtime_evidence.sh` 各有一份重复的
+  占位符正则）。
 
 然后：
 
 1. `tools/ohos_device_run.sh -p <crate>` 构建（正常 shader 路径）、
-   签名、安装、启动。
+   签名、安装、启动。注意：脚本无 `bm uninstall` 预清理，三条签名
+   路径共用一个 bundle id，覆盖安装异签名旧包会失败——换签名材料后
+   先手动卸载。
 2. **验收 4 件**：
    - aichat 自绘界面真实可见（模拟器上因 GLES3-on-Metal 黑屏，真机首验）
    - NativeTextInput 可点击、可输入
-   - 中文 IME + 选区
-   - octos agent2app 真机端到端（octos 寻址从 `10.0.2.2` 改 host LAN IP；
-     octos 绑 127.0.0.1 时保留 `tools/ohos_tcp_forward.py`）
+   - 中文 IME + 选区。**范围限定**：契约目前只有 text+selection，
+     无 composition 镜像（macOS 也没做，见 R1 第 4 项）——本项只验
+     拼音上屏后的文本回投 + 选区，不验组合中状态。
+   - octos agent2app 真机端到端。aichat 主链路 `OCTOS_BASE_URL`
+     已完全可配置（env 优先，退化到配置目录同名文件），真机只需设
+     `http://<host LAN IP>:port`，无需改代码；硬编码 `10.0.2.2` 的
+     只有调试工具（`tools/ohos_tcp_forward.py` 服务侧、
+     `ohos_sse_test_server.py`、native_text_input SSE smoke test），
+     用到时手动改。octos 绑 127.0.0.1 时保留
+     `tools/ohos_tcp_forward.py`（已绑 0.0.0.0，LAN 场景可直接用）。
 3. **P0-4 采证**（唯一遗留 P0）：首跑抓 LayoutTrace
    （`[MakepadNTI]` 的 `makepad_rect` vs `onAreaChange`），验证
    Makepad 逻辑单位 = ArkUI vp 的 1:1 假设；不成立则补换算。
-4. 证据文档收口：completion audit 目前标 `ohos-runtime.md` incomplete；
-   真机证据落盘后关闭 P5 gate。
+   采集无自动化，手动 `hdc shell hilog | grep MakepadNTI` 落盘到
+   `docs/native-textinput-evidence/`。判定标准：两组矩形逐项相差
+   ≤1px（取整误差）即认定 1:1 成立。
+4. 证据文档收口：completion audit 的 P5 gate 目前不接受
+   `ohos-runtime.md`（Status/BuildId/Command/Verified/Transcript
+   多项格式不满足其精确匹配，且当前证据本就是模拟器切片）；按上文
+   接线缺陷修好审计后，真机证据落盘关闭 P5 gate。
 
 ## R1 · 包装层成体系（R0 后；与 R2 可部分并行）
 
@@ -73,7 +116,9 @@ codegen（第 1 项）是机械工程，适合交给低成本模型执行。
 从「证明了管道」到「证明了 deck 论点」的一步，前面全部工作都是铺路：
 
 1. Splash VM / isolate 搬上 OHOS（`widgets/src/splash.rs` /
-   `examples/isolate` 已在仓库，从未上机）。
+   `examples/splash` 已在仓库，从未上机；无 OHOS 平台 cfg 排除，
+   不会被编译门阻止。注意：此前文档引用的 `examples/isolate`
+   路径在仓库中不存在，isolate 沙箱 example 尚待创建）。
 2. 能力闸门 + 类型化审批（S11 容器：指令预算 20 万/次、trap 抢占、
    支付/网络/文件/设备白名单、高风险操作回到用户确认）。
 3. **流式生成闭环**：Agent 输出 Splash DSL → 增量 parse → 骨架渲染 →
