@@ -733,6 +733,7 @@ impl Cx {
                 }
                 CxOsOp::CreateNativeView { id, kind, props } => {
                     self.os.native_host_kinds.insert(id, kind);
+                    self.os.native_host_layouts.remove(&id);
                     match (kind, props) {
                         (
                             NativeHostKind::TextInput,
@@ -763,7 +764,11 @@ impl Cx {
                 CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
                     let rect = area.clipped_rect(self);
                     let shown = visible && rect.size.x > 0.0 && rect.size.y > 0.0;
-                    match self.os.native_host_kinds.get(&id) {
+                    if self.os.native_host_layouts.get(&id) == Some(&(rect, shown)) {
+                        continue;
+                    }
+                    let kind = self.os.native_host_kinds.get(&id).copied();
+                    match kind {
                         Some(NativeHostKind::Label) => self.oh_call_arkts_args(
                             "updateNativeLabel",
                             vec![
@@ -787,6 +792,9 @@ impl Cx {
                             "UpdateNativeViewLayout for unknown native host id {:?}",
                             id
                         ),
+                    }
+                    if kind.is_some() {
+                        self.os.native_host_layouts.insert(id, (rect, shown));
                     }
                 }
                 CxOsOp::UpdateNativeViewProps { id, update } => match update {
@@ -835,24 +843,34 @@ impl Cx {
                         self.oh_call_native_text_input_id("pasteNativeTextInput", id);
                     }
                 },
-                CxOsOp::DetachNativeView { id } => match self.os.native_host_kinds.get(&id) {
-                    Some(NativeHostKind::Label) => {
-                        self.oh_call_native_text_input_id("detachNativeLabel", id)
+                CxOsOp::DetachNativeView { id } => {
+                    self.os.native_host_layouts.remove(&id);
+                    match self.os.native_host_kinds.get(&id) {
+                        Some(NativeHostKind::Label) => {
+                            self.oh_call_native_text_input_id("detachNativeLabel", id)
+                        }
+                        Some(NativeHostKind::TextInput) => {
+                            self.oh_call_native_text_input_id("detachNativeTextInput", id)
+                        }
+                        None => {
+                            crate::error!("DetachNativeView for unknown native host id {:?}", id)
+                        }
                     }
-                    Some(NativeHostKind::TextInput) => {
-                        self.oh_call_native_text_input_id("detachNativeTextInput", id)
+                }
+                CxOsOp::CloseNativeView { id } => {
+                    self.os.native_host_layouts.remove(&id);
+                    match self.os.native_host_kinds.remove(&id) {
+                        Some(NativeHostKind::Label) => {
+                            self.oh_call_native_text_input_id("closeNativeLabel", id)
+                        }
+                        Some(NativeHostKind::TextInput) => {
+                            self.oh_call_native_text_input_id("closeNativeTextInput", id)
+                        }
+                        None => {
+                            crate::error!("CloseNativeView for unknown native host id {:?}", id)
+                        }
                     }
-                    None => crate::error!("DetachNativeView for unknown native host id {:?}", id),
-                },
-                CxOsOp::CloseNativeView { id } => match self.os.native_host_kinds.remove(&id) {
-                    Some(NativeHostKind::Label) => {
-                        self.oh_call_native_text_input_id("closeNativeLabel", id)
-                    }
-                    Some(NativeHostKind::TextInput) => {
-                        self.oh_call_native_text_input_id("closeNativeTextInput", id)
-                    }
-                    None => crate::error!("CloseNativeView for unknown native host id {:?}", id),
-                },
+                }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 }
@@ -912,6 +930,9 @@ pub struct CxOs {
     // CxOsOp layout/detach/close ops carry only the host id; this map,
     // filled at CreateNativeView, routes them to the right ArkTS host method.
     pub(crate) native_host_kinds: std::collections::HashMap<LiveId, NativeHostKind>,
+    // Final clipped layout resolved after drawing. Widgets queue their Area on
+    // every redraw so scroll view_shift is current; only changed layouts cross NAPI.
+    pub(crate) native_host_layouts: std::collections::HashMap<LiveId, (Rect, bool)>,
     pub display_size: Vec2d,
     pub dpi_factor: f64,
     pub media: CxOpenHarmonyMedia,
@@ -934,6 +955,7 @@ impl Default for CxOs {
         Self {
             first_after_resize: true,
             native_host_kinds: std::collections::HashMap::new(),
+            native_host_layouts: std::collections::HashMap::new(),
             display_size: dvec2(1260 as f64, 2503 as f64),
             dpi_factor: 3.25,
             media: Default::default(),

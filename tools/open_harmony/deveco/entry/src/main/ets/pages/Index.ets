@@ -20,6 +20,8 @@ struct NativeLabelItem {
       .width(this.state.width)
       .height(this.state.height)
       .fontColor('#334155')
+      .textAlign(TextAlign.Center)
+      .hitTestBehavior(HitTestMode.None)
       .visibility(this.state.visible ? Visibility.Visible : Visibility.Hidden)
   }
 }

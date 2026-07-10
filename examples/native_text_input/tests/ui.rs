@@ -3,6 +3,8 @@ use makepad_test::{makepad_test, Selector, TestApp};
 #[makepad_test]
 fn native_text_input_smoke_controls_are_visible(app: TestApp) {
     app.locator(Selector::id("native_input")).wait_visible();
+    app.locator(Selector::id("secure_native_input"))
+        .wait_visible();
     app.locator(Selector::id("native_label")).wait_visible();
     app.locator(Selector::id("clipped_native_input"))
         .wait_visible();

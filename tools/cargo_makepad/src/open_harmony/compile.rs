@@ -448,6 +448,30 @@ fn create_deveco_project(args: &[String], targets: &[OpenHarmonyTarget]) -> Resu
     add_dependencies(&args, &targets)
 }
 
+fn sync_deveco_runtime_template(project_output_path: &Path) -> Result<(), String> {
+    let cwd = std::env::current_dir().unwrap();
+    let template_main = cwd
+        .join(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("Unable to locate the `makepad/tools/` directory")
+        .join("open_harmony")
+        .join("deveco")
+        .join("entry")
+        .join("src")
+        .join("main");
+    let project_main = project_output_path.join("entry").join("src").join("main");
+
+    // The generated project is intentionally retained so DevEco signing stays
+    // configured. Refresh only the shared runtime sources before every build.
+    cp_all(&template_main.join("ets"), &project_main.join("ets"), false)?;
+    cp(
+        &template_main.join("module.json5"),
+        &project_main.join("module.json5"),
+        false,
+    )?;
+    Ok(())
+}
+
 fn add_dependencies(args: &[String], targets: &[OpenHarmonyTarget]) -> Result<(), String> {
     let cwd = std::env::current_dir().unwrap();
     let build_crate = get_build_crate_from_args(args)?;
@@ -458,6 +482,7 @@ fn add_dependencies(args: &[String], targets: &[OpenHarmonyTarget]) -> Result<()
         .join("target")
         .join("makepad-open-harmony")
         .join(&underscore_build_crate);
+    sync_deveco_runtime_template(&prj_path)?;
     let raw_file = prj_path
         .join("entry")
         .join("src")

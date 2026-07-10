@@ -9,9 +9,10 @@ script_mod! {
     use mod.widgets.*
 
     let SmokeButton = Button{
-        width: Fit
-        height: 32
-        padding: theme.mspace_1{left: theme.space_2, right: theme.space_2}
+        width: Fill
+        height: Fill
+        text: ""
+        padding: 0
         draw_bg +: {
             color: #xdbeafe
             color_hover: #xbfdbfe
@@ -21,15 +22,16 @@ script_mod! {
             border_color_hover: #x60a5fa
             border_color_down: #x1d4ed8
             border_color_focus: #x1d4ed8
-            border_radius: 5.0
+            border_size: 1
+            border_radius: 5
         }
-        draw_text +: {
-            color: #x0f172a
-            color_hover: #x0f172a
-            color_down: #xffffff
-            color_focus: #xffffff
-            text_style: theme.font_bold{font_size: theme.font_size_p}
-        }
+    }
+
+    let SmokeControl = View{
+        width: 132
+        height: 36
+        flow: Overlay
+        align: Center
     }
 
     let app = startup() do #(App::script_component(vm)){
@@ -50,12 +52,12 @@ script_mod! {
                             width: Fill height: Fit
                             flow: Down spacing: 4
                             Label{
-                                text: "NativeTextInput macOS MVP"
+                                text: "NativeTextInput device smoke"
                                 draw_text.color: #x0f172a
                                 draw_text.text_style: theme.font_bold{font_size: theme.font_size_2}
                             }
                             Label{
-                                text: "Studio RunItem smoke surface"
+                                text: "Makepad + ArkUI native controls"
                                 draw_text.color: #x475569
                             }
                         }
@@ -98,32 +100,91 @@ script_mod! {
                                 draw_bg +: {color: #xdbeafe}
                             }
 
-                            View{
-                                width: Fill height: Fit
-                                flow: Flow.Right{wrap: true} spacing: 8
-
-                                focus_button := SmokeButton{text: "Primary Focus"}
-                                set_button := SmokeButton{text: "Primary Set"}
-                                blur_button := SmokeButton{text: "Primary Blur"}
-                                select_button := SmokeButton{text: "Primary Select"}
-                                copy_button := SmokeButton{text: "Primary Copy"}
-                                cut_button := SmokeButton{text: "Primary Cut"}
-                                paste_button := SmokeButton{text: "Primary Paste"}
+                            Label{text: "Password native input (secure)" draw_text.color: #x475569}
+                            secure_native_input := NativeTextInput{
+                                width: Fill
+                                height: 36
+                                placeholder: "Password is masked"
+                                secure: true
+                                draw_bg +: {color: #xfef3c7}
                             }
 
+                            Label{text: "Primary field commands" draw_text.color: #x334155}
                             View{
                                 width: Fill height: Fit
                                 flow: Flow.Right{wrap: true} spacing: 8
 
-                                secondary_focus_button := SmokeButton{text: "Secondary Focus"}
-                                secondary_set_button := SmokeButton{text: "Secondary Set"}
-                                secondary_blur_button := SmokeButton{text: "Secondary Blur"}
-                                secondary_select_button := SmokeButton{text: "Secondary Select"}
-                                secondary_copy_button := SmokeButton{text: "Secondary Copy"}
-                                secondary_cut_button := SmokeButton{text: "Secondary Cut"}
-                                secondary_paste_button := SmokeButton{text: "Secondary Paste"}
-                                label_button := SmokeButton{text: "Set Label"}
-                                set_both_button := SmokeButton{text: "Set Both"}
+                                SmokeControl{
+                                    focus_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Focus"}
+                                }
+                                SmokeControl{
+                                    set_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Set Text"}
+                                }
+                                SmokeControl{
+                                    blur_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Blur"}
+                                }
+                                SmokeControl{
+                                    select_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Select All"}
+                                }
+                                SmokeControl{
+                                    copy_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Copy"}
+                                }
+                                SmokeControl{
+                                    cut_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Cut"}
+                                }
+                                SmokeControl{
+                                    paste_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Paste"}
+                                }
+                            }
+
+                            Label{text: "Secondary field and host-state commands" draw_text.color: #x334155}
+                            View{
+                                width: Fill height: Fit
+                                flow: Flow.Right{wrap: true} spacing: 8
+
+                                SmokeControl{
+                                    secondary_focus_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Focus"}
+                                }
+                                SmokeControl{
+                                    secondary_set_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Set Text"}
+                                }
+                                SmokeControl{
+                                    secondary_blur_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Blur"}
+                                }
+                                SmokeControl{
+                                    secondary_select_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Select All"}
+                                }
+                                SmokeControl{
+                                    secondary_copy_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Copy"}
+                                }
+                                SmokeControl{
+                                    secondary_cut_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Cut"}
+                                }
+                                SmokeControl{
+                                    secondary_paste_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "2 Paste"}
+                                }
+                                SmokeControl{
+                                    label_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Set Label"}
+                                }
+                                SmokeControl{
+                                    set_both_button := SmokeButton{}
+                                    NativeLabel{width: Fill height: Fill text: "Set Both"}
+                                }
                             }
                         }
 
@@ -136,19 +197,15 @@ script_mod! {
                             draw_bg.border_size: 1.0
                             draw_bg.border_radius: 8.0
 
-                            Label{
-                                text: "Event state"
-                                draw_text.color: #x0f172a
-                                draw_text.text_style: theme.font_bold{font_size: theme.font_size_4}
-                            }
-                            status_label := Label{text: "Status: ready" draw_text.color: #x334155}
-                            value_label := Label{text: "Value: " draw_text.color: #x334155}
-                            focus_state_label := Label{text: "Focus: idle" draw_text.color: #x334155}
-                            selection_state_label := Label{text: "Selection: idle" draw_text.color: #x334155}
-                            command_state_label := Label{text: "Commands: 0" draw_text.color: #x334155}
-                            change_state_label := Label{text: "Changed events: 0" draw_text.color: #x334155}
-                            label_state_label := Label{text: "NativeLabel: initial" draw_text.color: #x334155}
-                            host_state_label := Label{text: "Host: attached" draw_text.color: #x334155}
+                            NativeLabel{width: Fill height: 28 text: "Event state"}
+                            status_label := NativeLabel{width: Fill height: 24 text: "Status: ready"}
+                            value_label := NativeLabel{width: Fill height: 24 text: "Value: "}
+                            focus_state_label := NativeLabel{width: Fill height: 24 text: "Focus: idle"}
+                            selection_state_label := NativeLabel{width: Fill height: 24 text: "Selection: idle"}
+                            command_state_label := NativeLabel{width: Fill height: 24 text: "Commands: 0"}
+                            change_state_label := NativeLabel{width: Fill height: 24 text: "Changed events: 0"}
+                            label_state_label := NativeLabel{width: Fill height: 24 text: "NativeLabel: initial"}
+                            host_state_label := NativeLabel{width: Fill height: 24 text: "Host: attached"}
                         }
 
                         RoundedView{
@@ -218,7 +275,7 @@ pub struct App {
 
 impl App {
     fn set_label(&mut self, cx: &mut Cx, id: &[LiveId], text: &str) {
-        self.ui.label(cx, id).set_text(cx, text);
+        self.ui.native_label(cx, id).set_text(cx, text);
     }
 
     // One-shot dump of every smoke-control rect so headless drivers (hdc
@@ -327,12 +384,7 @@ impl MatchEvent for App {
         }
     }
 
-    fn handle_http_response(
-        &mut self,
-        _cx: &mut Cx,
-        request_id: LiveId,
-        response: &HttpResponse,
-    ) {
+    fn handle_http_response(&mut self, _cx: &mut Cx, request_id: LiveId, response: &HttpResponse) {
         if request_id == live_id!(ohos_http_smoke) {
             log!(
                 "NativeTextInput smoke: http response status={} body_len={}",

@@ -69,6 +69,15 @@ impl NativeLabel {
             self.last_text.push_str(text);
         }
         let rect = self.draw_bg.area().clipped_rect(cx);
+        #[cfg(target_env = "ohos")]
+        {
+            // Scroll view_shift is finalized after widget drawing. Queue the Area on
+            // every OHOS redraw and let the platform deduplicate the resolved rect.
+            cx.native_label(id)
+                .update(self.draw_bg.area(), self.visible);
+            self.last_sync_rect = Some(rect);
+        }
+        #[cfg(not(target_env = "ohos"))]
         if self.last_sync_rect != Some(rect) {
             cx.native_label(id)
                 .update(self.draw_bg.area(), self.visible);

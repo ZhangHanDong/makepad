@@ -89,7 +89,7 @@ device_placeholder_pattern() {
             printf '%s\n' '^(not recorded|Android emulator or device|.*placeholder.*|.*serial TBD.*)$'
             ;;
         ohos)
-            printf '%s\n' '^(not recorded|OpenHarmony device|.*serial or DevEco target name.*|.*target name.*|.*placeholder.*)$'
+            printf '%s\n' '^(not recorded|OpenHarmony device|.*serial or DevEco target name.*|.*target name.*|.*placeholder.*|.*127[.]0[.]0[.]1:[0-9]+.*|.*localhost.*)$'
             ;;
         *)
             return 1
@@ -132,6 +132,10 @@ run_self_test() {
     fi
     if ! is_placeholder_device ohos "OpenHarmony device"; then
         echo "self-test failed: generic OpenHarmony device was not rejected" >&2
+        exit 1
+    fi
+    if ! is_placeholder_device ohos "OpenHarmony local simulator (127.0.0.1:5555)"; then
+        echo "self-test failed: OpenHarmony loopback simulator was not rejected" >&2
         exit 1
     fi
 

@@ -1,10 +1,10 @@
 # A2App 落地路线图（R0–R3 + 标准化）
 
-真机（HarmonyOS 6.1，AGC 开发者签名已就绪）为主线的完整落地计划。
+真机（HarmonyOS 6.1，AGC 开发者账号已就绪）为主线的完整落地计划。
 需求对照见 `docs/a2app-requirements-gap.md`；本文件是执行顺序与状态的
 唯一权威，随进度更新。
 
-## 当前状态（更新于 2026-07-10）
+## 当前状态（更新于 2026-07-11）
 
 已完成并提交（未推送时在此标注）：
 
@@ -19,50 +19,34 @@
 绑定方案三线审查（Rust NAPI / ArkTS host / 契约一致性）已完成，
 P0+P1 全部修复；P2 结构债排入 R1。
 
-环境注意：本机 `~/.zshrc` 曾全局 `export MAKEPAD=ohos_sim`（已注释）。
-真机构建必须无此 flag；`tools/ohos_device_run.sh` 用 `env -u MAKEPAD`
-强制隔离并在检测到时拒绝运行，`init_cx_os` 亦有启动告警兜底。
+本机已有 DevEco Studio、hdc 和 `aarch64-unknown-linux-ohos` target；此前的
+环境阻塞已经解除。当前进程仍可能继承 `MAKEPAD=ohos_sim`，真机运行必须
+由 `makepad.splash` 的 `RunOhosPackage` 覆盖为 `MAKEPAD=ohos`，或在命令行
+辅助脚本前显式 `env -u MAKEPAD`。`init_cx_os` 仍保留启动告警兜底。
 
-## R0 · 真机收口（当前阻塞点：环境 + 两步人工操作 + 审计接线）
+## R0 · 真机收口（当前阻塞点：两步人工操作）
 
-**第 0 步 · 工具链前置（2026-07-10 审查发现，先于一切）**：本机当前
-**没有 DevEco Studio、没有 hdc、任何 rustup 工具链下都没有 OHOS
-target**——`tools/ohos_device_run.sh` 第一道文件检查即退出。模拟器
-证据是在别的环境产出的。先装 DevEco Studio（或换到有环境的机器），
-再谈下面的步骤。
+等待用户：① 手机 USB 连接 + 开发者模式/USB 调试并接受授权；② 分别用
+DevEco 打开 `target/makepad-open-harmony/makepad_example_native_text_input`
+和 `target/makepad-open-harmony/makepad_example_aichat`，登录华为账号，在
+`File > Project Structure > Signing Configs` 选择自动签名并 Apply。DevEco
+会把 AGC 材料写入各工程的 `build-profile.json5`，Hvigor 随后的
+`assembleHap` 会生成真机签名的 `makepad-default-signed.hap`。
 
-等待用户：① 手机 USB 连接 + 开发者模式/USB 调试 ② DevEco 打开生成
-工程登录华为账号做一次 AGC 自动签名（自动注册设备 UDID、生成
-.p12/.cer/.p7b）。完整操作步骤与签名环境变量
-（`OHOS_SIGN_P12/P12_PWD/CERT/PROFILE` 等）见
-`tools/ohos_device_run.sh` 头注释。
-
-**已知接线缺陷（跑真机前必须修，否则步骤 1 的产出关不掉步骤 4）**：
-
-- completion audit 的 P5 闸门硬性要求证据 `Command:` 匹配
-  `native_textinput_device_runtime_evidence.sh`。但该脚本是 **Studio
-  证据脚本**：本身只经 `cargo-makepad studio` 桥向运行中的 Studio
-  实例发 RunItem（不直接构建/签名/安装/抓 hilog，transcript 是
-  Studio 协议流）；Studio 收到后按 `makepad.splash` 的
-  `RunOhosPackage` 以 `MAKEPAD=ohos` 触发 `cargo-makepad ohos run`，
-  而这条 run 路径不做签名、只认预置的 `makepad-default-signed.hap`。
-  `ohos_device_run.sh` 签出的却是 `makepad-default-device-signed.hap`
-  （故意不同名）。两条管道从未接线：照步骤 1 跑真机，产出的证据
-  过不了本闸门。修法二选一：审计的 `Command:` 模式放行
-  `ohos_device_run.sh` + hilog 转录，或让 evidence 脚本接入真机
-  签名步骤。
-- 审计的 OHOS `Device:` 占位符检查不拒绝 `127.0.0.1:*` 回环地址，
-  模拟器证据（格式修正后）可冒充真机证据通过 P5。需加回环拒绝，
-  且要同步改两处（`native_textinput_completion_audit.sh` 与
-  `native_textinput_device_runtime_evidence.sh` 各有一份重复的
-  占位符正则）。
+接线审查结论（2026-07-11）：`RunOhosPackage` 调用的
+`cargo-makepad ohos run` 会先执行 `build()`，其 `build_hap()` 通过 Hvigor
+运行 `assembleHap`；生成工程中的 `signingConfigs` 会在这一步生效。因此
+Studio 证据脚本和 AGC 真机签名可以走同一条管道，无需放宽 P5 的
+`Command:` 规则。OHOS `Device:` 检查已同步拒绝 `127.0.0.1:*`/localhost，
+防止模拟器证据冒充真机证据。
 
 然后：
 
-1. `tools/ohos_device_run.sh -p <crate>` 构建（正常 shader 路径）、
-   签名、安装、启动。注意：脚本无 `bm uninstall` 预清理，三条签名
-   路径共用一个 bundle id，覆盖安装异签名旧包会失败——换签名材料后
-   先手动卸载。
+1. 启动并复用 Studio remote bridge；先 `ListBuilds`，对同 target 的旧构建
+   发 `ClearBuild`，再以 release `RunItem` 启动
+   `makepad-example-native-text-input-ohos` 或
+   `makepad-example-aichat-ohos`。RunItem 会构建、AGC 签名、安装并启动。
+   若覆盖安装报异签名错误，先用 hdc 卸载同 bundle id 的旧包再重跑。
 2. **验收 4 件**：
    - aichat 自绘界面真实可见（模拟器上因 GLES3-on-Metal 黑屏，真机首验）
    - NativeTextInput 可点击、可输入
@@ -82,10 +66,9 @@ target**——`tools/ohos_device_run.sh` 第一道文件检查即退出。模拟
    采集无自动化，手动 `hdc shell hilog | grep MakepadNTI` 落盘到
    `docs/native-textinput-evidence/`。判定标准：两组矩形逐项相差
    ≤1px（取整误差）即认定 1:1 成立。
-4. 证据文档收口：completion audit 的 P5 gate 目前不接受
-   `ohos-runtime.md`（Status/BuildId/Command/Verified/Transcript
-   多项格式不满足其精确匹配，且当前证据本就是模拟器切片）；按上文
-   接线缺陷修好审计后，真机证据落盘关闭 P5 gate。
+4. 证据文档收口：用 `native_textinput_device_runtime_evidence.sh` 的 OHOS
+   模式生成新的 `ohos-runtime.md` 和 Studio transcript，替换当前模拟器
+   切片；补充 hilog LayoutTrace 后运行 completion audit 关闭 P5 gate。
 
 ## R1 · 包装层成体系（R0 后；与 R2 可部分并行）
 
@@ -148,7 +131,8 @@ API 表面）→ A2App 标准草案 → conformance 测试套件 → 国产模�
 
 - 每阶段收口以证据文档为准（`docs/native-textinput-evidence/` +
   `tools/native_textinput_completion_audit.sh`），不以"代码写完"为准。
-- 真机构建永远走 `tools/ohos_device_run.sh`（ohos_sim 隔离）；模拟器
-  走 `tools/ohos_sim_sign_run.sh`。
+- 真机 UI 构建和运行走 Studio `RunOhosPackage` release RunItem；
+  `tools/ohos_device_run.sh` 只保留为非 UI 自动化/故障排查辅助。模拟器走
+  `tools/ohos_sim_sign_run.sh`。
 - 机械性、跨文件量大的工程（codegen、批量接线、静态检查同步）分配给
   低成本模型执行，架构决策与验收由主线把关。
