@@ -40,6 +40,13 @@ pub struct Fonts {
     slug_built_glyphs_this_redraw: usize,
     msdf_job_sender: FromUISender<QueuedMsdfJob>,
     msdf_result_receiver: ToUIReceiver<CompletedMsdfJob>,
+    /// Families whose member resources have all reached a terminal state
+    /// (loaded or failed) so there is nothing left to load — even if the family
+    /// never became "complete" (e.g. on wasm a `system_font` member can never
+    /// resolve). Once a family is settled, `ensure_fonts_loaded` stops
+    /// re-attempting resource loads every frame. Cleared implicitly by never
+    /// inserting when a member is still in flight.
+    settled_font_families: std::collections::HashSet<FontFamilyId>,
 }
 
 impl Fonts {
@@ -99,6 +106,7 @@ impl Fonts {
             slug_built_glyphs_this_redraw: 0,
             msdf_job_sender,
             msdf_result_receiver,
+            settled_font_families: std::collections::HashSet::new(),
         }
     }
 
@@ -202,6 +210,18 @@ impl Fonts {
             .get(&id)
             .map(|def| def.font_ids.len() == def.expected_member_count)
             .unwrap_or(false)
+    }
+
+    /// Whether every member resource of `id` has settled and there is nothing
+    /// left to load, so `ensure_fonts_loaded` can stop re-attempting. Distinct
+    /// from `is_font_family_complete`: a family can be settled-but-incomplete
+    /// (e.g. an unresolvable `system_font` member on wasm).
+    pub fn is_font_family_settled(&self, id: FontFamilyId) -> bool {
+        self.settled_font_families.contains(&id)
+    }
+
+    pub fn mark_font_family_settled(&mut self, id: FontFamilyId) {
+        self.settled_font_families.insert(id);
     }
 
     pub fn is_font_known(&self, id: FontId) -> bool {

@@ -1663,6 +1663,10 @@ impl CxOsApi for Cx {
         self.apple_bundle_load_dependencies();
     }
 
+    fn os_load_system_font(&mut self, query: &crate::cx_api::SystemFontQuery) -> Option<Vec<u8>> {
+        crate::os::apple::apple_system_fonts::load_system_font(query)
+    }
+
     fn spawn_thread<F>(&mut self, f: F)
     where
         F: FnOnce() + Send + 'static,

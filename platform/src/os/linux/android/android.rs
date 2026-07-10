@@ -2905,6 +2905,10 @@ impl CxOsApi for Cx {
         self.package_root = Some("makepad".to_string());
     }
 
+    fn os_load_system_font(&mut self, query: &crate::cx_api::SystemFontQuery) -> Option<Vec<u8>> {
+        super::android_system_fonts::load_system_font(query)
+    }
+
     fn spawn_thread<F>(&mut self, f: F)
     where
         F: FnOnce() + Send + 'static,
