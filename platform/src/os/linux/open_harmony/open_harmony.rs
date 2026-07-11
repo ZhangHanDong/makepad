@@ -64,6 +64,14 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
         temp_dir
     );
 
+    // OHOS reports target_os = "linux", so XDG-based crates (e.g. directories)
+    // would resolve to unwritable desktop paths like ~/.local/share. Point them
+    // at the app sandbox before any of them capture the environment.
+    std::env::set_var("HOME", &files_dir);
+    std::env::set_var("XDG_DATA_HOME", format!("{}/data", files_dir));
+    std::env::set_var("XDG_CONFIG_HOME", format!("{}/config", files_dir));
+    std::env::set_var("XDG_CACHE_HOME", &cache_dir);
+
     send_from_ohos_message(FromOhosMessage::Init {
         device_type,
         os_full_name,
@@ -167,7 +175,21 @@ impl Cx {
 
         self.gpu_info.performance = GpuPerformance::Tier1;
 
+        // Mirror the Android backend: publish the screen size so
+        // DisplayContext::is_desktop()/is_screen_size_known() work and apps
+        // can auto-select the mobile layout.
+        let dpi_factor = if self.os.dpi_factor > 0.0 {
+            self.os.dpi_factor
+        } else {
+            1.0
+        };
+        self.display_context.screen_size = self.os.display_size / dpi_factor;
+
         self.call_event_handler(&Event::Startup);
+        // The script-based live design system registers dep() entries (fonts etc.)
+        // during the Startup event, after the early ohos_load_dependencies call —
+        // load whatever appeared since, or text/icons render empty.
+        self.ohos_load_dependencies();
         self.redraw_all();
 
         while !self.os.quit {
@@ -311,6 +333,7 @@ impl Cx {
 
                 let dpi_factor = window.dpi_override.unwrap_or(self.os.dpi_factor);
                 let size = self.os.display_size / dpi_factor;
+                self.display_context.screen_size = size;
                 window.window_geom = WindowGeom {
                     dpi_factor,
                     can_fullscreen: false,
@@ -581,8 +604,10 @@ impl Cx {
                 .unwrap()
                 .read_to_end(path, &mut buffer)
             {
+                crate::log!("loaded dependency {} ({} bytes)", path, buffer.len());
                 dep.data = Some(Ok(Rc::new(buffer)));
             } else {
+                crate::error!("cannot load dependency {}", path);
                 dep.data = Some(Err("read_to_end failed".to_string()));
             }
         }
