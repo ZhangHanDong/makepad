@@ -4,7 +4,7 @@
 需求对照见 `docs/a2app-requirements-gap.md`；本文件是执行顺序与状态的
 唯一权威，随进度更新。
 
-## 当前状态（更新于 2026-07-11）
+## 当前状态（更新于 2026-07-12）
 
 已完成并提交（未推送时在此标注）：
 
@@ -15,6 +15,9 @@
 | `4eeea7d7` | 绑定审查 P0：布局 diff 去每帧阻塞 JS 调用、HTTP headers 先行、ohos_sim 真机隔离（含 `tools/ohos_device_run.sh`） |
 | `b5ac2287` | 绑定审查 P1：coalesce Create+Close 消除、kind 显式分发、ArkTS 未知 id trace |
 | `665c43f8` | secure 密码输入端到端（契约+schema+widget+四平台；OHOS 完整实现） |
+| `aa80e38c` | 修 OpenHarmony Studio 运行与 workspace PGO 配置冲突 |
+| `dba4affe` | aichat 真机适配（octos backend、rawfile、OpenGL、移动布局、ArkTS host） |
+| `140d4e1b` | 真机 EGL context、沙箱目录、移动布局检测修复 |
 
 绑定方案三线审查（Rust NAPI / ArkTS host / 契约一致性）已完成，
 P0+P1 全部修复；P2 结构债排入 R1。
@@ -24,10 +27,16 @@ P0+P1 全部修复；P2 结构债排入 R1。
 由 `makepad.splash` 的 `RunOhosPackage` 覆盖为 `MAKEPAD=ohos`，或在命令行
 辅助脚本前显式 `env -u MAKEPAD`。`init_cx_os` 仍保留启动告警兜底。
 
-## R0 · 真机收口（当前阻塞点：两步人工操作）
+## R0 · 真机收口（真机首跑已通过，剩证据采集与文档收口）
 
-等待用户：① 手机 USB 连接 + 开发者模式/USB 调试并接受授权；② 分别用
-DevEco 打开 `target/makepad-open-harmony/makepad_example_native_text_input`
+**2026-07-12 真机验证通过**（用户确认）：两步人工操作（USB 授权 +
+DevEco AGC 自动签名）已完成；经 `aa80e38c`/`dba4affe`/`140d4e1b` 三个
+修复（Studio PGO、aichat 真机适配、EGL context/沙箱目录/移动布局）后，
+应用在 HarmonyOS 6.1 真机上运行验证通过。
+
+原两步人工操作步骤（留档备查）：① 手机 USB 连接 + 开发者模式/USB
+调试并接受授权；② 分别用 DevEco 打开
+`target/makepad-open-harmony/makepad_example_native_text_input`
 和 `target/makepad-open-harmony/makepad_example_aichat`，登录华为账号，在
 `File > Project Structure > Signing Configs` 选择自动签名并 Apply。DevEco
 会把 AGC 材料写入各工程的 `build-profile.json5`，Hvigor 随后的
@@ -40,10 +49,11 @@ Studio 证据脚本和 AGC 真机签名可以走同一条管道，无需放宽 P
 `Command:` 规则。OHOS `Device:` 检查已同步拒绝 `127.0.0.1:*`/localhost，
 防止模拟器证据冒充真机证据。
 
-然后：
+剩余收口步骤（真机已可跑，缺的是逐项证据落盘）：
 
-1. 启动并复用 Studio remote bridge；先 `ListBuilds`，对同 target 的旧构建
-   发 `ClearBuild`，再以 release `RunItem` 启动
+1. ~~构建、签名、安装、启动~~ **已通**。复跑方法：启动并复用 Studio
+   remote bridge；先 `ListBuilds`，对同 target 的旧构建发
+   `ClearBuild`，再以 release `RunItem` 启动
    `makepad-example-native-text-input-ohos` 或
    `makepad-example-aichat-ohos`。RunItem 会构建、AGC 签名、安装并启动。
    若覆盖安装报异签名错误，先用 hdc 卸载同 bundle id 的旧包再重跑。
