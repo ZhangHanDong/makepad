@@ -160,11 +160,14 @@ let RunStudioExt = RunItem{
 hub.set_run_items([
     RunStudioRelease{name: "makepad-example-hello-world"}
     RunStudioRelease{name: "makepad-example-aichat"}
+    RunStudioRelease{name: "makepad-example-aichat-agent2app"}
+    RunStudioRelease{name: "makepad-example-comfyui"}
     RunStudioRelease{name: "makepad-example-browser"}
     RunStudioRelease{name: "makepad-example-charts"}
     RunStudioRelease{name: "makepad-example-windows-blur"}
     RunStudioRelease{name: "makepad-example-splash"}
     RunStudioRelease{name: "makepad-example-slides"}
+    RunStudioRelease{name: "makepad-example-isolate"}
     RunAndroid{name: "makepad-example-pdf"}
     RunStudioRelease{name: "makepad-example-map"}
     RunStudioRelease{name: "makepad-example-todo"}
@@ -176,6 +179,10 @@ hub.set_run_items([
     RunAndroidPackage{name: "makepad-example-native-text-input-android", package_name: "makepad-example-native-text-input"}
     RunOhosPackage{name: "makepad-example-native-text-input-ohos", package_name: "makepad-example-native-text-input"}
     RunOhosPackage{name: "makepad-example-aichat-ohos", package_name: "makepad-example-aichat"}
+    RunStudioRelease{name: "makepad-example-glass"}
+    RunStudioRelease{name: "makepad-example-bugfix"}
+    RunStudioRelease{name: "makepad-example-move-after-draw"}
+    RunStudioRelease{name: "makepad-example-audio-playback-decode-probe"}
     RunStudio{name: "makepad-studio"} 
     RunStudioExt{name: "makepad-studio-ext"} 
     RunStudioRelease{name: "makepad-example-xr"}

@@ -100,9 +100,18 @@ impl Cx {
                     );
                     self.os_type = tw.browser_info.into();
                     self.xr_capabilities = tw.xr_capabilities.into();
-                    self.os.window_geom = tw.window_info.into();
+                    let id_zero = CxWindowPool::id_zero();
+                    let mut new_geom: WindowGeom = tw.window_info.into();
+                    {
+                        let window = &mut self.windows[id_zero];
+                        window.os_dpi_factor = Some(new_geom.dpi_factor);
+                        new_geom = window.native_window_geom_to_layout(new_geom);
+                    }
+                    self.os.window_geom = new_geom.clone();
+                    self.windows[id_zero].window_geom = new_geom;
                     //self.default_inner_window_size = self.os.window_geom.inner_size;
 
+                    self.set_physical_keyboard_state(true);
                     self.call_event_handler(&Event::Startup);
                     self.redraw_all();
                     //self.platform.from_wasm(FromWasmCreateThread{thread_id:1});
@@ -111,10 +120,15 @@ impl Cx {
                 live_id!(ToWasmResizeWindow) => {
                     let tw = ToWasmResizeWindow::read_to_wasm(&mut to_wasm);
                     let old_geom = self.os.window_geom.clone();
-                    let new_geom = tw.window_info.into();
+                    let mut new_geom: WindowGeom = tw.window_info.into();
+                    let id_zero = CxWindowPool::id_zero();
+                    {
+                        let window = &mut self.windows[id_zero];
+                        window.os_dpi_factor = Some(new_geom.dpi_factor);
+                        new_geom = window.native_window_geom_to_layout(new_geom);
+                    }
                     if old_geom != new_geom {
                         self.os.window_geom = new_geom.clone();
-                        let id_zero = CxWindowPool::id_zero();
                         self.windows[id_zero].window_geom = new_geom.clone();
                         self.call_event_handler(&Event::WindowGeomChange(WindowGeomChangeEvent {
                             window_id: id_zero,
@@ -134,7 +148,11 @@ impl Cx {
                 }
 
                 live_id!(ToWasmTouchUpdate) => {
-                    let e: TouchUpdateEvent = ToWasmTouchUpdate::read_to_wasm(&mut to_wasm).into();
+                    let mut e: TouchUpdateEvent = ToWasmTouchUpdate::read_to_wasm(&mut to_wasm).into();
+                    let window_id = e.window_id;
+                    for touch in e.touches.iter_mut() {
+                        self.dpi_override_scale(&mut touch.abs, window_id);
+                    }
                     self.fingers.process_touch_update_start(e.time, &e.touches);
                     let e = Event::TouchUpdate(e);
                     self.call_event_handler(&e);
@@ -147,21 +165,24 @@ impl Cx {
                 }
 
                 live_id!(ToWasmMouseDown) => {
-                    let e: MouseDownEvent = ToWasmMouseDown::read_to_wasm(&mut to_wasm).into();
+                    let mut e: MouseDownEvent = ToWasmMouseDown::read_to_wasm(&mut to_wasm).into();
+                    self.dpi_override_scale(&mut e.abs, e.window_id);
                     self.fingers.process_tap_count(e.abs, e.time);
                     self.fingers.mouse_down(e.button, e.window_id);
                     self.call_event_handler(&Event::MouseDown(e))
                 }
 
                 live_id!(ToWasmMouseMove) => {
-                    let e: MouseMoveEvent = ToWasmMouseMove::read_to_wasm(&mut to_wasm).into();
+                    let mut e: MouseMoveEvent = ToWasmMouseMove::read_to_wasm(&mut to_wasm).into();
+                    self.dpi_override_scale(&mut e.abs, e.window_id);
                     self.call_event_handler(&Event::MouseMove(e.into()));
                     self.fingers.cycle_hover_area(live_id!(mouse).into());
                     self.fingers.switch_captures();
                 }
 
                 live_id!(ToWasmMouseUp) => {
-                    let e: MouseUpEvent = ToWasmMouseUp::read_to_wasm(&mut to_wasm).into();
+                    let mut e: MouseUpEvent = ToWasmMouseUp::read_to_wasm(&mut to_wasm).into();
+                    self.dpi_override_scale(&mut e.abs, e.window_id);
                     let button = e.button;
                     self.call_event_handler(&Event::MouseUp(e.into()));
                     self.fingers.mouse_up(button);
@@ -169,7 +190,8 @@ impl Cx {
                 }
 
                 live_id!(ToWasmScroll) => {
-                    let e: ScrollEvent = ToWasmScroll::read_to_wasm(&mut to_wasm).into();
+                    let mut e: ScrollEvent = ToWasmScroll::read_to_wasm(&mut to_wasm).into();
+                    self.dpi_override_scale(&mut e.abs, e.window_id);
                     self.call_event_handler(&Event::Scroll(e.into()));
                 }
 
@@ -563,8 +585,14 @@ impl Cx {
 
                     self.os.from_wasm(FromWasmSetDocumentTitle { title });
 
+                    // Inherit the OS-reported scale factor recorded by
+                    // ToWasmGetInfo / ToWasmResizeWindow on id_zero so the
+                    // freshly-created window's `dpi_override` machinery has
+                    // a baseline.
+                    let id_zero_os_dpi = self.windows[CxWindowPool::id_zero()].os_dpi_factor;
                     {
                         let window = &mut self.windows[window_id];
+                        window.os_dpi_factor = id_zero_os_dpi;
                         window.window_geom = self.os.window_geom.clone();
                     }
 
@@ -584,11 +612,13 @@ impl Cx {
                     size,
                     grab_keyboard,
                 } => {
+                    let parent_os_dpi = self.windows[parent_window_id].os_dpi_factor;
                     let mut geom = self.os.window_geom.clone();
                     geom.position = position;
                     geom.inner_size = size;
                     geom.outer_size = size;
                     let window = &mut self.windows[window_id];
+                    window.os_dpi_factor = parent_os_dpi;
                     window.window_geom = geom;
                     window.is_popup = true;
                     window.popup_parent = Some(parent_window_id);
@@ -611,8 +641,12 @@ impl Cx {
                 CxOsOp::XrStopPresenting => {
                     self.os.from_wasm(FromWasmXrStopPresenting {});
                 }
-                CxOsOp::ShowTextIME(area, pos, _config) => {
-                    let pos = area.clipped_rect(self).pos + pos;
+                CxOsOp::ShowTextIME(area, cursor_rect, _config) => {
+                    // Bottom of the caret line (matches the pre-rect point); the
+                    // hidden-textarea IME anchor only takes a point.
+                    let pos = area.clipped_rect(self).pos + cursor_rect.pos + cursor_rect.size;
+                    let window_id = self.get_window_id_of(&area).unwrap_or(CxWindowPool::id_zero());
+                    let pos = self.windows[window_id].layout_vec2d_to_native_points(pos);
                     self.os
                         .from_wasm(FromWasmShowTextIME { x: pos.x, y: pos.y });
                 }
@@ -1050,6 +1084,7 @@ impl Cx {
     }
 }
 
+#[link(wasm_import_module = "env")]
 extern "C" {
     pub fn js_time_now() -> f64;
 }

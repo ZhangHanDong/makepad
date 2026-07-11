@@ -19,6 +19,7 @@ Cargo.lock
 mandelbrot_presets.json
 makepad_settings.ron
 makepad_state*.ron
+/.makepad/
 aichat_history.json
 **/aichat_history.json
 key.ron

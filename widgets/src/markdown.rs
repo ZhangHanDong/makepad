@@ -1,7 +1,13 @@
 use crate::{
-    image::{ImageRef, ImageWidgetRefExt}, link_label::LinkLabel, makepad_derive_widget::*,
-    makepad_draw::*, math_view::{compile_math_into, CompiledMath}, text_flow::TextFlow, widget::*,
-    widget_async::ScriptAsyncResult, WidgetMatchEvent,
+    image::{ImageRef, ImageWidgetRefExt},
+    link_label::LinkLabel,
+    makepad_derive_widget::*,
+    makepad_draw::*,
+    math_view::{compile_math_into, CompiledMath},
+    text_flow::TextFlow,
+    widget::*,
+    widget_async::ScriptAsyncResult,
+    WidgetMatchEvent,
 };
 
 // SVG types (M-img-3). `parse_svg` is zero-deps XML parser; `SvgDocument` is

@@ -198,6 +198,28 @@ SolidView{width: Fill height: Fit draw_bg.color: #x0c0c18 flow: Down padding: In
 | `on_click: \|\|{...}` | Button click handler |
 | `on_return: \|\|{...}` | TextInput enter key |
 | `on_change: \|val\|{...}` | Slider value change |
+| `agent.notify("event", {...})` | Send a typed event to the Canvas bridge |
+
+### Canvas Event Bridge
+
+Use `agent.notify(event_id, json_payload)` when generated UI needs to send a structured event to the host:
+
+```splash
+Button{text: "+1" on_click: || agent.notify("inc", {})}
+Button{text: "Save" on_click: || agent.notify("save", {title: ui.title.text()})}
+```
+
+Canvas broadcasts notify events to WebSocket clients and `GET /event` waiters as one JSON line:
+
+```json
+{"type":"notify","event":"inc","payload":{}}
+```
+
+Named button clicks are still broadcast for compatibility, but they also use a typed envelope:
+
+```json
+{"type":"click","name":"start_btn"}
+```
 
 ### Reference: Pomodoro Timer (proven working)
 

@@ -248,6 +248,15 @@ impl MatchEvent for App {
 
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
         for action in actions {
+            if let SplashAction::Notify { event_id, payload } = action.cast() {
+                if let Some(bridge) = &self.bridge {
+                    if let Err(line) = bridge.send_notify_event(&event_id, &payload) {
+                        log!("{}", line);
+                    }
+                }
+                continue;
+            }
+
             if let Some(wa) = action.as_widget_action() {
                 if let Some(ButtonAction::Clicked(_)) = wa.action.downcast_ref::<ButtonAction>() {
                     let name = self

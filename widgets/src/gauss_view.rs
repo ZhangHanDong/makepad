@@ -7,6 +7,7 @@ pub struct GaussBlurSnapshot {
     pub scene_texture: Texture,
     pub mip_textures: Vec<Texture>,
     pub source_size: Vec2d,
+    pub source_y_flip: f32,
     pub dpi_factor: f64,
 }
 
@@ -56,7 +57,12 @@ pub(crate) fn begin_window_gauss_frame(
     let entry = cx.global::<GaussWindowGlobal>().entry_mut(window_id);
     entry.capture_active = capture_active;
     entry.requested_this_frame = false;
-    entry.snapshot = snapshot;
+    // Only replace the snapshot when we actually re-captured the scene this frame. On frames
+    // that skip the capture (e.g. a hover-only overlay repaint), keep the last good snapshot so
+    // the glass keeps refracting it instead of blinking to its flat fallback colour.
+    if capture_active {
+        entry.snapshot = snapshot;
+    }
 }
 
 pub(crate) fn finish_window_gauss_frame(cx: &mut Cx, window_id: WindowId) -> bool {
@@ -65,9 +71,10 @@ pub(crate) fn finish_window_gauss_frame(cx: &mut Cx, window_id: WindowId) -> boo
     entry.requested_last_frame = entry.requested_this_frame;
     entry.requested_this_frame = false;
     entry.capture_active = false;
-    if !entry.requested_last_frame {
-        entry.snapshot = None;
-    }
+    // Intentionally do NOT drop `entry.snapshot` here: a glass overlay can repaint on its own
+    // (hover/press) without the window running a full capture pass. Keeping the last snapshot
+    // means those repaints still refract the previously captured scene (≤1 capture stale, which
+    // is invisible) rather than flickering. It is refreshed whenever a full frame captures again.
     capture_changed
 }
 
@@ -78,11 +85,10 @@ pub fn request_window_gauss(cx: &mut Cx2d) -> Option<GaussBlurSnapshot> {
     let window_id = cx.get_current_window_id()?;
     let entry = cx.global::<GaussWindowGlobal>().entry_mut(window_id);
     entry.requested_this_frame = true;
-    if entry.capture_active {
-        entry.snapshot.clone()
-    } else {
-        None
-    }
+    // Return the last captured snapshot regardless of whether THIS frame ran a capture pass.
+    // This keeps the lensing stable across overlay-only repaints (the source of the hover
+    // flicker). `requested_this_frame` still drives a fresh capture on the next full frame.
+    entry.snapshot.clone()
 }
 
 script_mod! {
@@ -108,6 +114,7 @@ script_mod! {
 
             has_gauss: uniform(0.0)
             source_size: uniform(vec2(1.0, 1.0))
+            source_y_flip: uniform(0.0)
             blur_level: uniform(5.0)
             gradient_blur_edge: uniform(0.0)
             gradient_blur_edge_width: uniform(0.16)
@@ -129,8 +136,8 @@ script_mod! {
             noise_strength: instance(0.012)
             fallback_color: instance(#8c8c8c)
             shadow_color: instance(#0007)
-            shadow_radius: uniform(28.0)
-            shadow_offset: uniform(vec2(0.0, 10.0))
+            shadow_radius: uniform(14.0)
+            shadow_offset: uniform(vec2(0.0, 5.0))
 
             rect_size2: varying(vec2(0.0))
             rect_size3: varying(vec2(0.0))
@@ -151,7 +158,8 @@ script_mod! {
             }
 
             sample_level: fn(level: float, uv: vec2) -> vec4 {
-                let safe_uv = clamp(uv, vec2(0.0, 0.0), vec2(1.0, 1.0))
+                let source_uv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, self.source_y_flip))
+                let safe_uv = clamp(source_uv, vec2(0.0, 0.0), vec2(1.0, 1.0))
                 if level < 0.5 {
                     return self.scene_texture.sample_as_bgra(safe_uv)
                 }
@@ -335,7 +343,7 @@ script_mod! {
                         screen_pos + vec2(self.draw_pass.time * 31.0, self.draw_pass.time * 17.0)
                     ) - 0.5
                 ) * self.noise_strength
-                let fill = vec4(material + highlight + noise, 1.0)
+                let fill = vec4(material + highlight + noise, self.surface_alpha)
 
                 sdf.fill_keep(fill)
                 if self.border_width > 0.0 {
@@ -433,7 +441,8 @@ script_mod! {
                         screen_pos + vec2(self.draw_pass.time * 31.0, self.draw_pass.time * 17.0)
                     ) - 0.5
                 ) * self.noise_strength
-                let fill = vec4(material + highlight + sparkle + noise, 1.0)
+                let fill_alpha = mix(self.surface_alpha, 1.0, self.has_gauss)
+                let fill = vec4(material + highlight + sparkle + noise, fill_alpha)
 
                 sdf.fill_keep(fill)
                 if self.border_width > 0.0 {
@@ -506,7 +515,7 @@ script_mod! {
                 let edge_uv = abs(self.pos * 2.0 - 1.0)
                 let edge_gradient = clamp((edge_uv.x + edge_uv.y) * 0.5, 0.0, 1.0)
                 let highlight = self.specular_strength * (0.45 * edge_gradient + 0.55 * center + 0.22 * (1.0 - self.pos.y))
-                let fill = vec4(material + highlight, 1.0)
+                let fill = vec4(material + highlight, self.surface_alpha)
 
                 sdf.fill_keep(fill)
                 if self.border_width > 0.0 {
@@ -527,6 +536,10 @@ pub struct GaussRoundedView {
     source: ScriptObjectRef,
     #[deref]
     view: View,
+    // Used to self-manage an inline overlay so the glass refracts the scene even when this
+    // view is placed in the normal (background) flow rather than inside a `glass.Layer`.
+    #[rust]
+    draw_list: Option<DrawList2d>,
 }
 
 impl GaussRoundedView {
@@ -546,12 +559,14 @@ impl GaussRoundedView {
                 live_id!(source_size),
                 &[snapshot.source_size.x as f32, snapshot.source_size.y as f32],
             );
+            draw_bg.set_uniform(cx, live_id!(source_y_flip), &[snapshot.source_y_flip]);
             draw_bg.set_uniform(cx, live_id!(has_gauss), &[1.0]);
         } else {
             for slot in 0..=GAUSS_VIEW_LEVELS {
                 draw_bg.empty_texture(slot);
             }
             draw_bg.set_uniform(cx, live_id!(source_size), &[1.0, 1.0]);
+            draw_bg.set_uniform(cx, live_id!(source_y_flip), &[0.0]);
             draw_bg.set_uniform(cx, live_id!(has_gauss), &[0.0]);
         }
     }
@@ -674,8 +689,24 @@ impl Widget for GaussRoundedView {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
-        let snapshot = request_window_gauss(cx);
-        self.bind_snapshot(cx, snapshot);
-        self.view.draw_walk(cx, scope, walk)
+        if cx.is_drawing_overlay() {
+            // Already inside an overlay (e.g. a glass.Layer): draw inline.
+            let snapshot = request_window_gauss(cx);
+            self.bind_snapshot(cx, snapshot);
+            self.view.draw_walk(cx, scope, walk)
+        } else {
+            // In normal flow: open our own overlay so the glass can sample the blurred scene
+            // and refract the background beneath it (the layout space is still reserved in the
+            // current turtle, so it composes like any other widget).
+            if self.draw_list.is_none() {
+                self.draw_list = Some(DrawList2d::new(cx));
+            }
+            self.draw_list.as_mut().unwrap().begin_overlay_reuse(cx);
+            let snapshot = request_window_gauss(cx);
+            self.bind_snapshot(cx, snapshot);
+            let step = self.view.draw_walk(cx, scope, walk);
+            self.draw_list.as_mut().unwrap().end(cx);
+            step
+        }
     }
 }

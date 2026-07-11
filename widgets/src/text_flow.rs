@@ -1854,7 +1854,6 @@ impl TextFlow {
                 self.draw_text.text_overflow = TextOverflow::Clip;
             };
 
-
             let dt = &mut self.draw_text;
 
             // Capture LaidoutText for selection when selectable
