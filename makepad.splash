@@ -65,7 +65,7 @@ let RunOhosPackage = RunItem{
     package_name: ""
     on_run: fn(id){
         hub.run(
-            {"STUDIO_HOST": hub.studio_ext_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name "MAKEPAD": "ohos"},
+            {"STUDIO_HOST": hub.studio_ext_host() "STUDIO_BUILD": id.to_string() "STUDIO_CRATE": self.package_name "MAKEPAD": "ohos" "RUSTFLAGS": ""},
             "cargo",
             [
                 "run" "-p" "cargo-makepad" "--release" "--message-format=json" "--"
