@@ -2472,6 +2472,7 @@ impl Cx {
                             placeholder,
                             editable,
                             secure: _,
+                            glass: _,
                         },
                     ) = (kind, props)
                     {
@@ -2512,6 +2513,7 @@ impl Cx {
                             "NativeTextInput: secure toggle not implemented on Android host yet"
                         );
                     }
+                    NativeHostPropUpdate::TextInputGlass { .. } => {}
                     NativeHostPropUpdate::LabelText { .. } => {}
                 },
                 CxOsOp::CommandNativeView { id, command } => match command {

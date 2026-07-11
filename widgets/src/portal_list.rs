@@ -2210,11 +2210,17 @@ impl Widget for PortalList {
                     // If the list was NOT scrolling, clear any previous suppression.
                     self.suppress_child_events = self.was_scrolling;
 
-                    // Handle selection when selectable, but not if clicking on interactive items
+                    // Handle selection when selectable, but not if clicking on interactive items.
+                    // A selectable list must still be draggable when the pointer does not hit
+                    // selectable text. Previously the outer `if` consumed every non-interactive
+                    // down event, even when `hit_test_selection` returned `None`, so blank-space
+                    // drags could never enter `ScrollState::Drag`.
                     let on_interactive = self.point_hits_interactive_item(cx, fe.abs);
+                    let mut started_selection = false;
                     if self.selectable && fe.is_primary_hit() && !on_interactive {
                         let hit = self.hit_test_selection(cx, fe.abs);
                         if let Some((item_id, char_idx)) = hit {
+                            started_selection = true;
                             cx.set_key_focus(self.area);
                             if fe.device.is_touch() {
                                 cx.hide_clipboard_actions();
@@ -2228,10 +2234,14 @@ impl Widget for PortalList {
                             });
                             self.update_item_selections(cx);
                         }
-                    } else if self.drag_scrolling
-                        && fe.is_primary_hit()
-                        && cx.is_scrolling_allowed_within(&self.area)
-                    {
+                    }
+                    let scrolling_allowed = cx.is_scrolling_allowed_within(&self.area);
+                    if should_begin_drag_scroll(
+                        started_selection,
+                        self.drag_scrolling,
+                        fe.is_primary_hit(),
+                        scrolling_allowed,
+                    ) {
                         // Always enter drag state to enable drag-to-scroll even over
                         // interactive widgets (buttons, links, etc.). The drag threshold
                         // prevents micro-scrolling during taps/clicks, and child widgets
@@ -2423,6 +2433,37 @@ impl Widget for PortalList {
             self.draw_state.end();
         }
         DrawStep::done()
+    }
+}
+
+fn should_begin_drag_scroll(
+    started_selection: bool,
+    drag_scrolling: bool,
+    is_primary_hit: bool,
+    scrolling_allowed: bool,
+) -> bool {
+    !started_selection && drag_scrolling && is_primary_hit && scrolling_allowed
+}
+
+#[cfg(test)]
+mod drag_scroll_tests {
+    use super::should_begin_drag_scroll;
+
+    #[test]
+    fn selectable_blank_space_can_begin_drag_scroll() {
+        assert!(should_begin_drag_scroll(false, true, true, true));
+    }
+
+    #[test]
+    fn active_text_selection_keeps_ownership_of_the_gesture() {
+        assert!(!should_begin_drag_scroll(true, true, true, true));
+    }
+
+    #[test]
+    fn drag_scroll_respects_disabled_and_blocked_states() {
+        assert!(!should_begin_drag_scroll(false, false, true, true));
+        assert!(!should_begin_drag_scroll(false, true, false, true));
+        assert!(!should_begin_drag_scroll(false, true, true, false));
     }
 }
 

@@ -657,6 +657,36 @@ script_mod! {
         }
     }
 
+    // Native ArkUI input with a Makepad-drawn liquid rim underneath. The
+    // `glass` flag keeps the native text/selection/IME path intact while the
+    // platform host enables backdrop blur and a translucent native surface.
+    mod.widgets.GlassNativeTextInput = mod.widgets.NativeTextInput{
+        height: 48
+        glass: true
+        draw_bg +: {
+            color: #0000
+            pixel: fn() {
+                let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+                let w = self.rect_size.x
+                let h = self.rect_size.y
+                let radius = min(14.0, h * 0.5 - 1.0)
+                let top = smoothstep(0.0, 0.42, 1.0 - self.pos.y)
+                let bottom = smoothstep(0.56, 1.0, self.pos.y)
+
+                sdf.box(1.5, 1.5, w - 3.0, h - 3.0, radius)
+                sdf.fill_keep(vec4(0.72, 0.88, 1.0, 0.10))
+                sdf.fill_keep(vec4(1.0, 1.0, 1.0, top * 0.10))
+                sdf.fill_keep(vec4(0.04, 0.12, 0.24, bottom * 0.12))
+                sdf.stroke(vec4(1.0, 1.0, 1.0, 0.52), 1.0)
+
+                sdf.box(9.0, 4.0, max(w - 26.0, 1.0), 2.0, 1.0)
+                sdf.fill(vec4(1.0, 1.0, 1.0, 0.22))
+                return sdf.result
+            }
+        }
+    }
+    mod.widgets.glass.NativeTextInput = mod.widgets.GlassNativeTextInput
+
     mod.widgets.glass.LensSurface = mod.widgets.AppleGlassRoundedView{
         width: Fit
         height: 42
@@ -2295,5 +2325,18 @@ impl GlassSegmentedRef {
 
     pub fn changed(&self, actions: &Actions) -> bool {
         self.borrow().is_some_and(|inner| inner.changed(actions))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn glass_native_text_input_is_registered_for_splash() {
+        let source = include_str!("glass_panel.rs");
+        assert!(source.contains(
+            "mod.widgets.GlassNativeTextInput = mod.widgets.NativeTextInput"
+        ));
+        assert!(source.contains("mod.widgets.glass.NativeTextInput = mod.widgets.GlassNativeTextInput"));
+        assert!(source.contains("glass: true"));
     }
 }

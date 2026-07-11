@@ -21,6 +21,7 @@ script_mod! {
         height: 32
         editable: true
         secure: false
+        glass: false
         draw_bg +: {
             color: #0000
         }
@@ -46,6 +47,8 @@ pub struct NativeTextInput {
     editable: bool,
     #[live(false)]
     secure: bool,
+    #[live(false)]
+    glass: bool,
     #[visible]
     #[live(true)]
     visible: bool,
@@ -61,6 +64,8 @@ pub struct NativeTextInput {
     last_editable: bool,
     #[rust]
     last_secure: bool,
+    #[rust]
+    last_glass: bool,
     // Layout dedup: on OHOS every host call is a blocking JS-thread round
     // trip, so update() must only fire when the resolved rect changed.
     #[rust]
@@ -84,7 +89,7 @@ impl NativeTextInput {
         let placeholder = self.placeholder.as_ref();
         if !self.spawned {
             cx.native_text_input(id)
-                .spawn(text, placeholder, self.editable, self.secure);
+                .spawn(text, placeholder, self.editable, self.secure, self.glass);
             self.spawned = true;
             self.last_text.clear();
             self.last_text.push_str(text);
@@ -92,6 +97,7 @@ impl NativeTextInput {
             self.last_placeholder.push_str(placeholder);
             self.last_editable = self.editable;
             self.last_secure = self.secure;
+            self.last_glass = self.glass;
             self.last_sync_rect = None;
         }
         if self.last_text != text {
@@ -111,6 +117,10 @@ impl NativeTextInput {
         if self.last_secure != self.secure {
             cx.native_text_input(id).set_secure(self.secure);
             self.last_secure = self.secure;
+        }
+        if self.last_glass != self.glass {
+            cx.native_text_input(id).set_glass(self.glass);
+            self.last_glass = self.glass;
         }
         let rect = self.draw_bg.area().clipped_rect(cx);
         #[cfg(target_env = "ohos")]
@@ -463,6 +473,7 @@ mod tests {
             placeholder: Default::default(),
             editable: true,
             secure: false,
+            glass: false,
             visible: true,
             on_change: None,
             spawned: false,
@@ -470,6 +481,7 @@ mod tests {
             last_placeholder: String::new(),
             last_editable: true,
             last_secure: false,
+            last_glass: false,
             last_sync_rect: None,
             native_detached: false,
             selection_start: 0,

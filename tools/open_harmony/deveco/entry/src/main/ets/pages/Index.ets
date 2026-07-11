@@ -49,6 +49,15 @@ struct NativeTextInputItem {
       .height(this.state.height)
       .enabled(this.state.editable)
       .type(this.state.secure ? InputType.Password : InputType.Normal)
+      .backgroundColor(this.state.glass ? '#24FFFFFF' : '#0C000000')
+      .backdropBlur(this.state.glass ? 22 : 0)
+      .borderRadius(this.state.glass ? 14 : 0)
+      .border({
+        width: this.state.glass ? 1 : 0,
+        color: this.state.glass ? '#70FFFFFF' : '#00000000'
+      })
+      .fontColor(this.state.glass ? '#F5F9FFFF' : '#334155')
+      .placeholderColor(this.state.glass ? '#A8C2D8EE' : '#99334155')
       .visibility(this.state.visible ? Visibility.Visible : Visibility.Hidden)
       .onAppear(() => {
         this.traceCb('attached id=' + this.state.inputId);
@@ -324,16 +333,18 @@ struct Index {
     }
   }
 
-  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean): void {
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean, glass: boolean): void {
     let existing = this.nativeTextInput(inputId);
     let attached = existing !== undefined ? existing.attached : false;
-    this.traceNTI('create id=' + inputId + ' editable=' + editable + ' secure=' + secure + ' attached=' + attached);
+    this.traceNTI('create id=' + inputId + ' editable=' + editable + ' secure=' + secure
+      + ' glass=' + glass + ' attached=' + attached);
     let state = new NativeTextInputState();
     state.inputId = inputId;
     state.text = text;
     state.placeholder = placeholder;
     state.editable = editable;
     state.secure = secure;
+    state.glass = glass;
     state.attached = attached;
     state.controller = existing !== undefined ? existing.controller : new TextInputController();
     this.upsertNativeTextInput(state);
@@ -392,6 +403,13 @@ struct Index {
     this.traceNTI('set_secure id=' + inputId + ' secure=' + secure);
     this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
       input.secure = secure;
+    });
+  }
+
+  setNativeTextInputGlass(inputId: string, glass: boolean): void {
+    this.traceNTI('set_glass id=' + inputId + ' glass=' + glass);
+    this.updateNativeTextInputState(inputId, (input: NativeTextInputState): void => {
+      input.glass = glass;
     });
   }
 
