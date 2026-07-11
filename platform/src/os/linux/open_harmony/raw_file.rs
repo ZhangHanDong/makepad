@@ -22,7 +22,7 @@ impl RawFileMgr {
         }
     }
 
-    pub fn read_to_end<S: AsRef<str>>(&mut self, path: S, buf: &mut Vec<u8>) -> Result<usize> {
+    pub fn read_to_end<S: AsRef<str>>(&self, path: S, buf: &mut Vec<u8>) -> Result<usize> {
         if self.native_resource_manager.is_null() {
             return Err(Error::new(
                 ErrorKind::NotConnected,

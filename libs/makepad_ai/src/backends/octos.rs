@@ -39,10 +39,14 @@ pub struct OctosBackend {
 
 impl OctosBackend {
     pub fn new(config: BackendConfig) -> Self {
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
         Self {
             config,
             in_flight: HashMap::new(),
-            session_id: format!("aichat-{}", LiveId::unique().0),
+            session_id: format!("aichat-{}-{}", started_at, LiveId::unique().0),
             next_thread: 0,
         }
     }
@@ -190,7 +194,7 @@ impl OctosBackend {
         data: &str,
         is_complete: bool,
     ) -> Vec<AiEvent> {
-        let mut events = vec![];
+        let events = vec![];
         let Some(in_flight) = self.in_flight.get_mut(&request_id) else {
             return events;
         };
@@ -215,32 +219,12 @@ impl OctosBackend {
                 match ty.as_str() {
                     "replace" => {
                         if let Some(text) = Self::json_str_field(payload, "text") {
-                            // Snapshot: emit only the suffix beyond what we have.
-                            if text.starts_with(&in_flight.text) {
-                                let suffix = text[in_flight.text.len()..].to_string();
-                                if !suffix.is_empty() {
-                                    events.push(AiEvent::StreamDelta {
-                                        request_id: in_flight.request_id,
-                                        delta: StreamDelta::TextDelta { text: suffix },
-                                    });
-                                }
-                            } else {
-                                // Divergent snapshot: re-emit the whole thing.
-                                events.push(AiEvent::StreamDelta {
-                                    request_id: in_flight.request_id,
-                                    delta: StreamDelta::TextDelta { text: text.clone() },
-                                });
-                            }
                             in_flight.text = text;
                         }
                     }
                     "token" => {
                         if let Some(text) = Self::json_str_field(payload, "text") {
                             in_flight.text.push_str(&text);
-                            events.push(AiEvent::StreamDelta {
-                                request_id: in_flight.request_id,
-                                delta: StreamDelta::TextDelta { text },
-                            });
                         }
                     }
                     "done" => {
@@ -325,6 +309,12 @@ impl AiBackend for OctosBackend {
                         let content_blocks = if in_flight.text.is_empty() {
                             vec![]
                         } else {
+                            ai_events.push(AiEvent::StreamDelta {
+                                request_id: in_flight.request_id,
+                                delta: StreamDelta::TextDelta {
+                                    text: in_flight.text.clone(),
+                                },
+                            });
                             vec![ContentBlock::Text {
                                 text: in_flight.text,
                             }]

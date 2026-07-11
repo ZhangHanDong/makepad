@@ -404,7 +404,7 @@ struct GaussStack {
 
 fn gauss_render_texture_y_flip_for_os(os_type: &OsType) -> f32 {
     match os_type {
-        OsType::Android(_) => 1.0,
+        OsType::Android(_) | OsType::OpenHarmony(_) => 1.0,
         _ => 0.0,
     }
 }
@@ -924,6 +924,10 @@ mod tests {
         assert_eq!(gauss_render_texture_y_flip_for_os(&OsType::Macos), 0.0);
         assert_eq!(
             gauss_render_texture_y_flip_for_os(&OsType::Android(Default::default())),
+            1.0
+        );
+        assert_eq!(
+            gauss_render_texture_y_flip_for_os(&OsType::OpenHarmony(Default::default())),
             1.0
         );
     }

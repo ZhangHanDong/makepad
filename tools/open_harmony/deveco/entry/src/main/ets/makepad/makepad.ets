@@ -332,6 +332,8 @@ export class ArkGlue{
     let options: http.HttpRequestOptions = {
       method: this.httpMethod(method),
       header: this.parseFlatHeaders(headersFlat),
+      connectTimeout: 60000,
+      readTimeout: 600000,
     };
     if (body.byteLength > 0) {
       options.extraData = body;

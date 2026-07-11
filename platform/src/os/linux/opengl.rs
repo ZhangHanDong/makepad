@@ -2363,7 +2363,7 @@ impl CxTexture {
     ///
     /// Note: This method assumes that the texture format doesn't change between updates.
     /// This is safe because when allocating textures at the Cx level, there are compatibility checks.
-    pub fn update_vec_texture(&mut self, gl: &LibGl, _os_type: &OsType) {
+    pub fn update_vec_texture(&mut self, gl: &LibGl, os_type: &OsType) {
         fn gl_unpack_alignment(bytes_per_pixel: usize) -> i32 {
             if bytes_per_pixel % 8 == 0 {
                 8
@@ -2503,6 +2503,7 @@ impl CxTexture {
                 bytes_per_pixel,
                 use_mipmaps,
                 use_nearest_filter,
+                is_bgra,
             ) = match &mut self.format {
                 TextureFormat::VecBGRAu8_32 {
                     width,
@@ -2519,6 +2520,7 @@ impl CxTexture {
                     4,
                     false,
                     false,
+                    true,
                 ),
                 TextureFormat::VecMipBGRAu8_32 {
                     width,
@@ -2536,6 +2538,7 @@ impl CxTexture {
                     4,
                     true,
                     false,
+                    true,
                 ),
                 TextureFormat::VecRGBAf32 {
                     width,
@@ -2552,6 +2555,7 @@ impl CxTexture {
                     16,
                     false,
                     true,
+                    false,
                 ),
                 TextureFormat::VecRu8 {
                     width,
@@ -2572,6 +2576,7 @@ impl CxTexture {
                         gl_sys::UNSIGNED_BYTE,
                         data.as_ref().unwrap().as_ptr() as *const std::ffi::c_void,
                         1,
+                        false,
                         false,
                         false,
                     )
@@ -2597,6 +2602,7 @@ impl CxTexture {
                         2,
                         false,
                         false,
+                        false,
                     )
                 }
                 TextureFormat::VecRf32 {
@@ -2614,15 +2620,18 @@ impl CxTexture {
                     4,
                     false,
                     true,
+                    false,
                 ),
                 _ => panic!("Unsupported texture format"),
             };
 
             // Partial texture uploads are critical for append-only SLUG float atlases on
-            // Linux desktop. OHOS simulators/emulators still need the conservative full
-            // upload path.
+            // Linux desktop. OpenHarmony uses the conservative full upload path because
+            // partial client-texture updates are unreliable on its GLES drivers.
             const DO_PARTIAL_TEXTURE_UPDATES: bool = cfg!(not(ohos_sim));
+            let is_open_harmony = matches!(os_type, OsType::OpenHarmony(_));
             let allow_partial_texture_updates = DO_PARTIAL_TEXTURE_UPDATES
+                && !is_open_harmony
                 && !matches!(self.format, TextureFormat::VecRGBAf32 { .. });
             let unpack_alignment = gl_unpack_alignment(bytes_per_pixel);
 
@@ -2664,17 +2673,45 @@ impl CxTexture {
                     (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
                     (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
                     (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
-                    (gl.glTexImage2D)(
-                        gl_sys::TEXTURE_2D,
-                        0,
-                        internal_format as i32,
-                        width as i32,
-                        height as i32,
-                        0,
-                        format,
-                        data_type,
-                        data,
-                    );
+                    if is_open_harmony && is_bgra {
+                        // Maleoon GLES does not reliably accept client BGRA atlas uploads.
+                        // Preserve the logical channel order by converting BGRA bytes to RGBA.
+                        let pixels = std::slice::from_raw_parts(
+                            data as *const u32,
+                            width.saturating_mul(height),
+                        );
+                        let rgba_pixels = pixels
+                            .iter()
+                            .map(|pixel| {
+                                (pixel & 0xff00_ff00)
+                                    | ((pixel & 0x00ff_0000) >> 16)
+                                    | ((pixel & 0x0000_00ff) << 16)
+                            })
+                            .collect::<Vec<_>>();
+                        (gl.glTexImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            gl_sys::RGBA as i32,
+                            width as i32,
+                            height as i32,
+                            0,
+                            gl_sys::RGBA,
+                            gl_sys::UNSIGNED_BYTE,
+                            rgba_pixels.as_ptr() as *const _,
+                        );
+                    } else {
+                        (gl.glTexImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            internal_format as i32,
+                            width as i32,
+                            height as i32,
+                            0,
+                            format,
+                            data_type,
+                            data,
+                        );
+                    }
                 }
                 TextureUpdated::Empty => panic!("already asserted that updated is not empty"),
             };
