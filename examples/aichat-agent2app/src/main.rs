@@ -11,6 +11,10 @@ use makepad_widgets::makepad_draw::svg::{
 };
 use makepad_widgets::makepad_platform::makepad_micro_serde::*;
 use makepad_widgets::*;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 use streaming_markdown_kit::{
     streaming_display_with_latex_autowrap_remend, wrap_bare_latex, SanitizeOptions,
 };
@@ -1719,6 +1723,129 @@ fn active_chat_data() -> &'static std::sync::RwLock<ChatData> {
     chat_data_for_workspace(active_workspace())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GateProfile {
+    manifest: cfp_lite_core::CapabilityManifest,
+    action_names: Vec<String>,
+    registry: cfp_lite_core::ActionRegistry,
+}
+
+fn parse_gate_profile(source: &str) -> Result<GateProfile, String> {
+    let root: serde_json::Value =
+        serde_json::from_str(source).map_err(|error| format!("invalid gate profile JSON: {error}"))?;
+    let root = root
+        .as_object()
+        .ok_or_else(|| "gate profile must be a JSON object".to_string())?;
+
+    let schema = required_string(root, "schema")?;
+    if schema != "aichat-gate-v1" {
+        return Err(format!("unsupported gate profile schema: {schema}"));
+    }
+
+    let manifest_object = root
+        .get("manifest")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "gate profile manifest must be an object".to_string())?;
+    let manifest_version = required_string(manifest_object, "manifest_version")?.to_string();
+    let action_rules = manifest_object
+        .get("actions")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "gate profile manifest.actions must be an object".to_string())?;
+    let mut actions = BTreeMap::new();
+    for (pattern, rule) in action_rules {
+        let permission = rule
+            .as_object()
+            .and_then(|rule| rule.get("permission"))
+            .cloned()
+            .ok_or_else(|| format!("manifest action {pattern} must contain permission"))?;
+        let permission: cfp_lite_core::PermissionLevel = serde_json::from_value(permission)
+            .map_err(|error| format!("invalid permission for {pattern}: {error}"))?;
+        actions.insert(
+            pattern.clone(),
+            cfp_lite_core::CapabilityRule { permission },
+        );
+    }
+    let manifest = cfp_lite_core::CapabilityManifest {
+        manifest_version,
+        actions,
+    };
+    manifest
+        .validate()
+        .map_err(|error| format!("invalid capability manifest: {error:?}"))?;
+
+    let registry = root
+        .get("registry")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "gate profile registry must be an array".to_string())?;
+    if registry.is_empty() {
+        return Err("gate profile registry must not be empty".to_string());
+    }
+    let mut action_names = Vec::with_capacity(registry.len());
+    let mut unique_actions = BTreeSet::new();
+    for action in registry {
+        let action = action
+            .as_str()
+            .filter(|action| !action.is_empty())
+            .ok_or_else(|| "registry actions must be nonempty strings".to_string())?;
+        if !unique_actions.insert(action.to_string()) {
+            return Err(format!("duplicate registry action: {action}"));
+        }
+        action_names.push(action.to_string());
+    }
+
+    let principal = root
+        .get("principal")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "gate profile principal must be an object".to_string())?;
+    if required_string(principal, "id")? != "transport:aichat" {
+        return Err("gate profile principal must be transport:aichat".to_string());
+    }
+
+    let scope = root
+        .get("scope")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "gate profile scope must be an object".to_string())?;
+    if required_string(scope, "app_id")? != "app:aichat-agent2app" {
+        return Err("gate profile scope must be app:aichat-agent2app".to_string());
+    }
+
+    Ok(GateProfile {
+        manifest,
+        registry: cfp_lite_core::ActionRegistry::new(action_names.clone()),
+        action_names,
+    })
+}
+
+fn required_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<&'a str, String> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("gate profile {field} must be a nonempty string"))
+}
+
+static RUNTIME_GATE_PROFILE: OnceLock<Result<GateProfile, String>> = OnceLock::new();
+
+fn runtime_gate_profile() -> &'static Result<GateProfile, String> {
+    RUNTIME_GATE_PROFILE
+        .get_or_init(|| parse_gate_profile(cfp_lite_core::fixtures::AICHAT_GATE_V1_JSON))
+}
+
+fn aichat_principal() -> cfp_lite_core::Principal {
+    cfp_lite_core::Principal {
+        id: "transport:aichat".into(),
+    }
+}
+
+fn aichat_scope() -> cfp_lite_core::Scope {
+    cfp_lite_core::Scope {
+        app_id: "app:aichat-agent2app".into(),
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PermissionLevel {
@@ -1726,18 +1853,6 @@ enum PermissionLevel {
     RequiresConfirmation,
     AutoExecutable,
     Forbidden,
-}
-
-#[cfg(test)]
-impl PermissionLevel {
-    fn cfp_vocabulary() -> [Self; 4] {
-        [
-            Self::ReadOnly,
-            Self::RequiresConfirmation,
-            Self::AutoExecutable,
-            Self::Forbidden,
-        ]
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -3903,13 +4018,15 @@ mod tests {
     use makepad_widgets::DVec2;
 
     use super::{
+        aichat_principal, aichat_scope,
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         capability_permission, glass_opacity_values, process_splash_capability_event,
-        render_state_templates, repair_appgen_response_for_display, should_start_window_drag,
-        Agent, App, AppCapability, AppDemoState, BackendType, ClaudeCodeCliAgent,
-        PendingConfirmation, PermissionLevel, SplashCapabilityDecision, DEFAULT_GLASS_OPACITY,
-        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        parse_gate_profile, render_state_templates, repair_appgen_response_for_display,
+        runtime_gate_profile, should_start_window_drag, Agent, App, AppCapability, AppDemoState,
+        BackendType, ClaudeCodeCliAgent, PendingConfirmation, PermissionLevel,
+        SplashCapabilityDecision, DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY,
+        MIN_GLASS_OPACITY,
     };
 
     #[derive(Default)]
@@ -4266,15 +4383,145 @@ View{
 
     #[test]
     fn test_permission_levels_match_cfp_vocabulary() {
+        let vocabulary = [
+            cfp_lite_core::PermissionLevel::ReadOnly,
+            cfp_lite_core::PermissionLevel::RequiresConfirmation,
+            cfp_lite_core::PermissionLevel::AutoExecutable,
+            cfp_lite_core::PermissionLevel::Forbidden,
+        ];
         assert_eq!(
-            PermissionLevel::cfp_vocabulary(),
+            vocabulary.map(|permission| format!("{permission:?}")),
             [
-                PermissionLevel::ReadOnly,
-                PermissionLevel::RequiresConfirmation,
-                PermissionLevel::AutoExecutable,
-                PermissionLevel::Forbidden,
+                "ReadOnly",
+                "RequiresConfirmation",
+                "AutoExecutable",
+                "Forbidden",
             ]
         );
+    }
+
+    #[test]
+    fn test_cfp_core_git_dependency_is_pinned() {
+        let cargo = include_str!("../Cargo.toml");
+        let dependency = cargo
+            .lines()
+            .find(|line| line.starts_with("cfp-lite-core = "))
+            .expect("cfp-lite-core dependency must exist");
+
+        assert_eq!(
+            dependency,
+            "cfp-lite-core = { git = \"https://github.com/ZhangHanDong/a2app-harness.git\", rev = \"4f798f00c34a3ec1416ae41e549983c226b4cb38\", package = \"cfp-lite-core\" }"
+        );
+        for forbidden in ["branch", "tag", "path", "version"] {
+            assert!(
+                !dependency.contains(forbidden),
+                "dependency must not use {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_aichat_profile_comes_from_shared_fixture() {
+        const EXPECTED_ACTIONS: [&str; 13] = [
+            "inc",
+            "dec",
+            "reset",
+            "timer.start",
+            "timer.pause",
+            "timer.toggle",
+            "timer.reset",
+            "timer.add_minute",
+            "timer.subtract_minute",
+            "ask_ai",
+            "fs.write",
+            "host.confirm",
+            "host.deny",
+        ];
+        const EXPECTED_PATTERNS: [(&str, cfp_lite_core::PermissionLevel); 8] = [
+            ("inc", cfp_lite_core::PermissionLevel::AutoExecutable),
+            ("dec", cfp_lite_core::PermissionLevel::AutoExecutable),
+            ("reset", cfp_lite_core::PermissionLevel::AutoExecutable),
+            (
+                "timer.*",
+                cfp_lite_core::PermissionLevel::AutoExecutable,
+            ),
+            (
+                "host.confirm",
+                cfp_lite_core::PermissionLevel::AutoExecutable,
+            ),
+            (
+                "host.deny",
+                cfp_lite_core::PermissionLevel::AutoExecutable,
+            ),
+            (
+                "ask_ai",
+                cfp_lite_core::PermissionLevel::RequiresConfirmation,
+            ),
+            ("fs.write", cfp_lite_core::PermissionLevel::Forbidden),
+        ];
+
+        let profile = parse_gate_profile(cfp_lite_core::fixtures::AICHAT_GATE_V1_JSON)
+            .expect("shared profile must parse");
+        assert_eq!(
+            profile.action_names,
+            EXPECTED_ACTIONS.map(str::to_string).to_vec()
+        );
+        assert_eq!(profile.manifest.manifest_version, "1");
+        assert_eq!(profile.manifest.actions.len(), EXPECTED_PATTERNS.len());
+        for (pattern, permission) in EXPECTED_PATTERNS {
+            assert_eq!(
+                profile
+                    .manifest
+                    .actions
+                    .get(pattern)
+                    .map(|rule| rule.permission),
+                Some(permission),
+                "permission mismatch for {pattern}"
+            );
+        }
+        for action in &profile.action_names {
+            assert_eq!(
+                profile
+                    .manifest
+                    .permission_for(&profile.registry, action)
+                    .expect("derived registry action must be accepted"),
+                if action == "ask_ai" {
+                    cfp_lite_core::PermissionLevel::RequiresConfirmation
+                } else if action == "fs.write" {
+                    cfp_lite_core::PermissionLevel::Forbidden
+                } else {
+                    cfp_lite_core::PermissionLevel::AutoExecutable
+                }
+            );
+        }
+        assert_eq!(aichat_principal().id, "transport:aichat");
+        assert_eq!(aichat_scope().app_id, "app:aichat-agent2app");
+        assert!(runtime_gate_profile().is_ok());
+        assert!(std::ptr::eq(
+            runtime_gate_profile(),
+            runtime_gate_profile()
+        ));
+        assert_eq!(
+            cfp_lite_core::fixtures::AICHAT_GATE_V1_BLAKE3,
+            "af8cb79b560c6dceee75502b966494aa7216bc26bfafd1e45c94b5a82c727cc0"
+        );
+    }
+
+    #[test]
+    fn test_invalid_profile_and_payload_fail_closed_preserving_review() {
+        let malformed = "{";
+        let missing_fields = r#"{"schema":"aichat-gate-v1"}"#;
+        let duplicate_registry = r#"{
+            "schema":"aichat-gate-v1",
+            "manifest":{"manifest_version":"1","actions":{"inc":{"permission":"AutoExecutable"}}},
+            "registry":["inc","inc"],
+            "principal":{"id":"transport:aichat"},
+            "scope":{"app_id":"app:aichat-agent2app"}
+        }"#;
+
+        assert!(parse_gate_profile(malformed).is_err());
+        assert!(parse_gate_profile(missing_fields).is_err());
+        assert!(parse_gate_profile(duplicate_registry).is_err());
     }
 
     #[test]

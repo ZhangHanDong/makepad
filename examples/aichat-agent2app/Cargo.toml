@@ -10,6 +10,8 @@ license = "MIT OR Apache-2.0"
 makepad-widgets = { path = "../../widgets", features = ["maps", "pdf"] }
 makepad-code-editor = { path = "../../code_editor" }
 makepad-ai = { path = "../../libs/makepad_ai" }
+cfp-lite-core = { git = "https://github.com/ZhangHanDong/a2app-harness.git", rev = "4f798f00c34a3ec1416ae41e549983c226b4cb38", package = "cfp-lite-core" }
+serde_json = "1"
 streaming-markdown-kit = { git = "https://github.com/Project-Robius-China/streaming-markdown-kit.git", branch = "main", features = ["mermaid"] }
 
 # Inline-diagram renderer. The `makepad` feature pulls in the Makepad-native
@@ -22,3 +24,6 @@ makepad-diagram-kit = { git = "https://github.com/Project-Robius-China/makepad-d
 # window.open). robius-open is the Robius-ecosystem standard for this
 # (used by robrix and moly).
 robius-open = { git = "https://github.com/project-robius/robius" }
+
+[dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
