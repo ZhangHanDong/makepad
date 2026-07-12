@@ -121,7 +121,7 @@ impl GlRenderBridge {
 }
 
 // Cx methods: Linux
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 impl Cx {
     /// Create a GL rendering bridge wrapping makepad's existing EGL context.
     pub fn create_gl_render_bridge(&mut self) -> GlRenderBridge {
@@ -167,6 +167,68 @@ impl Cx {
             .as_ref()
             .expect("OpenGL context not initialized");
         opengl_cx.make_current();
+
+        let gl = self.os.gl();
+        unsafe {
+            (gl.glBindVertexArray)(0);
+            (gl.glBindBuffer)(gl_sys::ARRAY_BUFFER, 0);
+            (gl.glBindBuffer)(gl_sys::ELEMENT_ARRAY_BUFFER, 0);
+            (gl.glBindBuffer)(gl_sys::UNIFORM_BUFFER, 0);
+            (gl.glBindFramebuffer)(gl_sys::FRAMEBUFFER, 0);
+            (gl.glBindRenderbuffer)(gl_sys::RENDERBUFFER, 0);
+            (gl.glUseProgram)(0);
+            (gl.glActiveTexture)(gl_sys::TEXTURE0);
+            (gl.glBindTexture)(gl_sys::TEXTURE_2D, 0);
+            (gl.glDisable)(gl_sys::SCISSOR_TEST);
+            (gl.glColorMask)(1, 1, 1, 1);
+            (gl.glDepthMask)(1);
+            (gl.glDisable)(gl_sys::BLEND);
+        }
+    }
+}
+
+// Cx methods: OpenHarmony
+#[cfg(target_env = "ohos")]
+impl Cx {
+    /// Create a GL rendering bridge wrapping makepad's existing EGL context.
+    pub fn create_gl_render_bridge(&mut self) -> GlRenderBridge {
+        let display = self
+            .os
+            .display
+            .as_ref()
+            .expect("OpenGL context not initialized");
+        GlRenderBridge {
+            inner: crate::os::linux::opengl::EglRenderBridge::new(
+                display.egl_display,
+                display.egl_config,
+                display.egl_context,
+                display.libegl.eglGetProcAddress.unwrap(),
+                display.libegl.eglMakeCurrent.unwrap(),
+            ),
+        }
+    }
+
+    /// Create a texture renderable via GL and displayable by makepad.
+    /// Returns (Texture handle, GL texture ID).
+    pub fn create_gl_render_bridge_texture(
+        &mut self,
+        _bridge: &GlRenderBridge,
+        width: usize,
+        height: usize,
+    ) -> (Texture, u32) {
+        self.create_gl_render_texture(width, height)
+    }
+
+    /// Restore makepad's GL state after external GL rendering.
+    pub fn restore_gl_context(&mut self) {
+        let display = self
+            .os
+            .display
+            .as_mut()
+            .expect("OpenGL context not initialized");
+        unsafe {
+            display.make_current();
+        }
 
         let gl = self.os.gl();
         unsafe {

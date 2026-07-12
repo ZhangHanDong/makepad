@@ -174,8 +174,8 @@ impl MacosApp {
         // submenu and the "Quit X" item label match. NSBundle returns nil
         // when the binary isn't bundled at all; fall back to a generic
         // label in that case.
-        let app_name = unsafe { current_bundle_name() }
-            .unwrap_or_else(|| "Application".to_string());
+        let app_name =
+            unsafe { current_bundle_name() }.unwrap_or_else(|| "Application".to_string());
         self.update_macos_menu(&MacosMenu::Main {
             items: vec![MacosMenu::Sub {
                 name: app_name.clone(),
@@ -776,39 +776,43 @@ impl MacosApp {
     }
 
     pub fn send_timer_received(nstimer: ObjcId) {
-        let len = with_macos_app(|app| app.timers.len());
-        for i in 0..len {
-            let time = with_macos_app(|app| app.time_now());
-            if with_macos_app(|app| app.timers[i].nstimer == nstimer) {
-                let timer_id = with_macos_app(|app| app.timers[i].timer_id);
-                if !with_macos_app(|app| app.timers[i].repeats) {
-                    with_macos_app(|app| app.timers.remove(i));
-                }
+        let time = with_macos_app(|app| app.time_now());
+        let timer_id = with_macos_app(|app| {
+            app.timers
+                .iter()
+                .position(|timer| timer.nstimer == nstimer)
+                .map(|index| {
+                    let timer_id = app.timers[index].timer_id;
+                    if !app.timers[index].repeats {
+                        app.timers.remove(index);
+                    }
+                    timer_id
+                })
+        });
 
-                MacosApp::do_callback(MacosEvent::Timer(TimerEvent {
-                    time: Some(time),
-                    timer_id: timer_id,
-                }));
-                // break the eventloop if its in blocked mode
-                unsafe {
-                    let pool: ObjcId = msg_send![class!(NSAutoreleasePool), new];
-                    let nsevent: ObjcId = msg_send![
-                        class!(NSEvent),
-                        otherEventWithType: NSEventType::NSApplicationDefined
-                        location: NSPoint {x: 0., y: 0.}
-                        modifierFlags: 0u64
-                        timestamp: 0f64
-                        windowNumber: 1u64
-                        context: nil
-                        subtype: 0i16
-                        data1: 0u64
-                        data2: 0u64
-                    ];
-                    let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
-                    let () = msg_send![ns_app, postEvent: nsevent atStart: 0];
-                    let () = msg_send![pool, release];
-                }
-                return;
+        if let Some(timer_id) = timer_id {
+            MacosApp::do_callback(MacosEvent::Timer(TimerEvent {
+                time: Some(time),
+                timer_id,
+            }));
+            // break the eventloop if its in blocked mode
+            unsafe {
+                let pool: ObjcId = msg_send![class!(NSAutoreleasePool), new];
+                let nsevent: ObjcId = msg_send![
+                    class!(NSEvent),
+                    otherEventWithType: NSEventType::NSApplicationDefined
+                    location: NSPoint {x: 0., y: 0.}
+                    modifierFlags: 0u64
+                    timestamp: 0f64
+                    windowNumber: 1u64
+                    context: nil
+                    subtype: 0i16
+                    data1: 0u64
+                    data2: 0u64
+                ];
+                let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+                let () = msg_send![ns_app, postEvent: nsevent atStart: 0];
+                let () = msg_send![pool, release];
             }
         }
     }

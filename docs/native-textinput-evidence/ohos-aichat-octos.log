@@ -1,0 +1,55 @@
+06-16 09:09:43.453  2195  2195 I A0001b/AA: RecentlyUseController --> buildRecentlyUseInfo {"bundleName":"dev.makepad.makepad_example_aichat","moduleName":"makepad","abilityName":"EntryAbility","pid":3176,"uid":20020052,"state":2,"abilityType":1,"isAtomicService":false}}
+06-16 09:09:43.739   228   245 I C02699/MemMgr: AppObs::OnAbilityStateChanged called, uid=20020052, pid=3176, bundleName=dev.makepad.makepad_example_aichat FOREGROUND
+06-16 09:09:43.739   228  3197 I C02699/MemMgr: PrioManager::UpdateReclaimPriorityInner pid=3176, bundleUid=20020052, bundleName=dev.makepad.makepad_example_aichat, procName=, time=1781572183739692000, reason=FOREGROUND
+06-16 09:09:43.764   252  3135 I C01706/ueaServer-IntelliSenseServer: Get app info:3176 20020052 dev.makepad.makepad_example_aichat 2
+06-16 09:09:43.773  2195  2195 I A0001b/AA: RecentlyUseController --> buildRecentlyUseInfo {"bundleName":"dev.makepad.makepad_example_aichat","moduleName":"makepad","abilityName":"EntryAbility","pid":3176,"uid":20020052,"state":2,"abilityType":1,"isAtomicService":false}}
+06-16 09:09:43.786  3176  3176 I C03900/Ace: [(-2:-1:undefined)] [dev.makepad.makepad_example_aichat][makepad][-1]: UIContent: apiCompatibleVersion: 50000012, apiTargetVersion: 50003015, and apiReleaseType: Release, useNewPipe: 1
+06-16 09:09:43.800  3176  3176 I C03900/Ace: [(-2:-1:undefined)] [dev.makepad.makepad_example_aichat][makepad][-1]: SetLanguage: zh, colorMode: light, deviceAccess: 0
+06-16 09:09:43.800  3176  3176 I C03900/Ace: [(-2:-1:undefined)] [dev.makepad.makepad_example_aichat][makepad][-1]: Initialize UIContent isModelJson:true
+06-16 09:09:43.837  3176  3176 I C04200/WMS: [] GetSurfaceNode(1552): name:makepad_example_aichat0, id:32
+06-16 09:09:43.837  3176  3176 I C04200/WMS: [] GetSurfaceNode(1552): name:makepad_example_aichat0, id:32
+06-16 09:09:43.953  3176  3176 I C03900/Ace: [(100000:100000:scope)] [dev.makepad.makepad_example_aichat][makepad][100000]: window focus
+06-16 09:09:43.961  3176  3176 I C03900/Ace: [(100000:100000:scope)] [dev.makepad.makepad_example_aichat][makepad][100000]: SetMinPlatformVersion is 50000012
+06-16 09:09:44.001  3176  3260 I C04209/WMSImms: [] NotifyAvoidAreaChange(3430): window [32, makepad_example_aichat0] type 0 area top [0 0 1260 126]
+06-16 09:09:44.002  3176  3224 I C04209/WMSImms: [] NotifyAvoidAreaChange(3430): window [32, makepad_example_aichat0] type 1 area top [494 36 273 72]
+06-16 09:09:44.004  3176  3224 I C04209/WMSImms: [] NotifyAvoidAreaChange(3430): window [32, makepad_example_aichat0] type 4 area bottom [409 2629 442 91]
+06-16 09:09:44.031  3176  3176 I C04209/WMSImms: [] GetAvoidAreaByType(1917): Window [32, makepad_example_aichat0] type 0 times 1 area top [0 0 1260 126]
+06-16 09:09:44.074  3176  3176 I C04209/WMSImms: [] GetAvoidAreaByType(1917): Window [32, makepad_example_aichat0] type 4 times 2 area bottom [409 2629 442 91]
+06-16 09:09:44.099  3176  3176 I C03900/Ace: [(-2:100000:singleton)] [dev.makepad.makepad_example_aichat][makepad][100000]: Initialize: pages/Index
+06-16 09:09:44.105  3176  3176 I C03900/Ace: [(-2:100000:singleton)] [dev.makepad.makepad_example_aichat][makepad][100000]: UpdateWindowVisible: 1, hasDeco: 0
+06-16 09:09:44.127   677  3144 I C01202/Ces: [inner_common_event_manager.cpp(SubscribeCommonEvent:348)]SubscribeCommonEvent dev.makepad.makepad_example_aichat(pid = 3176, uid = 20020052, userId = -3, instanceKey = -1, subId = 3176_20020052_-1_324_220945, ffrtCost = 0, taskCost = 1
+06-16 09:09:44.137  3176  3176 I C03900/Ace: [(-2:100000:singleton)] [dev.makepad.makepad_example_aichat][makepad][100000]: window foreground
+06-16 09:09:44.156  3176  3176 I C03959/AceLayout: [(-2:100000:singleton)] [dev.makepad.makepad_example_aichat][makepad][100000]: UpdateViewportConfig Viewport config: size: (1260, 2720) orientation: 0 density: 3.250000 position: (0, 0) transformHint: 270, windowSizeChangeReason 0, is rsTransaction nullptr 1, updateAvoidAreas size 0, []
+06-16 09:09:44.156  3176  3176 I C03900/Ace: [(-2:100000:singleton)] [dev.makepad.makepad_example_aichat][makepad][100000]: window focus
+06-16 09:09:44.164  3176  3176 I C04200/JsWindowStage: (385)[NAPI]Window [32, makepad_example_aichat0] load content end, ret = 0
+06-16 09:09:44.200  3176  3176 I C03925/AceRouter: [(100000:100000:scope)] add named router record, name: , bundleName: dev.makepad.makepad_example_aichat, moduleName: makepad, pagePath: pages/Index, pageFullPath: entry/src/main/ets/pages/Index, ohmUrl: @bundle:dev.makepad.makepad_example_aichat/makepad/ets/pages/Index
+06-16 09:09:44.354  3176  3176 I C04209/WMSImms: [] GetAvoidAreaByType(1917): Window [32, makepad_example_aichat0] type 1 times 3 area top [494 36 273 72]
+06-16 09:09:45.477  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3464:16 - aichat: loaded 2 secrets from rawfile
+06-16 09:09:45.514  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3473:12 - aichat: backends after re-detect: [Octos]
+06-16 09:09:45.517  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3505:12 - aichat: smoke prompt scheduled
+06-16 09:09:47.263   417  3042 I C02da0/NativeLeakDetector: operator(): procName:dev.makepad.makepad_example_aichat:3176 get name:dev.makepad.makepad_example_aichat
+06-16 09:09:47.533  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3515:16 - aichat: smoke prompt sending: "Reply with exactly the three words: octos on harmony"
+06-16 09:09:47.533  3176  3246 I A03d00/makepad-ohos: [I] libs/makepad_ai/src/backends/octos.rs:102:8 - Octos request: url=http://10.0.2.2:19401/chat session=aichat-1 thread=aichat-1-t0 message_chars=253
+06-16 09:09:47.595  3176  3176 I A03d00/JSAPP: [MakepadNet] httpStart id=5 method=POST url=http://10.0.2.2:19401/chat body_len=348
+06-16 09:09:47.674  3176  3176 I A03d00/JSAPP: [MakepadNet] headersReceive id=5
+06-16 09:09:47.674  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=41
+06-16 09:09:47.849  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=41
+06-16 09:09:49.833  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=76
+06-16 09:09:49.839  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3567:24 - aichat UI text delta chars=39
+06-16 09:09:50.768  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=41
+06-16 09:09:50.831  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=38
+06-16 09:09:50.844  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3567:24 - aichat UI text delta chars=3
+06-16 09:09:51.169  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=39
+06-16 09:09:51.172  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=47
+06-16 09:09:51.181  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3567:24 - aichat UI text delta chars=3
+06-16 09:09:51.181  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3567:24 - aichat UI text delta chars=13
+06-16 09:09:51.185  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=41
+06-16 09:09:51.185  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=94
+06-16 09:09:51.282  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=52
+06-16 09:09:51.282  3176  3176 I A03d00/JSAPP: [MakepadNet] dataReceive id=5 len=246
+06-16 09:09:51.295  3176  3176 I A03d00/JSAPP: [MakepadNet] dataEnd id=5
+06-16 09:09:51.296  3176  3176 I A03d00/JSAPP: [MakepadNet] response id=5 code=200
+06-16 09:09:51.296  3176  3176 I A03d00/JSAPP: [MakepadNet] complete id=5
+06-16 09:09:51.335  3176  3246 I A03d00/makepad-ohos: [I] libs/makepad_ai/src/backends/octos.rs:318:24 - Octos stream complete: content_chars=16 saw_done=true leftover=0
+06-16 09:09:51.335  3176  3246 I A03d00/makepad-ohos: [I] examples/aichat/src/main.rs:3605:24 - aichat UI turn complete content_chars=58
+06-16 09:10:03.470  3176  3176 I C03f00/ArkCompiler: [gc] IsInBackground: 0; SensitiveStatus: 0; StartupStatus: 3; BundleName: dev.makepad.makepad_example_aichat;

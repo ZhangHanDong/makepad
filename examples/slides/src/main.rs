@@ -149,7 +149,7 @@ script_mod! {
                             TalkBody{text: "- A2App: Logic"}
                             TalkBody{text: "- AI: Custom context"}
                         }
-                        
+
                         demo_interact := TalkSlide{
                             title.text: "AI UI Control"
                             TalkBody{text: "- Studio Bridge"}
@@ -157,7 +157,7 @@ script_mod! {
                             TalkBody{text: "- Manipulate"}
                             TalkBody{text: "- Test"}
                         }
-                        
+
                         demo_splash_3d := TalkSlide{
                             title.text: "CAD Engine"
                             TalkBody{text: "- AI-generated CAD engine"}

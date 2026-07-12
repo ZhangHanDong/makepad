@@ -401,6 +401,7 @@ macro_rules! app_main {
             exports: $crate::napi_ohos::JsObject,
             env: $crate::napi_ohos::Env,
         ) -> $crate::napi_ohos::Result<()> {
+            Cx::init_log();
             Cx::ohos_init(exports, env, || {
                 let mut cx = Box::new(Cx::new($crate::_app_main_event_closure!($app)));
                 let studio_http = $crate::resolve_studio_http();

@@ -34,6 +34,15 @@ pub enum BackendConfig {
         api_key: String,
         model: String,
     },
+    // Octos agent host. Talks to an octos-bus `/chat` SSE endpoint
+    // (`{message, session_id, thread_id}` request; data-only SSE frames keyed
+    // by a JSON `"type"` of replace/token/done). This is the agent2app path:
+    // the app is a thin client of a local/remote octos agent rather than a
+    // direct LLM caller.
+    Octos {
+        base_url: String,
+        auth_token: Option<String>,
+    },
 }
 
 impl BackendConfig {
@@ -43,6 +52,7 @@ impl BackendConfig {
             BackendConfig::ClaudeAcp => "Claude (ACP)",
             BackendConfig::OpenAI { .. } => "OpenAI",
             BackendConfig::Gemini { .. } => "Gemini",
+            BackendConfig::Octos { .. } => "Octos",
         }
     }
 
@@ -52,6 +62,7 @@ impl BackendConfig {
             BackendConfig::ClaudeAcp => "claude-code-acp",
             BackendConfig::OpenAI { model, .. } => model,
             BackendConfig::Gemini { model, .. } => model,
+            BackendConfig::Octos { .. } => "octos",
         }
     }
 }

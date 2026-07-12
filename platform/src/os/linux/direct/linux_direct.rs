@@ -284,6 +284,7 @@ impl Cx {
     }
 
     fn handle_platform_ops(&mut self, direct_app: &mut DirectApp) -> EventFlow {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {

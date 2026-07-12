@@ -67,6 +67,8 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
+import android.text.TextWatcher;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -989,6 +991,33 @@ class ResizingLayout
     }
 }
 
+class NativeTextInputView extends EditText {
+    private final long inputId;
+    private boolean programmatic;
+
+    NativeTextInputView(Context context, long inputId) {
+        super(context);
+        this.inputId = inputId;
+    }
+
+    void setProgrammatic(boolean programmatic) {
+        this.programmatic = programmatic;
+    }
+
+    @Override
+    protected void onSelectionChanged(int selStart, int selEnd) {
+        super.onSelectionChanged(selStart, selEnd);
+        if (!programmatic) {
+            MakepadNative.onNativeTextInputSelectionChanged(inputId, selStart, selEnd);
+        }
+    }
+}
+
+class NativeTextInputRecord {
+    NativeTextInputView view;
+    boolean programmatic;
+}
+
 public class MakepadActivity
     extends Activity
     implements MidiManager.OnDeviceOpenedListener
@@ -1038,6 +1067,8 @@ public class MakepadActivity
     private ImageView mSurfaceSnapshotOverlay;
     private FrameLayout mCameraPreviewOverlay;
     private HashMap<Long, CameraPreviewSurface> mCameraPreviewViews = new HashMap<>();
+    private FrameLayout mNativeTextInputOverlay;
+    private HashMap<Long, NativeTextInputRecord> mNativeTextInputs = new HashMap<>();
     private Bitmap mLatestSurfaceSnapshot;
     private int mLatestSurfaceSnapshotOrientation = android.content.res.Configuration.ORIENTATION_UNDEFINED;
     private boolean mSurfaceSnapshotCopyInFlight = false;
@@ -1289,6 +1320,13 @@ public class MakepadActivity
 
         mCameraPreviewOverlay = new FrameLayout(this);
         mRootLayout.addView(mCameraPreviewOverlay);
+
+        mNativeTextInputOverlay = new FrameLayout(this);
+        mNativeTextInputOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        mRootLayout.addView(mNativeTextInputOverlay);
 
         mSelectionHandleOverlay = new FrameLayout(this);
         mSelectionHandleOverlay.setLayoutParams(new FrameLayout.LayoutParams(
@@ -2620,6 +2658,201 @@ public class MakepadActivity
                 CameraPreviewSurface preview = mCameraPreviewViews.remove(videoId);
                 if (preview != null && mCameraPreviewOverlay != null) {
                     mCameraPreviewOverlay.removeView(preview);
+                }
+            }
+        });
+    }
+
+    public void createNativeTextInput(final long inputId, final String text, final String placeholder, final boolean editable) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (mNativeTextInputOverlay == null || mNativeTextInputs.containsKey(inputId)) {
+                    return;
+                }
+                final NativeTextInputRecord record = new NativeTextInputRecord();
+                final NativeTextInputView input = new NativeTextInputView(MakepadActivity.this, inputId);
+                input.setSingleLine(true);
+                input.setText(text);
+                input.setHint(placeholder);
+                input.setEnabled(editable);
+                input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+                input.setVisibility(View.INVISIBLE);
+                input.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                    @Override
+                    public void onFocusChange(View v, boolean hasFocus) {
+                        MakepadNative.onNativeTextInputFocusChanged(inputId, hasFocus);
+                    }
+                });
+                input.addTextChangedListener(new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+                    @Override
+                    public void onTextChanged(CharSequence s, int start, int before, int count) {
+                        if (!record.programmatic) {
+                            MakepadNative.onNativeTextInputChanged(inputId, s.toString());
+                        }
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable s) {}
+                });
+                record.view = input;
+                mNativeTextInputs.put(inputId, record);
+                mNativeTextInputOverlay.addView(input);
+            }
+        });
+    }
+
+    public void updateNativeTextInput(final long inputId, final int left, final int top, final int right, final int bottom, final boolean visible) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record == null) {
+                    return;
+                }
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    Math.max(1, right - left),
+                    Math.max(1, bottom - top)
+                );
+                lp.leftMargin = left;
+                lp.topMargin = top;
+                record.view.setLayoutParams(lp);
+                record.view.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+            }
+        });
+    }
+
+    public void detachNativeTextInput(final long inputId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.setVisibility(View.INVISIBLE);
+                    record.view.clearFocus();
+                }
+            }
+        });
+    }
+
+    public void setNativeTextInputText(final long inputId, final String text, final boolean programmatic) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record == null) {
+                    return;
+                }
+                record.programmatic = programmatic;
+                record.view.setProgrammatic(programmatic);
+                record.view.setText(text);
+                record.view.setSelection(record.view.getText().length());
+                record.view.setProgrammatic(false);
+                record.programmatic = false;
+            }
+        });
+    }
+
+    public void setNativeTextInputPlaceholder(final long inputId, final String placeholder) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.setHint(placeholder);
+                }
+            }
+        });
+    }
+
+    public void setNativeTextInputEditable(final long inputId, final boolean editable) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.setEnabled(editable);
+                }
+            }
+        });
+    }
+
+    public void focusNativeTextInput(final long inputId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.requestFocus();
+                    InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
+                    imm.showSoftInput(record.view, 0);
+                }
+            }
+        });
+    }
+
+    public void blurNativeTextInput(final long inputId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.clearFocus();
+                    InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
+                    imm.hideSoftInputFromWindow(record.view.getWindowToken(), 0);
+                }
+            }
+        });
+    }
+
+    public void selectAllNativeTextInput(final long inputId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.requestFocus();
+                    record.view.selectAll();
+                }
+            }
+        });
+    }
+
+    public void copyNativeTextInput(final long inputId) {
+        nativeTextInputMenuAction(inputId, android.R.id.copy);
+    }
+
+    public void cutNativeTextInput(final long inputId) {
+        nativeTextInputMenuAction(inputId, android.R.id.cut);
+    }
+
+    public void pasteNativeTextInput(final long inputId) {
+        nativeTextInputMenuAction(inputId, android.R.id.paste);
+    }
+
+    private void nativeTextInputMenuAction(final long inputId, final int actionId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.get(inputId);
+                if (record != null) {
+                    record.view.requestFocus();
+                    record.view.onTextContextMenuItem(actionId);
+                }
+            }
+        });
+    }
+
+    public void closeNativeTextInput(final long inputId) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                NativeTextInputRecord record = mNativeTextInputs.remove(inputId);
+                if (record != null && mNativeTextInputOverlay != null) {
+                    mNativeTextInputOverlay.removeView(record.view);
                 }
             }
         });

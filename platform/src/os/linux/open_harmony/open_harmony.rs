@@ -1,15 +1,23 @@
 use {
     self::super::{
-        super::gl_sys, super::gl_sys::LibGl, arkts_obj_ref::ArkTsObjRef, oh_callbacks::*,
-        oh_media::CxOpenHarmonyMedia, raw_file::RawFileMgr,
+        super::gl_sys,
+        super::gl_sys::LibGl,
+        arkts_obj_ref::{ArkTsArg, ArkTsObjRef},
+        oh_callbacks::*,
+        oh_media::CxOpenHarmonyMedia,
+        raw_file::RawFileMgr,
     },
     crate::{
         cx::{Cx, OpenHarmonyParams, OsType},
-        cx_api::{CxOsApi, CxOsOp, OpenUrlInPlace},
+        cx_api::{
+            CxOsApi, CxOsOp, NativeHostCommand, NativeHostKind, NativeHostPropUpdate,
+            NativeHostProps, NativeTextInputCommand, OpenUrlInPlace,
+        },
         draw_pass::{CxDrawPassParent, DrawPassClearColor, DrawPassClearDepth, DrawPassId},
         egl_sys::{self, LibEgl, EGL_NONE},
         event::{Event, KeyCode, KeyEvent, TouchUpdateEvent, VirtualKeyboardEvent, WindowGeom},
         gpu_info::GpuPerformance,
+        makepad_live_id::LiveId,
         makepad_math::*,
         os::cx_native::EventFlow,
         shared_framebuf::{PollTimer, PollTimers},
@@ -46,7 +54,23 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
 
     let raw_file = RawFileMgr::new(raw_env, res_mgr);
 
-    crate::log!("call onCreate, device_type = {}, os_full_name = {}, display_density = {}, files_dir = {}, cache_dir = {}, temp_dir = {}", device_type, os_full_name, display_density, files_dir,cache_dir,temp_dir);
+    crate::log!(
+        "call onCreate, device_type = {}, os_full_name = {}, display_density = {}, files_dir = {}, cache_dir = {}, temp_dir = {}",
+        device_type,
+        os_full_name,
+        display_density,
+        files_dir,
+        cache_dir,
+        temp_dir
+    );
+
+    // OHOS reports target_os = "linux", so XDG-based crates (e.g. directories)
+    // would resolve to unwritable desktop paths like ~/.local/share. Point them
+    // at the app sandbox before any of them capture the environment.
+    std::env::set_var("HOME", &files_dir);
+    std::env::set_var("XDG_DATA_HOME", format!("{}/data", files_dir));
+    std::env::set_var("XDG_CONFIG_HOME", format!("{}/config", files_dir));
+    std::env::set_var("XDG_CACHE_HOME", &cache_dir);
 
     send_from_ohos_message(FromOhosMessage::Init {
         device_type,
@@ -63,12 +87,109 @@ pub fn ohos_ability_on_create(env: Env, ark_ts: JsObject) -> napi_ohos::Result<(
 }
 
 impl Cx {
+    fn oh_call_arkts_args(&mut self, name: &str, args: Vec<ArkTsArg>) {
+        let Some(arkts_obj) = self.os.arkts_obj.as_mut() else {
+            return;
+        };
+        if let Err(err) = arkts_obj.call_js_function_args(name, args) {
+            crate::error!("OpenHarmony ArkTS call `{}` failed: {:?}", name, err);
+        }
+    }
+
+    fn oh_call_native_text_input_create(
+        &mut self,
+        id: LiveId,
+        text: &str,
+        placeholder: &str,
+        editable: bool,
+        secure: bool,
+    ) {
+        self.oh_call_arkts_args(
+            "createNativeTextInput",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(text.to_string()),
+                ArkTsArg::Str(placeholder.to_string()),
+                ArkTsArg::Bool(editable),
+                ArkTsArg::Bool(secure),
+            ],
+        );
+    }
+
+    fn oh_call_native_text_input_update(
+        &mut self,
+        id: LiveId,
+        left: f64,
+        top: f64,
+        width: f64,
+        height: f64,
+        visible: bool,
+    ) {
+        self.oh_call_arkts_args(
+            "updateNativeTextInput",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::F64(left),
+                ArkTsArg::F64(top),
+                ArkTsArg::F64(width),
+                ArkTsArg::F64(height),
+                ArkTsArg::Bool(visible),
+            ],
+        );
+    }
+
+    fn oh_call_native_text_input_text(&mut self, id: LiveId, text: &str, programmatic: bool) {
+        self.oh_call_arkts_args(
+            "setNativeTextInputText",
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(text.to_string()),
+                ArkTsArg::Bool(programmatic),
+            ],
+        );
+    }
+
+    fn oh_call_native_text_input_string_prop(&mut self, name: &str, id: LiveId, value: &str) {
+        self.oh_call_arkts_args(
+            name,
+            vec![
+                ArkTsArg::Str(id.0.to_string()),
+                ArkTsArg::Str(value.to_string()),
+            ],
+        );
+    }
+
+    fn oh_call_native_text_input_bool_prop(&mut self, name: &str, id: LiveId, value: bool) {
+        self.oh_call_arkts_args(
+            name,
+            vec![ArkTsArg::Str(id.0.to_string()), ArkTsArg::Bool(value)],
+        );
+    }
+
+    fn oh_call_native_text_input_id(&mut self, name: &str, id: LiveId) {
+        self.oh_call_arkts_args(name, vec![ArkTsArg::Str(id.0.to_string())]);
+    }
+
     fn main_loop(&mut self, from_ohos_rx: mpsc::Receiver<FromOhosMessage>) {
         crate::log!("entry main_loop");
 
         self.gpu_info.performance = GpuPerformance::Tier1;
 
+        // Mirror the Android backend: publish the screen size so
+        // DisplayContext::is_desktop()/is_screen_size_known() work and apps
+        // can auto-select the mobile layout.
+        let dpi_factor = if self.os.dpi_factor > 0.0 {
+            self.os.dpi_factor
+        } else {
+            1.0
+        };
+        self.display_context.screen_size = self.os.display_size / dpi_factor;
+
         self.call_event_handler(&Event::Startup);
+        // The script-based live design system registers dep() entries (fonts etc.)
+        // during the Startup event, after the early ohos_load_dependencies call —
+        // load whatever appeared since, or text/icons render empty.
+        self.ohos_load_dependencies();
         self.redraw_all();
 
         while !self.os.quit {
@@ -126,6 +247,11 @@ impl Cx {
         // Live edits
         self.run_live_edit_if_needed("open-harmony");
 
+        // Network runtime responses (HTTP/WS events emitted by the ArkTS
+        // bridge callbacks land in the runtime channel; drain them here like
+        // the other platforms do in their main loops)
+        self.dispatch_network_runtime_events();
+
         // Platform operations
         self.handle_platform_ops();
     }
@@ -152,6 +278,30 @@ impl Cx {
 
     fn handle_message(&mut self, msg: FromOhosMessage) {
         match msg {
+            FromOhosMessage::HttpRequestStart {
+                request_id,
+                method,
+                url,
+                headers_flat,
+                body,
+            } => {
+                self.oh_call_arkts_args(
+                    "httpStart",
+                    vec![
+                        ArkTsArg::Str(request_id.0.to_string()),
+                        ArkTsArg::Str(method),
+                        ArkTsArg::Str(url),
+                        ArkTsArg::Str(headers_flat),
+                        ArkTsArg::Bytes(body),
+                    ],
+                );
+            }
+            FromOhosMessage::HttpRequestCancel { request_id } => {
+                self.oh_call_arkts_args(
+                    "httpCancel",
+                    vec![ArkTsArg::Str(request_id.0.to_string())],
+                );
+            }
             FromOhosMessage::SurfaceCreated {
                 window,
                 width: _,
@@ -183,6 +333,7 @@ impl Cx {
 
                 let dpi_factor = window.dpi_override.unwrap_or(self.os.dpi_factor);
                 let size = self.os.display_size / dpi_factor;
+                self.display_context.screen_size = size;
                 window.window_geom = WindowGeom {
                     dpi_factor,
                     can_fullscreen: false,
@@ -409,6 +560,24 @@ impl Cx {
                 panic!();
             }
 
+            unsafe {
+                let gl_str = |key: u32| {
+                    let p = (libgl.glGetString)(key) as *const std::ffi::c_char;
+                    if p.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+                    }
+                };
+                crate::log!(
+                    "GL_VENDOR={} GL_RENDERER={} GL_VERSION={} GLSL_VERSION={}",
+                    gl_str(gl_sys::VENDOR),
+                    gl_str(gl_sys::RENDERER),
+                    gl_str(0x1F02 /* GL_VERSION */),
+                    gl_str(0x8B8C /* GL_SHADING_LANGUAGE_VERSION */),
+                );
+            }
+
             cx.os.display = Some(CxOhosDisplay {
                 libegl,
                 libgl,
@@ -435,8 +604,10 @@ impl Cx {
                 .unwrap()
                 .read_to_end(path, &mut buffer)
             {
+                crate::log!("loaded dependency {} ({} bytes)", path, buffer.len());
                 dep.data = Some(Ok(Rc::new(buffer)));
             } else {
+                crate::error!("cannot load dependency {}", path);
                 dep.data = Some(Err("read_to_end failed".to_string()));
             }
         }
@@ -517,6 +688,7 @@ impl Cx {
     }
 
     fn handle_platform_ops(&mut self) -> EventFlow {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             //crate::log!("============ handle_platform_ops");
             match op {
@@ -591,6 +763,146 @@ impl Cx {
                     //self.os.keyboard_visible = false;
                     //unsafe {android_jni::to_java_show_keyboard(false);}
                 }
+                CxOsOp::CreateNativeView { id, kind, props } => {
+                    self.os.native_host_kinds.insert(id, kind);
+                    self.os.native_host_layouts.remove(&id);
+                    match (kind, props) {
+                        (
+                            NativeHostKind::TextInput,
+                            NativeHostProps::TextInput {
+                                text,
+                                placeholder,
+                                editable,
+                                secure,
+                            },
+                        ) => self.oh_call_native_text_input_create(
+                            id,
+                            &text,
+                            &placeholder,
+                            editable,
+                            secure,
+                        ),
+                        (NativeHostKind::Label, NativeHostProps::Label { text }) => self
+                            .oh_call_arkts_args(
+                                "createNativeLabel",
+                                vec![
+                                    ArkTsArg::Str(id.0.to_string()),
+                                    ArkTsArg::Str(text.to_string()),
+                                ],
+                            ),
+                        _ => {}
+                    }
+                }
+                CxOsOp::UpdateNativeViewLayout { id, area, visible } => {
+                    let rect = area.clipped_rect(self);
+                    let shown = visible && rect.size.x > 0.0 && rect.size.y > 0.0;
+                    if self.os.native_host_layouts.get(&id) == Some(&(rect, shown)) {
+                        continue;
+                    }
+                    let kind = self.os.native_host_kinds.get(&id).copied();
+                    match kind {
+                        Some(NativeHostKind::Label) => self.oh_call_arkts_args(
+                            "updateNativeLabel",
+                            vec![
+                                ArkTsArg::Str(id.0.to_string()),
+                                ArkTsArg::F64(rect.pos.x),
+                                ArkTsArg::F64(rect.pos.y),
+                                ArkTsArg::F64(rect.size.x),
+                                ArkTsArg::F64(rect.size.y),
+                                ArkTsArg::Bool(shown),
+                            ],
+                        ),
+                        Some(NativeHostKind::TextInput) => self.oh_call_native_text_input_update(
+                            id,
+                            rect.pos.x,
+                            rect.pos.y,
+                            rect.size.x,
+                            rect.size.y,
+                            shown,
+                        ),
+                        None => crate::error!(
+                            "UpdateNativeViewLayout for unknown native host id {:?}",
+                            id
+                        ),
+                    }
+                    if kind.is_some() {
+                        self.os.native_host_layouts.insert(id, (rect, shown));
+                    }
+                }
+                CxOsOp::UpdateNativeViewProps { id, update } => match update {
+                    NativeHostPropUpdate::TextInputText { text, programmatic } => {
+                        self.oh_call_native_text_input_text(id, &text, programmatic);
+                    }
+                    NativeHostPropUpdate::TextInputPlaceholder { placeholder } => self
+                        .oh_call_native_text_input_string_prop(
+                            "setNativeTextInputPlaceholder",
+                            id,
+                            &placeholder,
+                        ),
+                    NativeHostPropUpdate::TextInputEditable { editable } => self
+                        .oh_call_native_text_input_bool_prop(
+                            "setNativeTextInputEditable",
+                            id,
+                            editable,
+                        ),
+                    NativeHostPropUpdate::TextInputSecure { secure } => self
+                        .oh_call_native_text_input_bool_prop(
+                            "setNativeTextInputSecure",
+                            id,
+                            secure,
+                        ),
+                    NativeHostPropUpdate::LabelText { text } => {
+                        self.oh_call_native_text_input_string_prop("setNativeLabelText", id, &text);
+                    }
+                },
+                CxOsOp::CommandNativeView { id, command } => match command {
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Focus) => {
+                        self.oh_call_native_text_input_id("focusNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Blur) => {
+                        self.oh_call_native_text_input_id("blurNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::SelectAll) => {
+                        self.oh_call_native_text_input_id("selectAllNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Copy) => {
+                        self.oh_call_native_text_input_id("copyNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Cut) => {
+                        self.oh_call_native_text_input_id("cutNativeTextInput", id);
+                    }
+                    NativeHostCommand::TextInput(NativeTextInputCommand::Paste) => {
+                        self.oh_call_native_text_input_id("pasteNativeTextInput", id);
+                    }
+                },
+                CxOsOp::DetachNativeView { id } => {
+                    self.os.native_host_layouts.remove(&id);
+                    match self.os.native_host_kinds.get(&id) {
+                        Some(NativeHostKind::Label) => {
+                            self.oh_call_native_text_input_id("detachNativeLabel", id)
+                        }
+                        Some(NativeHostKind::TextInput) => {
+                            self.oh_call_native_text_input_id("detachNativeTextInput", id)
+                        }
+                        None => {
+                            crate::error!("DetachNativeView for unknown native host id {:?}", id)
+                        }
+                    }
+                }
+                CxOsOp::CloseNativeView { id } => {
+                    self.os.native_host_layouts.remove(&id);
+                    match self.os.native_host_kinds.remove(&id) {
+                        Some(NativeHostKind::Label) => {
+                            self.oh_call_native_text_input_id("closeNativeLabel", id)
+                        }
+                        Some(NativeHostKind::TextInput) => {
+                            self.oh_call_native_text_input_id("closeNativeTextInput", id)
+                        }
+                        None => {
+                            crate::error!("CloseNativeView for unknown native host id {:?}", id)
+                        }
+                    }
+                }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 }
@@ -602,7 +914,18 @@ impl Cx {
 
 impl CxOsApi for Cx {
     fn init_cx_os(&mut self) {
+        // Emulator-only tolerance: MAKEPAD=ohos_sim builds park failed GL
+        // shader compiles instead of panicking (the desktop-hosted emulator
+        // GPU can't compile them). That mode silently masks real shader
+        // bugs, so scream if such a binary ever runs on a real device.
+        #[cfg(ohos_sim)]
+        crate::log!(
+            "WARNING: built with MAKEPAD=ohos_sim (tolerant shader mode). \
+             Emulator-only build — do NOT ship this to a real device; \
+             rebuild without MAKEPAD=ohos_sim."
+        );
         self.package_root = Some("makepad".to_string());
+        super::oh_network::register_ohos_network_backend();
         self.native_load_dependencies();
     }
 
@@ -636,6 +959,12 @@ pub struct CxOhosDisplay {
 
 pub struct CxOs {
     pub first_after_resize: bool,
+    // CxOsOp layout/detach/close ops carry only the host id; this map,
+    // filled at CreateNativeView, routes them to the right ArkTS host method.
+    pub(crate) native_host_kinds: std::collections::HashMap<LiveId, NativeHostKind>,
+    // Final clipped layout resolved after drawing. Widgets queue their Area on
+    // every redraw so scroll view_shift is current; only changed layouts cross NAPI.
+    pub(crate) native_host_layouts: std::collections::HashMap<LiveId, (Rect, bool)>,
     pub display_size: Vec2d,
     pub dpi_factor: f64,
     pub media: CxOpenHarmonyMedia,
@@ -657,6 +986,8 @@ impl Default for CxOs {
     fn default() -> Self {
         Self {
             first_after_resize: true,
+            native_host_kinds: std::collections::HashMap::new(),
+            native_host_layouts: std::collections::HashMap::new(),
             display_size: dvec2(1260 as f64, 2503 as f64),
             dpi_factor: 3.25,
             media: Default::default(),
@@ -713,7 +1044,7 @@ impl CxOhosDisplay {
         (self.libegl.eglSwapBuffers.unwrap())(self.egl_display, self.surface);
     }
 
-    unsafe fn make_current(&mut self) {
+    pub(crate) unsafe fn make_current(&mut self) {
         if (self.libegl.eglMakeCurrent.unwrap())(
             self.egl_display,
             self.surface,

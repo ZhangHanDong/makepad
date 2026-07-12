@@ -1,0 +1,39 @@
+{"Hello":{"client_id":[1]}}
+{"Builds":{"builds":[{"build_id":[7],"mount":"makepad","package":"makepad-example-native-text-input","active":true}]}}
+{"BuildStarted":{"build_id":[8],"mount":"makepad","package":"makepad-example-native-text-input"}}
+{"QueryLogResults":{"query_id":[49],"entries":[],"done":false}}
+{"BuildStopped":{"build_id":[7],}}
+{"QueryLogResults":{"query_id":[49],"entries":[[94,{"index":94,"timestamp":1779141796.608036,"build_id":[8],"level":{"Log":[]},"source":{"Cargo":[]},"message":"   Compiling makepad-example-native-text-input v1.0.0 (/Users/zhangalex/Work/Projects/fw/fork-makepad/examples/native_text_input)",}]],"done":false}}
+{"QueryLogResults":{"query_id":[49],"entries":[[95,{"index":95,"timestamp":1779141800.355115,"build_id":[8],"level":{"Log":[]},"source":{"Cargo":[]},"message":"    Finished `release` profile [optimized] target(s) in 4.05s",}]],"done":false}}
+{"QueryLogResults":{"query_id":[49],"entries":[[96,{"index":96,"timestamp":1779141800.371247,"build_id":[8],"level":{"Log":[]},"source":{"Cargo":[]},"message":"     Running `target/release/makepad-example-native-text-input --message-format=json --stdin-loop`",}]],"done":false}}
+{"AppStarted":{"build_id":[8]}}
+{"Screenshot":{"query_id":[65],"build_id":[8],"kind_id":0,"path":"/var/folders/q9/w05jvn_11tdblq6rzg5p_0t00000gn/T/makepad_studio_hub/build-8-kind-0-req-65-1779141801150.png","width":1484,"height":1156}}
+{"WidgetTreeDump":{"query_id":[81],"build_id":[8],"dump":"W3 38\n0 -1 main_window Window 0 0 742 578\n1 0 label Label 344 9 9 10\n2 0 body KeyboardView 0 0 742 578\n3 2 - View 0 0 742 578\n4 3 - View 24 24 694 76\n5 4 - Label 32 36 16 20\n6 4 1 Label 30 80 8 11\n7 3 1 View 24 114 694 192\n8 7 - Label 45 137 10 13\n9 7 native_label NativeLabel 38 170 666 28\n10 7 native_input NativeTextInput 38 208 666 36\n11 7 1 View 38 254 666 38\n12 11 focus_button Button 38 257 48 32\n13 11 set_button Button 94 257 62 32\n14 11 blur_button Button 164 257 38 32\n15 11 select_button Button 210 257 71 32\n16 11 copy_button Button 289 257 43 32\n17 11 cut_button Button 340 257 33 32\n18 11 paste_button Button 381 257 47 32\n19 11 label_button Button 436 257 70 32\n20 11 set_both_button Button 513 257 65 32\n21 3 2 View 24 320 694 348\n22 21 - Label 45 343 9 13\n23 21 status_label Label 44 382 8 11\n24 21 value_label Label 44 419 9 10\n25 21 focus_state_label Label 45 455 7 10\n26 21 selection_state_label Label 44 490 8 11\n27 21 command_state_label Label 44 526 8 11\n28 21 change_state_label Label 44 562 8 11\n29 21 label_state_label Label 45 599 8 10\n30 21 host_state_label Label 45 635 8 10\n31 3 3 View 24 682 694 198\n32 31 - Label 44 705 10 13\n33 31 1 View 38 738 666 128\n34 33 - Label 52 754 8 11\n35 33 clipped_native_input NativeTextInput 46 782 650 36\n36 33 1 Label 52 835 8 10\n37 33 2 Label 52 871 8 10\n"}}
+{"WidgetQuery":{"query_id":[97],"build_id":[8],"query":"id:focus_button","rects":["14 focus_button Button 38 257 48 32"]}}
+{"QueryLogResults":{"query_id":[129],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[97,{"index":97,"timestamp":1779141801.369423,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: focus requested","file_name":"examples/native_text_input/src/main.rs","line":209,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[145],"build_id":[8],"query":"id:native_input","rects":["12 native_input NativeTextInput 38 208 666 36"]}}
+{"WidgetQuery":{"query_id":[177],"build_id":[8],"query":"id:set_button","rects":["15 set_button Button 94 257 62 32"]}}
+{"QueryLogResults":{"query_id":[209],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[98,{"index":98,"timestamp":1779141801.569862,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: text set","file_name":"examples/native_text_input/src/main.rs","line":216,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[225],"build_id":[8],"query":"id:select_button","rects":["17 select_button Button 210 257 71 32"]}}
+{"QueryLogResults":{"query_id":[257],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[99,{"index":99,"timestamp":1779141801.702731,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: select all requested","file_name":"examples/native_text_input/src/main.rs","line":234,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[273],"build_id":[8],"query":"id:copy_button","rects":["18 copy_button Button 289 257 43 32"]}}
+{"QueryLogResults":{"query_id":[49],"entries":[[100,{"index":100,"timestamp":1779141801.835929,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: copy requested","file_name":"examples/native_text_input/src/main.rs","line":265,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[305],"build_id":[8],"query":"id:cut_button","rects":["19 cut_button Button 340 257 33 32"]}}
+{"QueryLogResults":{"query_id":[49],"entries":[[101,{"index":101,"timestamp":1779141801.902345,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: cut requested","file_name":"examples/native_text_input/src/main.rs","line":271,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[337],"build_id":[8],"query":"id:paste_button","rects":["20 paste_button Button 381 257 47 32"]}}
+{"QueryLogResults":{"query_id":[369],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[102,{"index":102,"timestamp":1779141801.96909,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: paste requested","file_name":"examples/native_text_input/src/main.rs","line":277,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[385],"build_id":[8],"query":"id:label_button","rects":["21 label_button Button 436 257 70 32"]}}
+{"QueryLogResults":{"query_id":[417],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[103,{"index":103,"timestamp":1779141802.103307,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: native label updated","file_name":"examples/native_text_input/src/main.rs","line":241,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[433],"build_id":[8],"query":"id:set_both_button","rects":["22 set_both_button Button 513 257 65 32"]}}
+{"QueryLogResults":{"query_id":[465],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[104,{"index":104,"timestamp":1779141802.235778,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: same-frame native updates requested","file_name":"examples/native_text_input/src/main.rs","line":259,"column":13}]],"done":false}}
+{"WidgetQuery":{"query_id":[481],"build_id":[8],"query":"id:clipped_native_input","rects":["37 clipped_native_input NativeTextInput 46 782 650 36"]}}
+{"Screenshot":{"query_id":[497],"build_id":[8],"kind_id":0,"path":"/var/folders/q9/w05jvn_11tdblq6rzg5p_0t00000gn/T/makepad_studio_hub/build-8-kind-0-req-497-1779141802512.png","width":1484,"height":1156}}
+{"WidgetQuery":{"query_id":[513],"build_id":[8],"query":"id:blur_button","rects":["16 blur_button Button 164 257 38 32"]}}
+{"QueryLogResults":{"query_id":[545],"entries":[],"done":true}}
+{"QueryLogResults":{"query_id":[49],"entries":[[105,{"index":105,"timestamp":1779141802.653051,"build_id":[8],"level":{"Log":[]},"source":{"ChildApp":[]},"message":"NativeTextInput smoke: blur requested","file_name":"examples/native_text_input/src/main.rs","line":223,"column":13}]],"done":false}}

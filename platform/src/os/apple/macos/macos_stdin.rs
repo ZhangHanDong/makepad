@@ -364,6 +364,7 @@ impl Cx {
         _metal_cx: &MetalCx,
         stdin_windows: &mut Vec<StdinWindow>,
     ) {
+        self.flush_native_mount_queue();
         while let Some(op) = self.platform_ops.pop() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {

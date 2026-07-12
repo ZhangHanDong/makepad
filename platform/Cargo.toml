@@ -73,10 +73,14 @@ naga = {version = "27.0", features = ["wgsl-in", "spv-out"]}
 ash = "0.38"
 
 [target.'cfg(target_env = "ohos")'.dependencies]
-hilog-sys = "0.1.1"
-napi-derive-ohos = "0.0.9"
-napi-ohos = "0.1.3"
-ohos-sys = { version = "0.2.1", features = ["xcomponent"] }
+hilog-sys = "=0.1.7"
+napi-derive-ohos = "=0.0.9"
+napi-ohos = "=0.1.3"
+ohos-sys = { version = "=0.2.2", features = ["xcomponent"] }
+
+[features]
+default = []
+diag-native-leak-count = []
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 ctrlc = { version = "3.4", features = ["termination"] }

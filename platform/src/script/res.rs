@@ -164,6 +164,7 @@ fn load_packaged_resource(cx: &Cx, dep_path: &str) -> Option<Rc<Vec<u8>>> {
 #[cfg(all(
     not(target_arch = "wasm32"),
     not(any(target_os = "android", target_os = "ios", target_os = "tvos")),
+    not(target_env = "ohos"),
     not(all(target_os = "macos", apple_bundle))
 ))]
 fn load_packaged_resource(cx: &Cx, dep_path: &str) -> Option<Rc<Vec<u8>>> {
@@ -172,6 +173,21 @@ fn load_packaged_resource(cx: &Cx, dep_path: &str) -> Option<Rc<Vec<u8>>> {
     let mut file = File::open(&full_path).ok()?;
     let mut data = Vec::new();
     file.read_to_end(&mut data).ok()?;
+    Some(Rc::new(data))
+}
+
+/// OpenHarmony packages expose raw HAP resources through ResourceManager, not
+/// as files relative to the process working directory.
+#[cfg(target_env = "ohos")]
+fn load_packaged_resource(cx: &Cx, dep_path: &str) -> Option<Rc<Vec<u8>>> {
+    let raw_file = cx.os.raw_file.as_ref()?;
+    let full_path = if let Some(root) = cx.package_root.as_deref() {
+        format!("{}/{}", root, dep_path)
+    } else {
+        dep_path.to_string()
+    };
+    let mut data = Vec::new();
+    raw_file.read_to_end(&full_path, &mut data).ok()?;
     Some(Rc::new(data))
 }
 
@@ -353,6 +369,7 @@ impl Cx {
                     #[cfg(not(target_os = "android"))]
                     if let Some(dep_path) = res.dependency_path.as_deref() {
                         if let Some(data) = load_packaged_resource(self, dep_path) {
+                            crate::log!("loaded packaged resource {} ({} bytes)", dep_path, data.len());
                             res.data = CxScriptResourceData::Loaded(data);
                             return;
                         }
@@ -368,10 +385,12 @@ impl Cx {
 
             #[cfg(not(target_arch = "wasm32"))]
             {
-                res.data = CxScriptResourceData::Error(format!(
+                let msg = format!(
                     "Failed to load resource: {} (dep: {:?}, packaged: {})",
                     res.abs_path, res.dependency_path, is_packaged,
-                ));
+                );
+                crate::error!("{}", msg);
+                res.data = CxScriptResourceData::Error(msg);
             }
         }
 

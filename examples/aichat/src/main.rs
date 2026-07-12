@@ -19,7 +19,7 @@ script_mod! {
             width: Fill
             height: Fill
             flow: Down
-            drag_scrolling: false
+            drag_scrolling: true
             auto_tail: true
             smooth_tail: true
             selectable: true
@@ -32,7 +32,7 @@ script_mod! {
                 height: Fit
                 // Extra vertical margin gives the (now smaller) shadow room so it isn't clipped by
                 // the list-item bounds - the glass shader expands the quad by shadow_radius.
-                margin: Inset{top: 8 bottom: 10 left: 50 right: 8}
+                margin: Inset{top: 8 bottom: 10 left: 34 right: 2}
                 padding: Inset{left: 14 top: 10 right: 14 bottom: 10}
                 flow: Overlay
                 // Frosted blue glass message bubble: refracts the vector backdrop and tints it
@@ -104,7 +104,7 @@ script_mod! {
             Assistant := RoundedView {
                 width: Fill
                 height: Fit
-                margin: Inset{top: 4 bottom: 4 left: 8 right: 50}
+                margin: Inset{top: 4 bottom: 4 left: 2 right: 34}
                 padding: Inset{left: 12 top: 8 right: 12 bottom: 8}
                 flow: Overlay
                 show_bg: true
@@ -188,6 +188,61 @@ script_mod! {
         }
     }
 
+    let ChatActionButton = ButtonIcon {
+        height: 44
+        padding: Inset{left: 12 right: 12 top: 0 bottom: 0}
+        margin: 0
+        spacing: 7
+        icon_walk: Walk{width: 17 height: 17}
+        draw_text +: {
+            color: #xffffffff
+            color_hover: #xffffffff
+            color_down: #xffffffff
+            color_focus: #xffffffff
+            text_style: theme.font_bold{font_size: 12}
+        }
+        draw_icon +: {
+            color: #xffffffff
+            color_hover: #xffffffff
+            color_down: #xffffffff
+            color_focus: #xffffffff
+        }
+        draw_bg +: {
+            color: #x25324aee
+            color_hover: #x334666ff
+            color_down: #x182238ff
+            color_focus: #x334666ff
+            border_color: #x7186a9cc
+            border_color_hover: #xa8c3efff
+            border_color_down: #x89a9ddff
+            border_color_focus: #xa8c3efff
+            border_size: 1
+            border_radius: 8
+        }
+    }
+
+    let SendButton = ChatActionButton {
+        text: "Send"
+        draw_icon.svg: crate_resource("self:resources/send.svg")
+        draw_bg +: {
+            color: #x2356a8ff
+            color_hover: #x2f6bc5ff
+            color_down: #x194486ff
+            color_focus: #x2f6bc5ff
+            border_color: #x73a7ffff
+        }
+    }
+
+    let CancelButton = ChatActionButton {
+        text: "Stop"
+        draw_icon.svg: crate_resource("self:resources/stop.svg")
+    }
+
+    let ClearButton = ChatActionButton {
+        text: "Clear"
+        draw_icon.svg: crate_resource("self:resources/trash.svg")
+    }
+
     startup() do #(App::script_component(vm)){
         ui: Root{
             main_window := Window{
@@ -224,86 +279,138 @@ script_mod! {
                         draw_bg.color: #x05070e18
                     }
 
-                    content_layer := View {
-                        width: Fill
-                        height: Fill
-                        flow: Down
-                        padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
-                        spacing: 12
-
-                    View {
-                        width: Fill
-                        height: Fit
-                        flow: Right
-                        spacing: 12
-                        align: Align{y: 0.5}
-
-                        Label {
-                            text: "AI Chat"
-                            draw_text.text_style.font_size: 18
-                        }
-
-                        View { width: Fill height: 1 }
-
-                        Label {
-                            text: "Backend:"
-                            draw_text.text_style.font_size: 12
-                        }
-
-                        backend_dropdown := DropDown {
-                            width: 150
-                            labels: ["Claude Splash" "Local OpenAI"]
-                            draw_text.text_style.font_size: 12
-                        }
-                    }
-
-                    chat_list := ChatList {}
-
-                    View {
-                        width: Fill
-                        height: Fit
-                        flow: Right
-                        spacing: 8
-                        align: Align{y: 1.0}
-
-                        input := glass.TextInput {
+                    content_layer := AdaptiveView {
+                        Desktop := View {
                             width: Fill
-                            height: 42
-                            empty_text: "Type a message... (Enter to send)"
+                            height: Fill
+                            flow: Down
+                            padding: Inset{left: 16 top: 16 right: 16 bottom: 16}
+                            spacing: 12
+
+                            View {
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 12
+                                align: Align{y: 0.5}
+
+                                Label {
+                                    text: "AI Chat"
+                                    draw_text.text_style.font_size: 18
+                                }
+                                View { width: Fill height: 1 }
+                                Label {
+                                    text: "Backend:"
+                                    draw_text.text_style.font_size: 12
+                                }
+                                backend_dropdown := DropDown {
+                                    width: 170
+                                    labels: ["Claude Splash" "Local OpenAI" "Octos · Moonshot"]
+                                    draw_text.text_style.font_size: 12
+                                }
+                            }
+
+                            chat_list := ChatList {}
+
+                            View {
+                                width: Fill
+                                height: Fit
+                                flow: Right
+                                spacing: 8
+                                align: Align{y: 1.0}
+
+                                input := NativeTextInput {
+                                    width: Fill
+                                    height: 44
+                                    placeholder: "Type a message..."
+                                }
+                                send_button := SendButton { width: 96 }
+                                cancel_button := CancelButton { width: 96 visible: false }
+                                clear_button := ClearButton { width: 96 }
+                            }
+
+                            status_label := Label {
+                                width: Fill
+                                height: Fit
+                                text: "Initializing..."
+                                draw_text.text_style.font_size: 10
+                                draw_text.color: #x9ba8bd
+                            }
                         }
 
-                        send_button := glass.GlassButtonProminent {
-                            text: "Send"
-                            width: 84
-                            height: 42
-                        }
-
-                        cancel_button := glass.GlassButton {
-                            text: "Cancel"
-                            width: 84
-                            height: 42
-                            visible: false
-                        }
-
-                        clear_button := glass.GlassButton {
-                            text: "Clear"
-                            width: 84
-                            height: 42
-                        }
-                    }
-
-                    View {
-                        width: Fill
-                        height: Fit
-
-                        status_label := Label {
+                        Mobile := View {
                             width: Fill
-                            height: Fit
-                            text: "Initializing..."
-                            draw_text.text_style.font_size: 10
-                            draw_text.color: #888
+                            height: Fill
+                            flow: Down
+                            padding: Inset{left: 10 top: 10 right: 10 bottom: 10}
+                            spacing: 8
+
+                            View {
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 6
+
+                                View {
+                                    width: Fill
+                                    height: 36
+                                    flow: Right
+                                    align: Align{y: 0.5}
+                                    Label {
+                                        text: "AI Chat"
+                                        draw_text.text_style: theme.font_bold{font_size: 17}
+                                    }
+                                    View { width: Fill height: 1 }
+                                    Label {
+                                        text: "Mobile"
+                                        draw_text.color: #xa9bad3
+                                        draw_text.text_style.font_size: 10
+                                    }
+                                }
+
+                                backend_dropdown := DropDown {
+                                    width: Fill
+                                    height: 40
+                                    labels: ["Claude Splash" "Local OpenAI" "Octos · Moonshot"]
+                                    draw_text.text_style.font_size: 12
+                                }
+                            }
+
+                            chat_list := ChatList {}
+
+                            View {
+                                width: Fill
+                                height: Fit
+                                flow: Down
+                                spacing: 7
+
+                                input := NativeTextInput {
+                                    width: Fill
+                                    height: 48
+                                    placeholder: "Message"
+                                }
+
+                                View {
+                                    width: Fill
+                                    height: 44
+                                    flow: Right
+                                    spacing: 7
+                                    send_button := SendButton { width: Fill }
+                                    cancel_button := CancelButton { width: 96 visible: false }
+                                    clear_button := ClearButton { width: 96 }
+                                }
+                            }
+
+                            status_label := Label {
+                                width: Fill
+                                height: 14
+                                max_lines: 1
+                                text_overflow: Ellipsis
+                                text: "Initializing..."
+                                draw_text.text_style.font_size: 9
+                                draw_text.color: #x9ba8bd
+                            }
                         }
-                    }
                     }
                 }
             }
@@ -489,15 +596,21 @@ Here is the complete Splash scripting manual. Follow it exactly:
 
 const LOCAL_OPENAI_URL: &str = "http://10.0.0.168:8080/v1/chat/completions";
 const LOCAL_OPENAI_MODEL: &str = "Gemma4Unlim-31B-ModelOptFullAttn-FullCal128.gguf";
+const OCTOS_URL: &str = "http://192.168.1.153:19401";
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum BackendType {
     #[default]
     ClaudeSplash,
     LocalOpenAi,
+    OctosMoonshot,
 }
 
-const BACKENDS: [BackendType; 2] = [BackendType::ClaudeSplash, BackendType::LocalOpenAi];
+const BACKENDS: [BackendType; 3] = [
+    BackendType::ClaudeSplash,
+    BackendType::LocalOpenAi,
+    BackendType::OctosMoonshot,
+];
 
 impl BackendType {
     fn to_index(self) -> usize {
@@ -515,6 +628,7 @@ impl BackendType {
         match self {
             Self::ClaudeSplash => "Active: Claude Splash (Claude Code)",
             Self::LocalOpenAi => "Active: Local OpenAI stream at 10.0.0.168:8080",
+            Self::OctosMoonshot => "Active: Octos · Moonshot at 192.168.1.153:19401",
         }
     }
 }
@@ -567,6 +681,17 @@ impl App {
                     )))) as Box<dyn Agent>,
                 )
             }
+            BackendType::OctosMoonshot => {
+                self.backend_available = true;
+                Some(
+                    Box::new(StatelessBackendAdapter::new(Box::new(OctosBackend::new(
+                        BackendConfig::Octos {
+                            base_url: OCTOS_URL.to_string(),
+                            auth_token: None,
+                        },
+                    )))) as Box<dyn Agent>,
+                )
+            }
         };
 
         let Some(agent) = agent else {
@@ -601,7 +726,7 @@ impl App {
     }
 
     fn send_message(&mut self, cx: &mut Cx) {
-        let input = self.ui.text_input(cx, ids!(input));
+        let input = self.ui.native_text_input(cx, ids!(input));
         let text = input.text();
         if text.trim().is_empty() {
             return;
@@ -640,7 +765,21 @@ impl App {
             self.history_injected = true;
         }
 
-        self.current_prompt = Some(agent.send_prompt(cx, session_id, &text));
+        let prompt = if self.active_backend == BackendType::OctosMoonshot {
+            format!(
+                "You are responding to an embedded Makepad Splash renderer. Do not call tools, do not write files, and do not produce HTML. Follow these UI-generation instructions exactly.\n\n{}\n\nUSER REQUEST:\n{}",
+                claude_splash_system_prompt(),
+                text
+            )
+        } else {
+            text.clone()
+        };
+        self.current_prompt = Some(agent.send_prompt(cx, session_id, &prompt));
+        if self.active_backend == BackendType::OctosMoonshot {
+            self.ui
+                .label(cx, ids!(status_label))
+                .set_text(cx, "Generating Splash UI with Moonshot...");
+        }
         self.ui.widget(cx, ids!(cancel_button)).set_visible(cx, true);
 
         let chat_list = self.ui.widget(cx, ids!(chat_list));
@@ -679,6 +818,7 @@ impl App {
                     "Claude Code not found. Set CLAUDE_CODE_PATH or install claude."
                 }
                 BackendType::LocalOpenAi => "Local OpenAI backend unavailable",
+                BackendType::OctosMoonshot => "Octos · Moonshot backend unavailable",
             }
         };
         self.ui.label(cx, ids!(status_label)).set_text(cx, status);
@@ -687,25 +827,14 @@ impl App {
 
 impl MatchEvent for App {
     fn handle_actions(&mut self, cx: &mut Cx, actions: &Actions) {
-        if self.ui.glass_button(cx, ids!(send_button)).clicked(actions) {
+        if self.ui.button(cx, ids!(send_button)).clicked(actions) {
             self.send_message(cx);
         }
-        if self.ui.glass_button(cx, ids!(cancel_button)).clicked(actions) {
+        if self.ui.button(cx, ids!(cancel_button)).clicked(actions) {
             self.cancel_request(cx);
         }
-        if self.ui.glass_button(cx, ids!(clear_button)).clicked(actions) {
+        if self.ui.button(cx, ids!(clear_button)).clicked(actions) {
             self.clear_chat(cx);
-        }
-        if self
-            .ui
-            .text_input(cx, ids!(input))
-            .returned(actions)
-            .is_some()
-        {
-            self.send_message(cx);
-        }
-        if self.ui.text_input(cx, ids!(input)).escaped(actions) {
-            self.cancel_request(cx);
         }
         if let Some(index) = self
             .ui
@@ -738,6 +867,23 @@ impl MatchEvent for App {
     }
 
     fn handle_startup(&mut self, cx: &mut Cx) {
+        if matches!(cx.os_type(), OsType::OpenHarmony(_)) {
+            self.active_backend = BackendType::OctosMoonshot;
+            self.backend_available = true;
+        }
+        self.ui
+            .adaptive_view(cx, ids!(content_layer))
+            .set_variant_selector(|cx, parent_size| {
+                if matches!(
+                    cx.os_type(),
+                    OsType::OpenHarmony(_) | OsType::Android(_) | OsType::Ios(_)
+                ) || parent_size.x < 700.0
+                {
+                    live_id!(Mobile)
+                } else {
+                    live_id!(Desktop)
+                }
+            });
         self.create_backend_session(cx, self.active_backend);
         self.ui
             .drop_down(cx, ids!(backend_dropdown))
@@ -754,8 +900,13 @@ impl AppMain for App {
 
     fn after_new_from_script(_vm: &mut ScriptVm, app: &mut Self) {
         CHAT_DATA.write().unwrap().messages = ChatData::load_from_disk();
-        app.active_backend = BackendType::ClaudeSplash;
-        app.backend_available = ClaudeCodeAgent::is_available();
+        if cfg!(target_env = "ohos") {
+            app.active_backend = BackendType::OctosMoonshot;
+            app.backend_available = true;
+        } else {
+            app.active_backend = BackendType::ClaudeSplash;
+            app.backend_available = ClaudeCodeAgent::is_available();
+        }
     }
 
     fn handle_event(&mut self, cx: &mut Cx, event: &Event) {
@@ -802,6 +953,7 @@ impl AppMain for App {
 
                         self.current_prompt = None;
                         self.ui.widget(cx, ids!(cancel_button)).set_visible(cx, false);
+                        self.update_status(cx);
                         cx.redraw_all();
                     }
                     AgentEvent::PromptError { error, .. } => {

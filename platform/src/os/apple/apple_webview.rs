@@ -82,6 +82,7 @@ impl MacosSystemBrowser {
                 origin: NSPoint { x: 0.0, y: 0.0 },
                 size: NSSize { width: 1.0, height: 1.0 }
             } configuration: config];
+            let () = msg_send![config, release];
             if web_view != nil {
                 let () = msg_send![web_view, setHidden: YES];
                 self.web_view = web_view;
@@ -217,6 +218,23 @@ impl MacosSystemBrowser {
             }
         }
         self.detach();
+        unsafe {
+            if self.web_view != nil {
+                let () = msg_send![self.web_view, release];
+                self.web_view = nil;
+            }
+            if self.host_view != nil {
+                let () = msg_send![self.host_view, release];
+                self.host_view = nil;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosSystemBrowser {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }
 

@@ -1,5 +1,10 @@
 use self::super::oh_sys::*;
 use crate::area::Area;
+use crate::cx::Cx;
+use crate::cx_api::{
+    NativeTextInputChanged, NativeTextInputFocusChanged, NativeTextInputId,
+    NativeTextInputSelectionChanged,
+};
 use crate::event::{TextInputEvent, TouchPoint, TouchState};
 use crate::makepad_math::*;
 use napi_derive_ohos::napi;
@@ -27,10 +32,28 @@ thread_local! {
     static OHOS_MSG_TX: RefCell<Option<mpsc::Sender<FromOhosMessage>>> = RefCell::new(None);
 }
 
+// Senders for threads that never ran init_globals (e.g. the network backend
+// calling from an arbitrary caller thread). The thread_local above stays the
+// fast path; on a miss the sender is cloned from here and cached.
+static OHOS_MSG_TX_GLOBAL: std::sync::Mutex<Option<mpsc::Sender<FromOhosMessage>>> =
+    std::sync::Mutex::new(None);
+
 pub fn send_from_ohos_message(message: FromOhosMessage) {
     OHOS_MSG_TX.with(|tx| {
         let mut tx = tx.borrow_mut();
-        tx.as_mut().unwrap().send(message).unwrap();
+        if tx.is_none() {
+            *tx = OHOS_MSG_TX_GLOBAL
+                .lock()
+                .ok()
+                .and_then(|global| global.as_ref().cloned());
+        }
+        let Some(tx) = tx.as_mut() else {
+            crate::error!("send_from_ohos_message before init_globals; message dropped");
+            return;
+        };
+        if tx.send(message).is_err() {
+            crate::error!("send_from_ohos_message receiver gone; message dropped");
+        }
     });
 }
 
@@ -55,6 +78,41 @@ pub fn handle_delete_left_event(length: i32) -> napi_ohos::Result<()> {
 #[napi]
 pub fn handle_keyboard_status(is_open: bool, keyboard_height: i32) -> napi_ohos::Result<()> {
     send_from_ohos_message(FromOhosMessage::ResizeTextIME(is_open, keyboard_height));
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_changed(input_id: String, text: String) -> napi_ohos::Result<()> {
+    if let Ok(input_id) = input_id.parse::<NativeTextInputId>() {
+        let _ = Cx::try_post_action(NativeTextInputChanged::new(input_id, text));
+    }
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_focus_changed(
+    input_id: String,
+    has_focus: bool,
+) -> napi_ohos::Result<()> {
+    if let Ok(input_id) = input_id.parse::<NativeTextInputId>() {
+        let _ = Cx::try_post_action(NativeTextInputFocusChanged::new(input_id, has_focus));
+    }
+    Ok(())
+}
+
+#[napi]
+pub fn handle_native_text_input_selection_changed(
+    input_id: String,
+    start: i32,
+    end: i32,
+) -> napi_ohos::Result<()> {
+    if let (Ok(input_id), Ok(start), Ok(end)) = (
+        input_id.parse::<NativeTextInputId>(),
+        usize::try_from(start),
+        usize::try_from(end),
+    ) {
+        let _ = Cx::try_post_action(NativeTextInputSelectionChanged::new(input_id, start, end));
+    }
     Ok(())
 }
 
@@ -177,6 +235,9 @@ extern "C" fn on_frame_cb(
 }
 
 pub fn init_globals(from_ohos_tx: mpsc::Sender<FromOhosMessage>) {
+    if let Ok(mut global) = OHOS_MSG_TX_GLOBAL.lock() {
+        *global = Some(from_ohos_tx.clone());
+    }
     OHOS_MSG_TX.with(move |messages_tx| *messages_tx.borrow_mut() = Some(from_ohos_tx));
 }
 
@@ -244,6 +305,16 @@ pub fn debug_jsobject(obj: &JsObject, obj_name: &str) -> napi_ohos::Result<()> {
 
 #[derive(Debug)]
 pub enum FromOhosMessage {
+    HttpRequestStart {
+        request_id: crate::makepad_live_id::LiveId,
+        method: String,
+        url: String,
+        headers_flat: String,
+        body: Vec<u8>,
+    },
+    HttpRequestCancel {
+        request_id: crate::makepad_live_id::LiveId,
+    },
     Init {
         device_type: String,
         os_full_name: String,

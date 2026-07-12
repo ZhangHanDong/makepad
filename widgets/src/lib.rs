@@ -57,6 +57,8 @@ pub mod window_menu;
 mod window_voice_input;
 
 pub mod drop_down;
+pub mod native_label;
+pub mod native_text_input;
 pub mod popup_menu;
 pub mod slider;
 pub mod text_input;
@@ -164,6 +166,8 @@ pub use crate::{
     label::*,
     link_label::*,
     modal::*,
+    native_label::*,
+    native_text_input::*,
     nav_control::*,
     page_flip::*,
     popup_menu::*,
@@ -543,7 +547,9 @@ pub fn widgets_mod(vm: &mut ScriptVm) {
 
     crate::popup_menu::script_mod(vm);
     crate::drop_down::script_mod(vm);
+    crate::native_label::script_mod(vm);
     crate::text_input::script_mod(vm);
+    crate::native_text_input::script_mod(vm);
     crate::slider::script_mod(vm);
 
     crate::splitter::script_mod(vm);

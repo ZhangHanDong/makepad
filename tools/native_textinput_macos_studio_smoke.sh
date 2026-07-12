@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+studio_addr="127.0.0.1:8001"
+target_name="makepad-example-native-text-input"
+output="docs/native-textinput-evidence/macos-studio-runtime.md"
+timeout=90
+allow_no_clear=0
+clear_ids=()
+command_line="$0 $*"
+self_test=0
+
+usage() {
+    cat <<'EOF'
+Usage: tools/native_textinput_macos_studio_smoke.sh [options]
+
+Runs the NativeTextInput macOS smoke example through the Studio remote bridge
+and writes docs/native-textinput-evidence/macos-studio-runtime.md on success.
+
+This script follows AGENTS.md: it uses Studio RunItem, never raw cargo run, and
+never sends ObserveMount.
+
+Options:
+  --studio ADDR          Studio bridge target, default 127.0.0.1:8001.
+  --target NAME          RunItem name, default makepad-example-native-text-input.
+  --clear-build-id ID    Send ClearBuild for a previous build id before RunItem.
+                         Repeat to clear multiple build tabs.
+  --allow-no-clear       Allow RunItem without ClearBuild. Use only when
+                         ListBuilds shows no old build for this target.
+  --output PATH          Evidence file to write on success.
+  --timeout SECONDS      Startup/query timeout, default 90.
+  --self-test            Test parser guards without connecting to Studio.
+  -h, --help             Show this help.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --studio)
+            studio_addr="${2:?missing value for --studio}"
+            shift 2
+            ;;
+        --target)
+            target_name="${2:?missing value for --target}"
+            shift 2
+            ;;
+        --clear-build-id)
+            clear_ids+=("${2:?missing value for --clear-build-id}")
+            shift 2
+            ;;
+        --allow-no-clear)
+            allow_no_clear=1
+            shift
+            ;;
+        --output)
+            output="${2:?missing value for --output}"
+            shift 2
+            ;;
+        --timeout)
+            timeout="${2:?missing value for --timeout}"
+            shift 2
+            ;;
+        --self-test)
+            self_test=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+extract_build_id() {
+    local line="$1"
+    if [[ "$line" =~ \"build_id\":\[([0-9]+)\] ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    echo "could not parse build_id from: $line" >&2
+    exit 1
+}
+
+is_app_connection_line() {
+    local line="$1"
+    local build_id="$2"
+    printf '%s\n' "$line" | rg -q "\"AppStarted\".*\"build_id\":\\[$build_id\\]|\"RunViewCreated\".*\"build_id\":\\[$build_id\\]"
+}
+
+extract_screenshot_path() {
+    local line="$1"
+    if [[ "$line" =~ \"path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    return 1
+}
+
+run_self_test() {
+    local build_line='{"BuildStarted":{"build_id":[42],"mount":"makepad","package":"makepad-example-native-text-input"}}'
+    local app_line='{"AppStarted":{"build_id":[42]}}'
+    local run_view_line='{"RunViewCreated":{"build_id":[42],"kind_id":0}}'
+    local screenshot_line='{"Screenshot":{"path":"/tmp/native-textinput-smoke.png","width":560,"height":520}}'
+
+    if [[ "$(extract_build_id "$build_line")" != "42" ]]; then
+        echo "self-test failed: build id parser returned the wrong id" >&2
+        exit 1
+    fi
+    if ! is_app_connection_line "$app_line" 42; then
+        echo "self-test failed: AppStarted line was not accepted" >&2
+        exit 1
+    fi
+    if ! is_app_connection_line "$run_view_line" 42; then
+        echo "self-test failed: RunViewCreated line was not accepted" >&2
+        exit 1
+    fi
+    if is_app_connection_line "$app_line" 41; then
+        echo "self-test failed: AppStarted line matched the wrong build id" >&2
+        exit 1
+    fi
+    if [[ "$(extract_screenshot_path "$screenshot_line")" != "/tmp/native-textinput-smoke.png" ]]; then
+        echo "self-test failed: screenshot path parser returned the wrong path" >&2
+        exit 1
+    fi
+
+    echo "NativeTextInput macOS smoke self-test passed."
+}
+
+if [[ "$self_test" -eq 1 ]]; then
+    run_self_test
+    exit 0
+fi
+
+if [[ "${#clear_ids[@]}" -eq 0 && "$allow_no_clear" -eq 0 ]]; then
+    echo "refusing to RunItem without --clear-build-id or --allow-no-clear" >&2
+    echo "run tools/native_textinput_studio_gate.sh --list-builds first" >&2
+    exit 2
+fi
+
+bridge="target/release/cargo-makepad"
+if [[ ! -x "$bridge" ]]; then
+    echo "$bridge is missing or not executable; build cargo-makepad release first" >&2
+    exit 1
+fi
+
+log_file="$(mktemp)"
+bridge_in_fifo="$(mktemp -u)"
+bridge_out_fifo="$(mktemp -u)"
+mkfifo "$bridge_in_fifo" "$bridge_out_fifo"
+cleanup() {
+    exec 3>&- || true
+    exec 4<&- || true
+    if [[ -n "${bridge_pid:-}" ]] && kill -0 "$bridge_pid" 2>/dev/null; then
+        kill "$bridge_pid" 2>/dev/null || true
+    fi
+    rm -f "$log_file" "$bridge_in_fifo" "$bridge_out_fifo"
+}
+trap cleanup EXIT
+
+exec 3<>"$bridge_in_fifo"
+exec 4<>"$bridge_out_fifo"
+"$bridge" studio --studio="$studio_addr" <"$bridge_in_fifo" >"$bridge_out_fifo" &
+bridge_pid="$!"
+
+send_json() {
+    printf '%s\n' "$1" >&3
+}
+
+wait_for_line() {
+    local pattern="$1"
+    local label="$2"
+    local deadline=$((SECONDS + timeout))
+    local line
+
+    while ((SECONDS < deadline)); do
+        if IFS= read -r -t 1 line <&4; then
+            printf '%s\n' "$line" >>"$log_file"
+            if printf '%s\n' "$line" | rg -q "$pattern"; then
+                printf '%s\n' "$line"
+                return 0
+            fi
+            if printf '%s\n' "$line" | rg -q '"Error"'; then
+                echo "Studio bridge error while waiting for $label:" >&2
+                echo "$line" >&2
+                exit 1
+            fi
+        elif ! kill -0 "$bridge_pid" 2>/dev/null; then
+            echo "Studio bridge exited while waiting for $label" >&2
+            cat "$log_file" >&2
+            exit 1
+        fi
+    done
+
+    echo "timed out waiting for $label" >&2
+    cat "$log_file" >&2
+    exit 1
+}
+
+query_widget_line() {
+    local build_id="$1"
+    local widget_id="$2"
+
+    send_json "{\"WidgetQuery\":{\"build_id\":[$build_id],\"query\":\"id:$widget_id\"}}"
+    wait_for_line "\"WidgetQuery\".*$widget_id" "WidgetQuery id:$widget_id"
+}
+
+click_widget() {
+    local build_id="$1"
+    local widget_id="$2"
+    local line x y w h cx cy
+
+    line="$(query_widget_line "$build_id" "$widget_id")"
+    if [[ "$line" =~ $widget_id[^0-9]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+) ]]; then
+        x="${BASH_REMATCH[1]}"
+        y="${BASH_REMATCH[2]}"
+        w="${BASH_REMATCH[3]}"
+        h="${BASH_REMATCH[4]}"
+    else
+        echo "could not parse widget rect for $widget_id from: $line" >&2
+        exit 1
+    fi
+
+    cx=$((x + w / 2))
+    cy=$((y + h / 2))
+    send_json "{\"Click\":{\"build_id\":[$build_id],\"x\":$cx,\"y\":$cy}}"
+}
+
+dump_contains() {
+    local build_id="$1"
+    local pattern="$2"
+    local label="$3"
+    local deadline=$((SECONDS + 8))
+    local line=""
+
+    while ((SECONDS < deadline)); do
+        send_json "{\"WidgetTreeDump\":{\"build_id\":[$build_id]}}"
+        line="$(wait_for_line "\"WidgetTreeDump\"" "WidgetTreeDump for $label")"
+        if printf '%s\n' "$line" | rg -q "$pattern"; then
+            return 0
+        fi
+    done
+
+    echo "WidgetTreeDump did not contain $label ($pattern)" >&2
+    echo "$line" >&2
+    exit 1
+}
+
+log_contains() {
+    local build_id="$1"
+    local pattern="$2"
+    local label="$3"
+
+    send_json "{\"QueryLogs\":{\"build_id\":[$build_id],\"pattern\":\"$pattern\",\"live\":false}}"
+    wait_for_line "\"QueryLogResults\".*$pattern" "QueryLogs for $label" >/dev/null
+}
+
+send_json '{"ListBuilds":[]}'
+wait_for_line '"Builds"' "ListBuilds response" >/dev/null
+
+if [[ "${#clear_ids[@]}" -gt 0 ]]; then
+    for id in "${clear_ids[@]}"; do
+        send_json "{\"ClearBuild\":{\"build_id\":[$id]}}"
+    done
+fi
+
+send_json "{\"RunItem\":{\"mount\":\"makepad\",\"name\":\"$target_name\"}}"
+started_line="$(wait_for_line '"BuildStarted"|"AppStarted"|"RunViewCreated"' "app startup")"
+build_id="$(extract_build_id "$started_line")"
+if ! is_app_connection_line "$started_line" "$build_id"; then
+    wait_for_line "\"AppStarted\".*\"build_id\":\\[$build_id\\]|\"RunViewCreated\".*\"build_id\":\\[$build_id\\]" "run view readiness" >/dev/null
+fi
+
+send_json "{\"Screenshot\":{\"build_id\":[$build_id]}}"
+screenshot_line="$(wait_for_line '"Screenshot"' "initial screenshot")"
+screenshot_path="$(extract_screenshot_path "$screenshot_line" || true)"
+if [[ -z "$screenshot_path" || ! -f "$screenshot_path" ]]; then
+    echo "Screenshot response did not provide a readable file path: $screenshot_line" >&2
+    exit 1
+fi
+
+dump_contains "$build_id" "native_input|NativeTextInput" "NativeTextInput widget"
+
+click_widget "$build_id" "focus_button"
+log_contains "$build_id" "NativeTextInput smoke: focus requested" "focus status"
+
+click_widget "$build_id" "native_input"
+click_widget "$build_id" "set_button"
+log_contains "$build_id" "NativeTextInput smoke: primary text set" "primary programmatic set_text"
+
+click_widget "$build_id" "secondary_set_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary text set" "secondary programmatic set_text"
+
+click_widget "$build_id" "select_button"
+log_contains "$build_id" "NativeTextInput smoke: primary select all requested" "primary selection status"
+
+click_widget "$build_id" "secondary_select_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary select all requested" "secondary selection status"
+
+click_widget "$build_id" "copy_button"
+click_widget "$build_id" "cut_button"
+click_widget "$build_id" "paste_button"
+log_contains "$build_id" "NativeTextInput smoke: primary paste requested" "primary clipboard controls"
+
+click_widget "$build_id" "secondary_copy_button"
+click_widget "$build_id" "secondary_cut_button"
+click_widget "$build_id" "secondary_paste_button"
+log_contains "$build_id" "NativeTextInput smoke: secondary paste requested" "secondary clipboard controls"
+
+click_widget "$build_id" "label_button"
+log_contains "$build_id" "NativeTextInput smoke: native label updated" "NativeLabel update"
+
+click_widget "$build_id" "set_both_button"
+log_contains "$build_id" "NativeTextInput smoke: same-frame native updates requested" "same-frame NativeMountQueue update"
+
+query_widget_line "$build_id" "clipped_native_input" >/dev/null
+send_json "{\"Screenshot\":{\"build_id\":[$build_id]}}"
+clipped_screenshot_line="$(wait_for_line '"Screenshot"' "clipped host screenshot")"
+clipped_screenshot_path="$(extract_screenshot_path "$clipped_screenshot_line" || true)"
+if [[ -z "$clipped_screenshot_path" || ! -f "$clipped_screenshot_path" ]]; then
+    echo "Clipped screenshot response did not provide a readable file path: $clipped_screenshot_line" >&2
+    exit 1
+fi
+
+click_widget "$build_id" "blur_button"
+log_contains "$build_id" "NativeTextInput smoke: blur requested" "blur status"
+
+mkdir -p "$(dirname "$output")"
+transcript="${output%.md}.log"
+cp "$log_file" "$transcript"
+cat >"$output" <<EOF
+Status: PASS
+RunItem: $target_name
+Example: examples/native_text_input
+Verified: primary secondary focus blur set_text selection clipboard native_label shared_host clipped_widget
+NeedsManualValidation: changed_event_from_native_typing
+
+Studio: $studio_addr
+BuildId: $build_id
+Screenshot: $screenshot_path
+ClippedScreenshot: $clipped_screenshot_path
+Transcript: $transcript
+Command: $command_line
+
+Smoke sequence:
+- WidgetQuery id:native_input
+- Click focus_button
+- QueryLogs focus requested
+- Click native_input
+- Click set_button
+- QueryLogs primary text set
+- Click secondary_set_button
+- QueryLogs secondary text set
+- Click select_button
+- QueryLogs primary select all requested
+- Click secondary_select_button
+- QueryLogs secondary select all requested
+- Click copy_button
+- Click cut_button
+- Click paste_button
+- QueryLogs primary paste requested
+- Click secondary_copy_button
+- Click secondary_cut_button
+- Click secondary_paste_button
+- QueryLogs secondary paste requested
+- Click label_button
+- QueryLogs native label updated
+- Click set_both_button
+- QueryLogs same-frame native updates requested
+- WidgetQuery id:clipped_native_input
+- Screenshot clipped host state
+- Click blur_button
+- QueryLogs blur requested
+EOF
+
+echo "wrote $output"

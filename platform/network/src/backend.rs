@@ -16,8 +16,10 @@ pub use self::android::{
 };
 #[cfg(any(target_os = "ios", target_os = "macos", target_os = "tvos"))]
 pub mod apple;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub mod linux;
+#[cfg(target_env = "ohos")]
+pub mod ohos;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(target_os = "windows")]
@@ -168,10 +170,16 @@ pub fn default_backend() -> Arc<dyn NetworkBackend> {
     not(target_os = "android"),
     not(target_os = "windows"),
     not(any(target_os = "ios", target_os = "macos", target_os = "tvos")),
-    target_os = "linux"
+    target_os = "linux",
+    not(target_env = "ohos")
 ))]
 pub fn default_backend() -> Arc<dyn NetworkBackend> {
     linux::create_backend()
+}
+
+#[cfg(all(not(target_arch = "wasm32"), target_env = "ohos"))]
+pub fn default_backend() -> Arc<dyn NetworkBackend> {
+    ohos::create_backend()
 }
 
 #[cfg(not(any(

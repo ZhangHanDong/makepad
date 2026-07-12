@@ -595,8 +595,11 @@ pub unsafe fn create_egl_context(
         return Err(EglError::InitializeFailed);
     }
 
+    // Prefer an ES3-capable config: with an ES2-only config the ES3 context
+    // request below fails (EGL_BAD_ATTRIBUTE) and the ES2 fallback context
+    // can't do the sized-internal-format texture uploads used for text/icons.
     #[rustfmt::skip]
-    let cfg_attributes = vec![
+    let cfg_attributes = |renderable_type: u32| vec![
         EGL_SURFACE_TYPE,
         EGL_WINDOW_BIT,
         EGL_RED_SIZE, 8,
@@ -604,7 +607,7 @@ pub unsafe fn create_egl_context(
         EGL_BLUE_SIZE, 8,
         EGL_ALPHA_SIZE, 8,
         EGL_RENDERABLE_TYPE,
-        EGL_OPENGL_ES2_BIT,
+        renderable_type,
         EGL_DEPTH_SIZE, 0,
         EGL_STENCIL_SIZE, 0,
         EGL_NONE
@@ -612,18 +615,23 @@ pub unsafe fn create_egl_context(
     let available_cfgs: Vec<EGLConfig> = vec![null_mut(); 1];
     let mut cfg_count = 0;
 
-    if (egl.eglChooseConfig.unwrap())(
-        display,
-        cfg_attributes.as_ptr() as _,
-        available_cfgs.as_ptr() as _,
-        1,
-        &mut cfg_count as *mut _ as *mut _,
-    ) == 0
-    {
+    for renderable_type in [EGL_OPENGL_ES3_BIT_KHR, EGL_OPENGL_ES2_BIT] {
+        if (egl.eglChooseConfig.unwrap())(
+            display,
+            cfg_attributes(renderable_type).as_ptr() as _,
+            available_cfgs.as_ptr() as _,
+            1,
+            &mut cfg_count as *mut _ as *mut _,
+        ) != 0
+            && cfg_count > 0
+        {
+            break;
+        }
+        cfg_count = 0;
+    }
+    if cfg_count == 0 {
         return Err(EglError::ChooseConfigFailed);
     }
-
-    assert!(cfg_count > 0);
 
     let config = available_cfgs[0];
 
@@ -651,13 +659,32 @@ pub unsafe fn create_egl_context(
         EGL_NONE,
     ];
 
-    let context = (egl.eglCreateContext.unwrap())(
+    (egl.eglBindAPI.unwrap())(EGL_OPENGL_ES_API);
+    let mut context = (egl.eglCreateContext.unwrap())(
         display,
         config,
         /* EGL_NO_CONTEXT */ null_mut(),
         ctx_attributes.as_ptr() as _,
     );
     if context.is_null() {
+        // Some devices reject an ES3 context request; retry with ES2.
+        crate::log!(
+            "eglCreateContext (ES3) failed, error=0x{:x}, retrying with ES2",
+            (egl.eglGetError.unwrap())()
+        );
+        let es2_attributes = vec![EGL_CONTEXT_MAJOR_VERSION, 2, EGL_NONE];
+        context = (egl.eglCreateContext.unwrap())(
+            display,
+            config,
+            /* EGL_NO_CONTEXT */ null_mut(),
+            es2_attributes.as_ptr() as _,
+        );
+    }
+    if context.is_null() {
+        crate::log!(
+            "eglCreateContext (ES2) failed, error=0x{:x}",
+            (egl.eglGetError.unwrap())()
+        );
         return Err(EglError::CreateContextFailed);
     }
     crate::log!("create elg context success");

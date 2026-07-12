@@ -68,11 +68,24 @@ mod video_session;
 pub mod ui_runner;
 
 pub mod display_context;
+pub mod native_host_schema;
+pub mod native_texture_layer;
 
 #[macro_use]
 mod app_main;
 pub use crate::app_main::{resolve_studio_http, should_run_stdin_loop_from_env};
-pub use crate::cx_api::{can_play_type, CxSystemBrowser, SystemBrowserId};
+pub use crate::cx_api::{
+    can_play_type, CxNativeLabel, CxNativeTextInput, CxSystemBrowser, NativeHostCommand,
+    NativeHostKind, NativeHostPropUpdate, NativeHostProps, NativeLabelCloseRequested,
+    NativeLabelId, NativeTextInputChanged, NativeTextInputCloseRequested, NativeTextInputCommand,
+    NativeTextInputFocusChanged, NativeTextInputId, NativeTextInputSelectionChanged,
+    SystemBrowserId,
+};
+pub use crate::native_texture_layer::{
+    NativeTextureLayer, NativeTextureLayerBridge, NativeTextureLayerFrame,
+};
+#[cfg(all(target_os = "macos", feature = "diag-native-leak-count"))]
+pub use crate::os::apple::apple_native_text_input::native_text_input_live_count;
 pub use crate::xr_tsdf::{
     XrDepthAlignHeightMap, XrTsdfCooperativeStepResult, XrTsdfCooperativeStepStats,
 };
