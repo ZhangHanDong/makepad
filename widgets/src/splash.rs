@@ -61,6 +61,8 @@ pub struct Splash {
     pub view: View,
     #[live]
     body: ArcStringMut,
+    #[live]
+    allow_net: bool,
     #[rust]
     eval_generation: u64,
     #[rust]
@@ -82,6 +84,9 @@ pub struct Splash {
 const SPLASH_PREFIX_VIEW: &str = "use mod.prelude.widgets.*View{height:Fit, ";
 /// Prefix for full-script mode: just imports, code must evaluate to a widget
 const SPLASH_PREFIX_SCRIPT: &str = "use mod.prelude.widgets.*\n";
+/// Net-enabled variants (allow_net: true) additionally import mod.net
+const SPLASH_PREFIX_VIEW_NET: &str = "use mod.prelude.widgets.*\nuse mod.net\nView{height:Fit, ";
+const SPLASH_PREFIX_SCRIPT_NET: &str = "use mod.prelude.widgets.*\nuse mod.net\n";
 const SPLASH_EVAL_INSTRUCTION_LIMIT: usize = 200_000;
 
 /// Detect whether Splash code is a full script (starts with `let`, `fn`,
@@ -113,7 +118,7 @@ impl Splash {
         // Allocate this Splash's own VM on first eval so streaming
         // (stream_append) evaluates in an isolated scope.
         if self.vm_id == MAIN_SPLASH_VM_ID {
-            self.vm_id = cx.alloc_splash_vm();
+            self.vm_id = cx.alloc_splash_vm_with_network(self.allow_net);
         }
 
         // Only start a NEW vm body (bump the generation) on a genuine content
@@ -135,11 +140,12 @@ impl Splash {
         let unique_id = self.self_id().wrapping_add(self.eval_generation as usize);
         self.last_unique_id = unique_id;
 
-        // Choose prefix based on code style
-        let prefix = if is_full_script(&body) {
-            SPLASH_PREFIX_SCRIPT
-        } else {
-            SPLASH_PREFIX_VIEW
+        // Choose prefix based on code style (fork) x network access (upstream)
+        let prefix = match (is_full_script(&body), self.allow_net) {
+            (true, false) => SPLASH_PREFIX_SCRIPT,
+            (true, true) => SPLASH_PREFIX_SCRIPT_NET,
+            (false, false) => SPLASH_PREFIX_VIEW,
+            (false, true) => SPLASH_PREFIX_VIEW_NET,
         };
         let code = format!("{}{}", prefix, body);
 
@@ -385,6 +391,11 @@ impl Widget for Splash {
             self.call_fn(cx, id!(tick));
         }
 
+        if self.allow_net {
+            if let Event::NetworkResponses(responses) = event {
+                crate::widget_async::handle_splash_network_responses(cx, self.vm_id, responses);
+            }
+        }
         self.view.handle_event(cx, event, scope);
     }
 

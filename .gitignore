@@ -60,3 +60,12 @@ aichat_appgen_history.json
 # OHOS DevEco / makepad build caches
 /.hvigor/
 /.makepad/
+
+
+# Voice/TTS model artifacts — fetch with tools/download_tts.sh
+*.mktts
+*.mkvoice
+*.pth
+ggml-*.bin
+/kokoro_voices/
+__pycache__/
