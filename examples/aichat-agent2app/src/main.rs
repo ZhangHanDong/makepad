@@ -1834,6 +1834,24 @@ fn runtime_gate_profile() -> &'static Result<GateProfile, String> {
         .get_or_init(|| parse_gate_profile(cfp_lite_core::fixtures::AICHAT_GATE_V1_JSON))
 }
 
+#[cfg(test)]
+fn synthetic_readonly_profile() -> GateProfile {
+    let action_names = vec!["agent.status".to_string()];
+    GateProfile {
+        manifest: cfp_lite_core::CapabilityManifest {
+            manifest_version: "1".into(),
+            actions: BTreeMap::from([(
+                "agent.status".into(),
+                cfp_lite_core::CapabilityRule {
+                    permission: cfp_lite_core::PermissionLevel::ReadOnly,
+                },
+            )]),
+        },
+        registry: cfp_lite_core::ActionRegistry::new(action_names.clone()),
+        action_names,
+    }
+}
+
 fn aichat_principal() -> cfp_lite_core::Principal {
     cfp_lite_core::Principal {
         id: "transport:aichat".into(),
@@ -1880,6 +1898,12 @@ impl SplashGateAdapter {
         raw_payload: &str,
         profile: Result<&GateProfile, &String>,
     ) -> SplashAdapterDecision {
+        match action {
+            "host.confirm" => return self.confirm_active_review(),
+            "host.deny" => return self.deny_active_review(),
+            _ => {}
+        }
+
         let profile = match profile {
             Ok(profile) => profile,
             Err(_) => {
@@ -1957,6 +1981,136 @@ impl SplashGateAdapter {
         self.finish(decision)
     }
 
+    fn confirm_active_review(&mut self) -> SplashAdapterDecision {
+        let review_id = match self.review_chain.active_review_id() {
+            Some(review_id) => review_id.to_string(),
+            None => {
+                return Self::refuse(
+                    cfp_lite_core::ProtocolErrorCode::ReviewNotFound,
+                    "host.confirm",
+                );
+            }
+        };
+        let record = match self
+            .review_chain
+            .records()
+            .iter()
+            .find(|record| record.review_id() == review_id)
+        {
+            Some(record) => record,
+            None => {
+                return Self::refuse(
+                    cfp_lite_core::ProtocolErrorCode::ReviewNotFound,
+                    "host.confirm",
+                );
+            }
+        };
+        let expected_hash = record.intent_hash().to_string();
+        let action = record.intent().action().to_string();
+        let raw_payload = match self.raw_payloads.get(&review_id).cloned() {
+            Some(raw_payload) => raw_payload,
+            None => {
+                return Self::refuse(
+                    cfp_lite_core::ProtocolErrorCode::InvalidField,
+                    "host.confirm",
+                );
+            }
+        };
+        let reconstructed =
+            match cfp_lite_core::ExecutionIntent::from_json_str(&action, &raw_payload) {
+                Ok(intent) => intent,
+                Err(_) => {
+                    return Self::refuse(
+                        cfp_lite_core::ProtocolErrorCode::InvalidField,
+                        "host.confirm",
+                    );
+                }
+            };
+        if reconstructed.intent_hash() != expected_hash {
+            return Self::refuse(
+                cfp_lite_core::ProtocolErrorCode::ReviewBindingMismatch,
+                "host.confirm",
+            );
+        }
+
+        let (next_chain, outcome) = match self.review_chain.apply(
+            cfp_lite_core::ReviewEvent::Approve {
+                review_id: review_id.clone(),
+                intent_hash: expected_hash,
+            },
+        ) {
+            Ok(applied) => applied,
+            Err(error) => return Self::refuse(error.code, "host.confirm"),
+        };
+        let approved_intent = match outcome {
+            cfp_lite_core::ReviewOutcome::Approved { intent, .. } => intent,
+            _ => {
+                return Self::refuse(
+                    cfp_lite_core::ProtocolErrorCode::InvalidReviewTransition,
+                    "host.confirm",
+                );
+            }
+        };
+
+        let mut next_payloads = self.raw_payloads.clone();
+        next_payloads.remove(&review_id);
+        assert!(Self::cache_matches_chain(&next_chain, &next_payloads));
+        self.review_chain = next_chain;
+        self.raw_payloads = next_payloads;
+        self.finish(SplashAdapterDecision::Dispatch {
+            intent: approved_intent,
+            raw_payload,
+        })
+    }
+
+    fn deny_active_review(&mut self) -> SplashAdapterDecision {
+        let review_id = match self.review_chain.active_review_id() {
+            Some(review_id) => review_id.to_string(),
+            None => {
+                return self.finish(SplashAdapterDecision::Discard { review_id: None });
+            }
+        };
+        let record = match self
+            .review_chain
+            .records()
+            .iter()
+            .find(|record| record.review_id() == review_id)
+        {
+            Some(record) => record,
+            None => {
+                return Self::refuse(
+                    cfp_lite_core::ProtocolErrorCode::ReviewNotFound,
+                    "host.deny",
+                );
+            }
+        };
+        let intent_hash = record.intent_hash().to_string();
+        let (next_chain, outcome) = match self.review_chain.apply(
+            cfp_lite_core::ReviewEvent::Reject {
+                review_id: review_id.clone(),
+                intent_hash,
+            },
+        ) {
+            Ok(applied) => applied,
+            Err(error) => return Self::refuse(error.code, "host.deny"),
+        };
+        if !matches!(outcome, cfp_lite_core::ReviewOutcome::Rejected { .. }) {
+            return Self::refuse(
+                cfp_lite_core::ProtocolErrorCode::InvalidReviewTransition,
+                "host.deny",
+            );
+        }
+
+        let mut next_payloads = self.raw_payloads.clone();
+        next_payloads.remove(&review_id);
+        assert!(Self::cache_matches_chain(&next_chain, &next_payloads));
+        self.review_chain = next_chain;
+        self.raw_payloads = next_payloads;
+        self.finish(SplashAdapterDecision::Discard {
+            review_id: Some(review_id),
+        })
+    }
+
     fn active_record(&self) -> Option<&cfp_lite_core::ReviewRecord> {
         let active_review_id = self.review_chain.active_review_id()?;
         self.review_chain
@@ -1994,6 +2148,42 @@ impl SplashGateAdapter {
             }
             None => raw_payloads.is_empty(),
         }
+    }
+
+    #[cfg(test)]
+    fn remove_active_raw_payload_for_test(&mut self) {
+        if let Some(review_id) = self.review_chain.active_review_id() {
+            self.raw_payloads.remove(review_id);
+        }
+    }
+
+    #[cfg(test)]
+    fn replace_active_raw_payload_for_test(&mut self, raw_payload: &str) {
+        let review_id = self
+            .review_chain
+            .active_review_id()
+            .expect("test requires an active review")
+            .to_string();
+        self.raw_payloads
+            .insert(review_id, raw_payload.to_string());
+    }
+
+    #[cfg(test)]
+    fn defer_active_review_for_test(&mut self) {
+        let record = self.active_record().expect("test requires an active review");
+        let (next_chain, outcome) = self
+            .review_chain
+            .apply(cfp_lite_core::ReviewEvent::Defer {
+                review_id: record.review_id().to_string(),
+                intent_hash: record.intent_hash().to_string(),
+            })
+            .expect("pending review must defer");
+        assert!(matches!(
+            outcome,
+            cfp_lite_core::ReviewOutcome::Deferred { .. }
+        ));
+        assert!(Self::cache_matches_chain(&next_chain, &self.raw_payloads));
+        self.review_chain = next_chain;
     }
 }
 
@@ -4174,9 +4364,9 @@ mod tests {
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         capability_permission, glass_opacity_values, process_splash_capability_event,
         parse_gate_profile, render_state_templates, repair_appgen_response_for_display,
-        runtime_gate_profile, should_start_window_drag, Agent, App, AppCapability, AppDemoState,
-        BackendType, ClaudeCodeCliAgent, PendingConfirmation, PermissionLevel,
-        SplashAdapterDecision, SplashCapabilityDecision, SplashGateAdapter,
+        runtime_gate_profile, should_start_window_drag, synthetic_readonly_profile, Agent, App,
+        AppCapability, AppDemoState, BackendType, ClaudeCodeCliAgent, PendingConfirmation,
+        PermissionLevel, SplashAdapterDecision, SplashCapabilityDecision, SplashGateAdapter,
         DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
@@ -4673,6 +4863,57 @@ View{
         assert!(parse_gate_profile(malformed).is_err());
         assert!(parse_gate_profile(missing_fields).is_err());
         assert!(parse_gate_profile(duplicate_registry).is_err());
+
+        let profile = runtime_gate_profile().as_ref().unwrap();
+        let mut adapter = SplashGateAdapter::default();
+        assert!(matches!(
+            adapter.process("ask_ai", r#"{"question":"pending"}"#, Ok(profile)),
+            SplashAdapterDecision::Park { .. }
+        ));
+
+        let profile_error = "profile secret must stay redacted".to_string();
+        let chain_before = adapter.review_chain.clone();
+        let chain_bytes_before = serde_json::to_vec(&adapter.review_chain).unwrap();
+        let active_before = adapter.review_chain.active_review_id().map(str::to_string);
+        let records_before = adapter.review_chain.records().to_vec();
+        let cache_before = adapter.raw_payloads.clone();
+        match adapter.process("inc", "{}", Err(&profile_error)) {
+            SplashAdapterDecision::Refuse { code, log, .. } => {
+                assert_eq!(code, cfp_lite_core::ProtocolErrorCode::InvalidManifest);
+                assert!(!log.contains(&profile_error));
+            }
+            other => panic!("expected InvalidManifest Refuse, got {other:?}"),
+        }
+        assert_eq!(adapter.review_chain, chain_before);
+        assert_eq!(
+            serde_json::to_vec(&adapter.review_chain).unwrap(),
+            chain_bytes_before
+        );
+        assert_eq!(adapter.review_chain.active_review_id(), active_before.as_deref());
+        assert_eq!(adapter.review_chain.records(), records_before);
+        assert_eq!(adapter.raw_payloads, cache_before);
+
+        let malformed_payload = "payload secret must stay redacted";
+        let chain_before = adapter.review_chain.clone();
+        let chain_bytes_before = serde_json::to_vec(&adapter.review_chain).unwrap();
+        let active_before = adapter.review_chain.active_review_id().map(str::to_string);
+        let records_before = adapter.review_chain.records().to_vec();
+        let cache_before = adapter.raw_payloads.clone();
+        match adapter.process("inc", malformed_payload, Ok(profile)) {
+            SplashAdapterDecision::Refuse { code, log, .. } => {
+                assert_eq!(code, cfp_lite_core::ProtocolErrorCode::InvalidField);
+                assert!(!log.contains(malformed_payload));
+            }
+            other => panic!("expected InvalidField Refuse, got {other:?}"),
+        }
+        assert_eq!(adapter.review_chain, chain_before);
+        assert_eq!(
+            serde_json::to_vec(&adapter.review_chain).unwrap(),
+            chain_bytes_before
+        );
+        assert_eq!(adapter.review_chain.active_review_id(), active_before.as_deref());
+        assert_eq!(adapter.review_chain.records(), records_before);
+        assert_eq!(adapter.raw_payloads, cache_before);
     }
 
     #[test]
@@ -4860,41 +5101,334 @@ View{
 
     #[test]
     fn test_host_confirm_releases_pending() {
-        let mut harness = SplashHarness::default();
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
+        let raw = r#"{"question":"why"}"#;
 
-        harness.handle("ask_ai", r#"{"question":"why"}"#);
-        harness.handle("host.confirm", "{}");
+        assert!(matches!(
+            adapter.process("ask_ai", raw, Ok(profile)),
+            SplashAdapterDecision::Park { .. }
+        ));
+        let expected_intent = adapter
+            .active_record()
+            .expect("pending ask_ai record")
+            .intent()
+            .clone();
 
-        assert_eq!(harness.prompts, vec![r#"{"question":"why"}"#.to_string()]);
-        assert!(harness.pending.is_none());
+        let decision = adapter.process("host.confirm", "{}", Ok(profile));
+
+        assert_eq!(
+            decision,
+            SplashAdapterDecision::Dispatch {
+                intent: expected_intent,
+                raw_payload: raw.to_string(),
+            }
+        );
+        assert!(adapter.review_chain.active_review_id().is_none());
+        assert!(adapter.raw_payloads.is_empty());
+        assert_eq!(adapter.review_chain.records().len(), 1);
+        assert_eq!(
+            adapter.review_chain.records()[0].status(),
+            cfp_lite_core::ReviewStatus::Approved
+        );
+    }
+
+    #[test]
+    fn test_host_confirm_preserves_original_payload_bytes() {
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
+        let raw = r#"{  "nested": { "z": 2, "a": [ 3, 1 ] }, "question": "why"  }"#;
+
+        assert!(matches!(
+            adapter.process("ask_ai", raw, Ok(profile)),
+            SplashAdapterDecision::Park { .. }
+        ));
+        let authoritative_intent = adapter
+            .active_record()
+            .expect("pending ask_ai record")
+            .intent()
+            .clone();
+        let decision = adapter.process("host.confirm", "{ \"ignored\": true }", Ok(profile));
+
+        match decision {
+            SplashAdapterDecision::Dispatch {
+                intent,
+                raw_payload,
+            } => {
+                assert_eq!(intent, authoritative_intent);
+                assert_eq!(raw_payload.as_bytes(), raw.as_bytes());
+            }
+            other => panic!("expected bound Dispatch, got {other:?}"),
+        }
+        assert_eq!(
+            adapter.review_chain.records()[0].status(),
+            cfp_lite_core::ReviewStatus::Approved
+        );
+        assert!(adapter.review_chain.active_review_id().is_none());
+        assert!(adapter.raw_payloads.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_refuses_missing_or_mismatched_payload_cache() {
+        let profile = runtime_gate_profile().as_ref().unwrap();
+
+        let assert_fault_is_transactional =
+            |mut adapter: SplashGateAdapter, expected_code: cfp_lite_core::ProtocolErrorCode| {
+                let chain_before = adapter.review_chain.clone();
+                let chain_bytes_before = serde_json::to_vec(&adapter.review_chain).unwrap();
+                let active_before = adapter.review_chain.active_review_id().map(str::to_string);
+                let records_before = adapter.review_chain.records().to_vec();
+                let cache_before = adapter.raw_payloads.clone();
+
+                let decision = adapter.process("host.confirm", "{}", Ok(profile));
+
+                match decision {
+                    SplashAdapterDecision::Refuse { code, action, log } => {
+                        assert_eq!(code, expected_code);
+                        assert_eq!(action, "host.confirm");
+                        assert!(!log.contains("pending"));
+                        assert!(!log.contains("tampered"));
+                    }
+                    other => panic!("faulted confirm must Refuse, got {other:?}"),
+                }
+                assert_eq!(adapter.review_chain, chain_before);
+                assert_eq!(
+                    serde_json::to_vec(&adapter.review_chain).unwrap(),
+                    chain_bytes_before
+                );
+                assert_eq!(adapter.review_chain.active_review_id(), active_before.as_deref());
+                assert_eq!(adapter.review_chain.records(), records_before);
+                assert_eq!(adapter.raw_payloads, cache_before);
+            };
+
+        let pending = || {
+            let mut adapter = SplashGateAdapter::default();
+            assert!(matches!(
+                adapter.process("ask_ai", r#"{"question":"pending"}"#, Ok(profile)),
+                SplashAdapterDecision::Park { .. }
+            ));
+            adapter
+        };
+
+        let mut missing = pending();
+        missing.remove_active_raw_payload_for_test();
+        assert_fault_is_transactional(
+            missing,
+            cfp_lite_core::ProtocolErrorCode::InvalidField,
+        );
+
+        let mut invalid_json = pending();
+        invalid_json.replace_active_raw_payload_for_test("{");
+        assert_fault_is_transactional(
+            invalid_json,
+            cfp_lite_core::ProtocolErrorCode::InvalidField,
+        );
+
+        let mut semantic_mismatch = pending();
+        semantic_mismatch
+            .replace_active_raw_payload_for_test(r#"{"question":"tampered"}"#);
+        assert_fault_is_transactional(
+            semantic_mismatch,
+            cfp_lite_core::ProtocolErrorCode::ReviewBindingMismatch,
+        );
     }
 
     #[test]
     fn test_host_deny_discards_pending() {
-        let mut harness = SplashHarness::default();
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
+        let park = adapter.process("ask_ai", r#"{"question":"why"}"#, Ok(profile));
+        let review_id = match park {
+            SplashAdapterDecision::Park { review_id, .. } => review_id,
+            other => panic!("expected Park, got {other:?}"),
+        };
 
-        harness.handle("ask_ai", r#"{"question":"why"}"#);
-        harness.handle("host.deny", "{}");
+        let decision = adapter.process("host.deny", "{}", Ok(profile));
 
-        assert!(harness.prompts.is_empty());
-        assert!(harness.pending.is_none());
+        assert_eq!(
+            decision,
+            SplashAdapterDecision::Discard {
+                review_id: Some(review_id.clone()),
+            }
+        );
+        assert!(!matches!(decision, SplashAdapterDecision::Dispatch { .. }));
+        assert_eq!(
+            adapter
+                .review_chain
+                .records()
+                .iter()
+                .find(|record| record.review_id() == review_id)
+                .expect("rejected review record")
+                .status(),
+            cfp_lite_core::ReviewStatus::Rejected
+        );
+        assert!(adapter.review_chain.active_review_id().is_none());
+        assert!(adapter.raw_payloads.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_and_deny_without_pending_preserve_legacy_behavior() {
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
+
+        match adapter.process("host.confirm", "{}", Ok(profile)) {
+            SplashAdapterDecision::Refuse { code, action, .. } => {
+                assert_eq!(code, cfp_lite_core::ProtocolErrorCode::ReviewNotFound);
+                assert_eq!(action, "host.confirm");
+            }
+            other => panic!("confirm without pending must Refuse, got {other:?}"),
+        }
+        assert_eq!(
+            adapter.process("host.deny", "{}", Ok(profile)),
+            SplashAdapterDecision::Discard { review_id: None }
+        );
+        assert!(adapter.review_chain.records().is_empty());
+        assert!(adapter.review_chain.active_review_id().is_none());
+        assert!(adapter.raw_payloads.is_empty());
     }
 
     #[test]
     fn test_second_pending_replaces_first() {
-        let mut harness = SplashHarness::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
 
-        harness.handle("ask_ai", r#"{"question":"first"}"#);
-        harness.handle("ask_ai", r#"{"question":"second"}"#);
+        for deferred in [false, true] {
+            for same_intent in [true, false] {
+                let mut adapter = SplashGateAdapter::default();
+                let first_raw = r#"{"question":"first"}"#;
+                let first_review_id = match adapter.process("ask_ai", first_raw, Ok(profile)) {
+                    SplashAdapterDecision::Park { review_id, .. } => review_id,
+                    other => panic!("expected first Park, got {other:?}"),
+                };
+                if deferred {
+                    adapter.defer_active_review_for_test();
+                    assert_eq!(
+                        adapter.active_record().unwrap().status(),
+                        cfp_lite_core::ReviewStatus::Deferred
+                    );
+                }
 
-        assert!(harness.logs.iter().any(|line| {
-            line.contains("replaced pending confirmation")
-                && line.contains("ask_ai")
-        }));
-        assert_eq!(
-            harness.pending.as_ref().map(|event| event.payload.as_str()),
-            Some(r#"{"question":"second"}"#)
-        );
+                let before_second = adapter.review_chain.clone();
+                let second_raw = if same_intent {
+                    first_raw
+                } else {
+                    r#"{"question":"second"}"#
+                };
+                let second_intent =
+                    cfp_lite_core::ExecutionIntent::from_json_str("ask_ai", second_raw).unwrap();
+                let park = match cfp_lite_core::evaluate_gate(
+                    second_intent,
+                    aichat_principal(),
+                    aichat_scope(),
+                    &profile.registry,
+                    &profile.manifest,
+                )
+                .unwrap()
+                {
+                    cfp_lite_core::GateDecision::Park(park) => park,
+                    other => panic!("ask_ai must Park, got {other:?}"),
+                };
+                let (expected_chain, expected_outcome) = before_second
+                    .apply(cfp_lite_core::ReviewEvent::Propose { park })
+                    .unwrap();
+                let (expected_review_id, expected_replaced_id) = match expected_outcome {
+                    cfp_lite_core::ReviewOutcome::Proposed {
+                        review_id,
+                        replaced_review_id,
+                    } => (review_id, replaced_review_id),
+                    other => panic!("core proposal must be Proposed, got {other:?}"),
+                };
+
+                let decision = adapter.process("ask_ai", second_raw, Ok(profile));
+                assert_eq!(
+                    decision,
+                    SplashAdapterDecision::Park {
+                        review_id: expected_review_id.clone(),
+                        replaced_review_id: expected_replaced_id.clone(),
+                    }
+                );
+                assert_eq!(expected_replaced_id.as_deref(), Some(first_review_id.as_str()));
+                assert_ne!(expected_review_id, first_review_id);
+                assert_eq!(adapter.review_chain, expected_chain);
+                assert_eq!(
+                    adapter.review_chain.active_review_id(),
+                    Some(expected_review_id.as_str())
+                );
+                assert_eq!(adapter.review_chain.records().len(), 2);
+                assert_eq!(
+                    adapter.review_chain.records()[0].status(),
+                    cfp_lite_core::ReviewStatus::Withdrawn
+                );
+                assert_eq!(
+                    adapter.review_chain.records()[1].status(),
+                    cfp_lite_core::ReviewStatus::Pending
+                );
+                assert_eq!(adapter.raw_payloads.len(), 1);
+                assert!(!adapter.raw_payloads.contains_key(&first_review_id));
+                assert_eq!(
+                    adapter.raw_payloads.get(&expected_review_id).map(String::as_str),
+                    Some(second_raw)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_gate_outcomes_preserve_active_review() {
+        let runtime_profile = runtime_gate_profile().as_ref().unwrap();
+        let readonly_profile = synthetic_readonly_profile();
+        let mut adapter = SplashGateAdapter::default();
+        assert!(matches!(
+            adapter.process(
+                "ask_ai",
+                r#"{"question":"must remain pending"}"#,
+                Ok(runtime_profile)
+            ),
+            SplashAdapterDecision::Park { .. }
+        ));
+
+        for (action, profile, expected_code) in [
+            ("inc", runtime_profile, None),
+            ("agent.status", &readonly_profile, None),
+            (
+                "fs.write",
+                runtime_profile,
+                Some(cfp_lite_core::ProtocolErrorCode::ActionForbidden),
+            ),
+            (
+                "not.in.manifest",
+                runtime_profile,
+                Some(cfp_lite_core::ProtocolErrorCode::UnknownAction),
+            ),
+        ] {
+            let chain_before = adapter.review_chain.clone();
+            let chain_bytes_before = serde_json::to_vec(&adapter.review_chain).unwrap();
+            let active_before = adapter.review_chain.active_review_id().map(str::to_string);
+            let records_before = adapter.review_chain.records().to_vec();
+            let cache_before = adapter.raw_payloads.clone();
+
+            let decision = adapter.process(action, r#"{"safe":true}"#, Ok(profile));
+            match expected_code {
+                None => assert!(
+                    matches!(decision, SplashAdapterDecision::Dispatch { .. }),
+                    "{action} must Dispatch, got {decision:?}"
+                ),
+                Some(expected_code) => match decision {
+                    SplashAdapterDecision::Refuse { code, .. } => {
+                        assert_eq!(code, expected_code)
+                    }
+                    other => panic!("{action} must Refuse, got {other:?}"),
+                },
+            }
+
+            assert_eq!(adapter.review_chain, chain_before);
+            assert_eq!(
+                serde_json::to_vec(&adapter.review_chain).unwrap(),
+                chain_bytes_before
+            );
+            assert_eq!(adapter.review_chain.active_review_id(), active_before.as_deref());
+            assert_eq!(adapter.review_chain.records(), records_before);
+            assert_eq!(adapter.raw_payloads, cache_before);
+        }
     }
 
     fn has_stale_ui_closure_restriction(text: &str) -> bool {
