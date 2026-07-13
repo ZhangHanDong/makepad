@@ -2113,10 +2113,14 @@ impl SplashGateAdapter {
 
     fn active_record(&self) -> Option<&cfp_lite_core::ReviewRecord> {
         let active_review_id = self.review_chain.active_review_id()?;
+        self.record(active_review_id)
+    }
+
+    fn record(&self, review_id: &str) -> Option<&cfp_lite_core::ReviewRecord> {
         self.review_chain
             .records()
             .iter()
-            .find(|record| record.review_id() == active_review_id)
+            .find(|record| record.review_id() == review_id)
     }
 
     fn refuse(
@@ -2187,150 +2191,10 @@ impl SplashGateAdapter {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PermissionLevel {
-    ReadOnly,
-    RequiresConfirmation,
-    AutoExecutable,
-    Forbidden,
-}
-
-#[derive(Clone, Copy)]
-struct CapabilityEntry {
-    pattern: &'static str,
-    level: PermissionLevel,
-}
-
-const CAPABILITY_MANIFEST: &[CapabilityEntry] = &[
-    CapabilityEntry {
-        pattern: "inc",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "dec",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "reset",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "timer.*",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "host.confirm",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "host.deny",
-        level: PermissionLevel::AutoExecutable,
-    },
-    CapabilityEntry {
-        pattern: "ask_ai",
-        level: PermissionLevel::RequiresConfirmation,
-    },
-    CapabilityEntry {
-        pattern: "fs.write",
-        level: PermissionLevel::Forbidden,
-    },
-];
-
-fn capability_permission(event_id: &str) -> PermissionLevel {
-    CAPABILITY_MANIFEST
-        .iter()
-        .find_map(|entry| {
-            if let Some(prefix) = entry.pattern.strip_suffix(".*") {
-                event_id
-                    .starts_with(&format!("{prefix}."))
-                    .then_some(entry.level)
-            } else {
-                (entry.pattern == event_id).then_some(entry.level)
-            }
-        })
-        .unwrap_or(PermissionLevel::Forbidden)
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct PendingConfirmation {
-    event_id: String,
-    payload: String,
-}
-
-impl PendingConfirmation {
-    fn new(event_id: &str, payload: &str) -> Self {
-        Self {
-            event_id: event_id.to_string(),
-            payload: payload.to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SplashCapabilityDecision {
-    Dispatch(PendingConfirmation),
-    Park {
-        pending: PendingConfirmation,
-        replacement_log: Option<String>,
-    },
-    Discard {
-        discarded: Option<PendingConfirmation>,
-    },
-    Refuse {
-        log: String,
-    },
-}
-
-fn process_splash_capability_event(
-    pending: &mut Option<PendingConfirmation>,
-    event_id: &str,
-    payload: &str,
-) -> SplashCapabilityDecision {
-    match event_id {
-        "host.confirm" => {
-            if let Some(confirmed) = pending.take() {
-                return SplashCapabilityDecision::Dispatch(confirmed);
-            }
-            return SplashCapabilityDecision::Refuse {
-                log: "[splash] host.confirm ignored with no pending confirmation".to_string(),
-            };
-        }
-        "host.deny" => {
-            return SplashCapabilityDecision::Discard {
-                discarded: pending.take(),
-            };
-        }
-        _ => {}
-    }
-
-    match capability_permission(event_id) {
-        PermissionLevel::AutoExecutable | PermissionLevel::ReadOnly => {
-            SplashCapabilityDecision::Dispatch(PendingConfirmation::new(event_id, payload))
-        }
-        PermissionLevel::RequiresConfirmation => {
-            let next = PendingConfirmation::new(event_id, payload);
-            let replacement_log = pending.replace(next.clone()).map(|old| {
-                format!(
-                    "[splash] replaced pending confirmation '{}' with '{}'",
-                    old.event_id, next.event_id
-                )
-            });
-            SplashCapabilityDecision::Park {
-                pending: next,
-                replacement_log,
-            }
-        }
-        PermissionLevel::Forbidden => SplashCapabilityDecision::Refuse {
-            log: format!("[splash] refused forbidden event: {event_id}"),
-        },
-    }
-}
-
-fn confirmation_card_for(pending: &PendingConfirmation) -> String {
+fn confirmation_card_for(action: &str) -> String {
     format!(
         "Permission required for `{}`.\n\n```runsplash\nView{{width: Fill height: Fit flow: Right spacing: 8\n    Label{{text:\"Allow this action?\"}}\n    Button{{text:\"Approve\" on_click: || agent.notify(\"host.confirm\", {{}})}}\n    Button{{text:\"Deny\" on_click: || agent.notify(\"host.deny\", {{}})}}\n}}\n```",
-        pending.event_id
+        action
     )
 }
 
@@ -3411,7 +3275,7 @@ pub struct App {
     #[rust]
     app_state_timer: Timer,
     #[rust]
-    pending_confirmation: Option<PendingConfirmation>,
+    splash_gate: SplashGateAdapter,
 }
 
 impl App {
@@ -3879,13 +3743,13 @@ impl App {
         cx.redraw_all();
     }
 
-    fn append_confirmation_card(&mut self, cx: &mut Cx, pending: &PendingConfirmation) {
+    fn append_confirmation_card(&mut self, cx: &mut Cx, action: &str) {
         let workspace = self.active_workspace;
         {
             let mut data = chat_data_for_workspace(workspace).write().unwrap();
             data.messages.push(ChatMessage {
                 role: ChatRole::Assistant,
-                text: confirmation_card_for(pending),
+                text: confirmation_card_for(action),
             });
             data.save_to_disk(workspace.save_path());
         }
@@ -3894,27 +3758,58 @@ impl App {
     }
 
     fn handle_splash_event(&mut self, cx: &mut Cx, event_id: &str, payload: &str) {
-        match process_splash_capability_event(&mut self.pending_confirmation, event_id, payload) {
-            SplashCapabilityDecision::Dispatch(event) => {
-                self.dispatch_splash_event(cx, &event.event_id, &event.payload);
-            }
-            SplashCapabilityDecision::Park {
-                pending,
-                replacement_log,
+        match self
+            .splash_gate
+            .process(event_id, payload, runtime_gate_profile().as_ref())
+        {
+            SplashAdapterDecision::Dispatch {
+                intent,
+                raw_payload,
             } => {
-                if let Some(line) = replacement_log {
-                    log!("{}", line);
-                }
-                self.append_confirmation_card(cx, &pending);
+                self.dispatch_splash_event(cx, intent.action(), &raw_payload);
             }
-            SplashCapabilityDecision::Discard { discarded } => {
-                if let Some(event) = discarded {
-                    log!("[splash] denied pending event: {}", event.event_id);
+            SplashAdapterDecision::Park {
+                review_id,
+                replaced_review_id,
+            } => {
+                let active_record = self
+                    .splash_gate
+                    .active_record()
+                    .expect("newly parked review must be present");
+                debug_assert_eq!(active_record.review_id(), review_id);
+                let action = active_record
+                    .intent()
+                    .action()
+                    .to_string();
+                if let Some(replaced_review_id) = replaced_review_id {
+                    let replaced_action = self
+                        .splash_gate
+                        .record(&replaced_review_id)
+                        .expect("replaced review must remain in core history")
+                        .intent()
+                        .action();
+                    log!(
+                        "[splash] replaced pending confirmation '{}' with '{}'",
+                        replaced_action,
+                        action
+                    );
+                }
+                self.append_confirmation_card(cx, &action);
+            }
+            SplashAdapterDecision::Discard { review_id } => {
+                if let Some(review_id) = review_id {
+                    let action = self
+                        .splash_gate
+                        .record(&review_id)
+                        .expect("rejected review must remain in core history")
+                        .intent()
+                        .action();
+                    log!("[splash] denied pending event: {}", action);
                 } else {
                     log!("[splash] host.deny ignored with no pending confirmation");
                 }
             }
-            SplashCapabilityDecision::Refuse { log: line } => {
+            SplashAdapterDecision::Refuse { log: line, .. } => {
                 log!("{}", line);
             }
         }
@@ -4357,58 +4252,194 @@ impl AppMain for App {
 #[cfg(test)]
 mod tests {
     use makepad_widgets::DVec2;
+    use syn::visit::Visit;
 
     use super::{
         aichat_principal, aichat_scope,
         app_generation_prompt_with_state, app_generation_session_system_prompt,
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
-        capability_permission, glass_opacity_values, process_splash_capability_event,
-        parse_gate_profile, render_state_templates, repair_appgen_response_for_display,
-        runtime_gate_profile, should_start_window_drag, synthetic_readonly_profile, Agent, App,
-        AppCapability, AppDemoState, BackendType, ClaudeCodeCliAgent, PendingConfirmation,
-        PermissionLevel, SplashAdapterDecision, SplashCapabilityDecision, SplashGateAdapter,
-        DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        glass_opacity_values, parse_gate_profile, render_state_templates,
+        repair_appgen_response_for_display, runtime_gate_profile, should_start_window_drag,
+        synthetic_readonly_profile, Agent, App, AppCapability, AppDemoState, BackendType,
+        ClaudeCodeCliAgent, SplashAdapterDecision, SplashGateAdapter, DEFAULT_GLASS_OPACITY,
+        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
 
-    #[derive(Default)]
-    struct SplashHarness {
-        pending: Option<PendingConfirmation>,
-        count: i64,
-        prompts: Vec<String>,
-        cards: Vec<PendingConfirmation>,
-        logs: Vec<String>,
-    }
+    #[test]
+    fn test_local_gate_review_definitions_are_removed() {
+        fn path_is(path: &syn::Path, expected: &[&str]) -> bool {
+            path.segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .eq(expected.iter().copied())
+        }
 
-    impl SplashHarness {
-        fn handle(&mut self, event_id: &str, payload: &str) {
-            match process_splash_capability_event(&mut self.pending, event_id, payload) {
-                SplashCapabilityDecision::Dispatch(event) => self.dispatch(event),
-                SplashCapabilityDecision::Park {
-                    pending,
-                    replacement_log,
-                } => {
-                    if let Some(line) = replacement_log {
-                        self.logs.push(line);
-                    }
-                    self.cards.push(pending);
+        fn type_is_path(ty: &syn::Type, expected: &[&str]) -> bool {
+            matches!(ty, syn::Type::Path(path) if path.qself.is_none() && path_is(&path.path, expected))
+        }
+
+        fn type_is_string(ty: &syn::Type) -> bool {
+            type_is_path(ty, &["String"])
+        }
+
+        fn type_is_raw_payload_map(ty: &syn::Type) -> bool {
+            let syn::Type::Path(path) = ty else {
+                return false;
+            };
+            let Some(segment) = path.path.segments.last() else {
+                return false;
+            };
+            if segment.ident != "BTreeMap" {
+                return false;
+            }
+            let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+                return false;
+            };
+            let types: Vec<_> = arguments
+                .args
+                .iter()
+                .filter_map(|argument| match argument {
+                    syn::GenericArgument::Type(ty) => Some(ty),
+                    _ => None,
+                })
+                .collect();
+            types.len() == 2 && types.iter().all(|ty| type_is_string(ty))
+        }
+
+        fn receiver_is_review_chain(receiver: &syn::Expr) -> bool {
+            let syn::Expr::Field(field) = receiver else {
+                return false;
+            };
+            let syn::Member::Named(member) = &field.member else {
+                return false;
+            };
+            matches!(field.base.as_ref(), syn::Expr::Path(path) if path.path.is_ident("self"))
+                && member == "review_chain"
+        }
+
+        #[derive(Default)]
+        struct CoreCallAudit {
+            evaluate_gate: bool,
+            review_chain_apply: bool,
+        }
+
+        impl<'ast> Visit<'ast> for CoreCallAudit {
+            fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+                if matches!(call.func.as_ref(), syn::Expr::Path(path)
+                    if path_is(&path.path, &["cfp_lite_core", "evaluate_gate"]))
+                {
+                    self.evaluate_gate = true;
                 }
-                SplashCapabilityDecision::Discard { discarded } => {
-                    if let Some(event) = discarded {
-                        self.logs
-                            .push(format!("[test] denied pending event: {}", event.event_id));
-                    }
+                syn::visit::visit_expr_call(self, call);
+            }
+
+            fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+                if call.method == "apply" && receiver_is_review_chain(&call.receiver) {
+                    self.review_chain_apply = true;
                 }
-                SplashCapabilityDecision::Refuse { log } => self.logs.push(log),
+                syn::visit::visit_expr_method_call(self, call);
             }
         }
 
-        fn dispatch(&mut self, event: PendingConfirmation) {
-            match event.event_id.as_str() {
-                "inc" => self.count += 1,
-                "ask_ai" => self.prompts.push(event.payload),
-                other => self.logs.push(format!("[test] dispatch {other}")),
+        let file = syn::parse_file(include_str!("main.rs")).expect("main.rs must parse as Rust");
+        let mut app = None;
+        let mut adapter = None;
+        let mut adapter_impl = None;
+        let mut forbidden = Vec::new();
+
+        for item in &file.items {
+            match item {
+                syn::Item::Enum(item)
+                    if matches!(
+                        item.ident.to_string().as_str(),
+                        "PermissionLevel" | "ReviewStatus" | "SplashCapabilityDecision"
+                    ) =>
+                {
+                    forbidden.push(format!("enum {}", item.ident));
+                }
+                syn::Item::Struct(item)
+                    if matches!(
+                        item.ident.to_string().as_str(),
+                        "PendingConfirmation" | "CapabilityEntry"
+                    ) =>
+                {
+                    forbidden.push(format!("struct {}", item.ident));
+                }
+                syn::Item::Fn(item)
+                    if matches!(
+                        item.sig.ident.to_string().as_str(),
+                        "capability_permission" | "process_splash_capability_event"
+                    ) =>
+                {
+                    forbidden.push(format!("fn {}", item.sig.ident));
+                }
+                syn::Item::Const(item) if item.ident == "CAPABILITY_MANIFEST" => {
+                    forbidden.push(format!("const {}", item.ident));
+                }
+                syn::Item::Struct(item) if item.ident == "App" => app = Some(item),
+                syn::Item::Struct(item) if item.ident == "SplashGateAdapter" => {
+                    adapter = Some(item)
+                }
+                syn::Item::Impl(item)
+                    if matches!(item.self_ty.as_ref(), syn::Type::Path(path)
+                        if path.path.is_ident("SplashGateAdapter")) =>
+                {
+                    adapter_impl = Some(item);
+                }
+                _ => {}
             }
         }
+
+        assert!(
+            forbidden.is_empty(),
+            "local gate/review definitions remain: {}",
+            forbidden.join(", ")
+        );
+
+        let app = app.expect("App struct must exist");
+        let syn::Fields::Named(app_fields) = &app.fields else {
+            panic!("App must use named fields");
+        };
+        let adapter_fields: Vec<_> = app_fields
+            .named
+            .iter()
+            .filter(|field| type_is_path(&field.ty, &["SplashGateAdapter"]))
+            .collect();
+        assert_eq!(adapter_fields.len(), 1, "App must own exactly one adapter");
+        assert_eq!(
+            adapter_fields[0].ident.as_ref().map(ToString::to_string),
+            Some("splash_gate".to_string())
+        );
+        assert!(app_fields.named.iter().all(|field| {
+            let name = field.ident.as_ref().map(ToString::to_string).unwrap_or_default();
+            name != "pending_confirmation" && !name.contains("review")
+        }), "App must not own parallel pending/review state");
+
+        let adapter = adapter.expect("SplashGateAdapter struct must exist");
+        let syn::Fields::Named(fields) = &adapter.fields else {
+            panic!("SplashGateAdapter must use named fields");
+        };
+        assert_eq!(fields.named.len(), 2, "adapter state must have exactly two fields");
+        let review_chain = fields
+            .named
+            .iter()
+            .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "review_chain"))
+            .expect("adapter must own review_chain");
+        assert!(type_is_path(
+            &review_chain.ty,
+            &["cfp_lite_core", "ReviewChain"]
+        ));
+        let raw_payloads = fields
+            .named
+            .iter()
+            .find(|field| field.ident.as_ref().is_some_and(|ident| ident == "raw_payloads"))
+            .expect("adapter must own raw_payloads");
+        assert!(type_is_raw_payload_map(&raw_payloads.ty));
+
+        let mut calls = CoreCallAudit::default();
+        calls.visit_item_impl(adapter_impl.expect("SplashGateAdapter impl must exist"));
+        assert!(calls.evaluate_gate, "adapter must call cfp_lite_core::evaluate_gate");
+        assert!(calls.review_chain_apply, "adapter must call ReviewChain::apply");
     }
 
     #[test]
@@ -4976,28 +5007,46 @@ View{
 
     #[test]
     fn test_forbidden_event_is_refused() {
-        let mut harness = SplashHarness::default();
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
+        let decision = adapter.process("fs.write", r#"{"path":"/tmp/x"}"#, Ok(profile));
 
-        assert_eq!(capability_permission("fs.write"), PermissionLevel::Forbidden);
-        harness.handle("fs.write", r#"{"path":"/tmp/x"}"#);
-
-        assert_eq!(harness.count, 0);
-        assert!(harness.prompts.is_empty());
-        assert!(harness.logs.iter().any(|line| line.contains("fs.write")));
+        assert!(matches!(
+            decision,
+            SplashAdapterDecision::Refuse {
+                code: cfp_lite_core::ProtocolErrorCode::ActionForbidden,
+                ref action,
+                ref log,
+            } if action == "fs.write" && log.contains("fs.write") && !log.contains("/tmp/x")
+        ));
+        assert!(adapter.review_chain.records().is_empty());
+        assert!(adapter.raw_payloads.is_empty());
     }
 
     #[test]
     fn test_unknown_event_treated_as_forbidden() {
-        let mut forbidden_pending = None;
-        let mut unknown_pending = None;
-        let forbidden =
-            process_splash_capability_event(&mut forbidden_pending, "fs.write", "{}");
-        let unknown =
-            process_splash_capability_event(&mut unknown_pending, "not.in.manifest", "{}");
+        let mut adapter = SplashGateAdapter::default();
+        let profile = runtime_gate_profile().as_ref().unwrap();
 
-        assert_eq!(capability_permission("not.in.manifest"), PermissionLevel::Forbidden);
-        assert!(matches!(forbidden, SplashCapabilityDecision::Refuse { .. }));
-        assert!(matches!(unknown, SplashCapabilityDecision::Refuse { .. }));
+        let forbidden = adapter.process("fs.write", "{}", Ok(profile));
+        let unknown = adapter.process("not.in.manifest", "{}", Ok(profile));
+
+        assert!(matches!(
+            forbidden,
+            SplashAdapterDecision::Refuse {
+                code: cfp_lite_core::ProtocolErrorCode::ActionForbidden,
+                ..
+            }
+        ));
+        assert!(matches!(
+            unknown,
+            SplashAdapterDecision::Refuse {
+                code: cfp_lite_core::ProtocolErrorCode::UnknownAction,
+                ..
+            }
+        ));
+        assert!(adapter.review_chain.records().is_empty());
+        assert!(adapter.raw_payloads.is_empty());
     }
 
     #[test]
