@@ -1891,6 +1891,11 @@ enum SplashAdapterDecision {
     },
 }
 
+enum AdapterCoreEvent<'a> {
+    Gate(&'a cfp_lite_core::GateDecision),
+    Review(&'a cfp_lite_core::ReviewOutcome),
+}
+
 impl SplashGateAdapter {
     fn process(
         &mut self,
@@ -1898,9 +1903,27 @@ impl SplashGateAdapter {
         raw_payload: &str,
         profile: Result<&GateProfile, &String>,
     ) -> SplashAdapterDecision {
+        let mut observe = |event: AdapterCoreEvent<'_>| match event {
+            AdapterCoreEvent::Gate(decision) => {
+                let _ = decision;
+            }
+            AdapterCoreEvent::Review(outcome) => {
+                let _ = outcome;
+            }
+        };
+        self.process_impl(action, raw_payload, profile, &mut observe)
+    }
+
+    fn process_impl(
+        &mut self,
+        action: &str,
+        raw_payload: &str,
+        profile: Result<&GateProfile, &String>,
+        observe: &mut dyn FnMut(AdapterCoreEvent<'_>),
+    ) -> SplashAdapterDecision {
         match action {
-            "host.confirm" => return self.confirm_active_review(),
-            "host.deny" => return self.deny_active_review(),
+            "host.confirm" => return self.confirm_active_review(observe),
+            "host.deny" => return self.deny_active_review(observe),
             _ => {}
         }
 
@@ -1932,6 +1955,7 @@ impl SplashGateAdapter {
             Ok(gate) => gate,
             Err(error) => return self.finish(Self::refuse(error.code, action)),
         };
+        observe(AdapterCoreEvent::Gate(&gate));
 
         let decision = match gate {
             cfp_lite_core::GateDecision::Dispatch { intent, .. } => {
@@ -1951,6 +1975,7 @@ impl SplashGateAdapter {
                     Ok(next) => next,
                     Err(error) => return self.finish(Self::refuse(error.code, action)),
                 };
+                observe(AdapterCoreEvent::Review(&outcome));
                 let cfp_lite_core::ReviewOutcome::Proposed {
                     review_id,
                     replaced_review_id,
@@ -1981,7 +2006,10 @@ impl SplashGateAdapter {
         self.finish(decision)
     }
 
-    fn confirm_active_review(&mut self) -> SplashAdapterDecision {
+    fn confirm_active_review(
+        &mut self,
+        observe: &mut dyn FnMut(AdapterCoreEvent<'_>),
+    ) -> SplashAdapterDecision {
         let review_id = match self.review_chain.active_review_id() {
             Some(review_id) => review_id.to_string(),
             None => {
@@ -2042,6 +2070,7 @@ impl SplashGateAdapter {
             Ok(applied) => applied,
             Err(error) => return Self::refuse(error.code, "host.confirm"),
         };
+        observe(AdapterCoreEvent::Review(&outcome));
         let approved_intent = match outcome {
             cfp_lite_core::ReviewOutcome::Approved { intent, .. } => intent,
             _ => {
@@ -2063,7 +2092,10 @@ impl SplashGateAdapter {
         })
     }
 
-    fn deny_active_review(&mut self) -> SplashAdapterDecision {
+    fn deny_active_review(
+        &mut self,
+        observe: &mut dyn FnMut(AdapterCoreEvent<'_>),
+    ) -> SplashAdapterDecision {
         let review_id = match self.review_chain.active_review_id() {
             Some(review_id) => review_id.to_string(),
             None => {
@@ -2094,6 +2126,7 @@ impl SplashGateAdapter {
             Ok(applied) => applied,
             Err(error) => return Self::refuse(error.code, "host.deny"),
         };
+        observe(AdapterCoreEvent::Review(&outcome));
         if !matches!(outcome, cfp_lite_core::ReviewOutcome::Rejected { .. }) {
             return Self::refuse(
                 cfp_lite_core::ProtocolErrorCode::InvalidReviewTransition,
@@ -4260,10 +4293,289 @@ mod tests {
         assistant_message_is_safe_for_history, assistant_message_is_safe_to_store,
         glass_opacity_values, parse_gate_profile, render_state_templates,
         repair_appgen_response_for_display, runtime_gate_profile, should_start_window_drag,
-        synthetic_readonly_profile, Agent, App, AppCapability, AppDemoState, BackendType,
-        ClaudeCodeCliAgent, SplashAdapterDecision, SplashGateAdapter, DEFAULT_GLASS_OPACITY,
-        MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
+        synthetic_readonly_profile, AdapterCoreEvent, Agent, App, AppCapability, AppDemoState,
+        BackendType, ClaudeCodeCliAgent, GateProfile, SplashAdapterDecision, SplashGateAdapter,
+        DEFAULT_GLASS_OPACITY, MAX_GLASS_OPACITY, MIN_GLASS_OPACITY,
     };
+
+    #[test]
+    fn test_aichat_uses_shared_gate_fixture() {
+        run_shared_gate_fixture();
+    }
+
+    #[derive(Clone, Debug)]
+    enum FixtureTraceEntry {
+        Gate(cfp_lite_core::GateDecision),
+        Review(cfp_lite_core::ReviewOutcome),
+    }
+
+    #[derive(Default)]
+    struct FixtureTrace {
+        entries: Vec<FixtureTraceEntry>,
+        dispatch: Option<cfp_lite_core::ExecutionIntent>,
+        adapter_decision: Option<SplashAdapterDecision>,
+    }
+
+    fn process_traced(
+        adapter: &mut SplashGateAdapter,
+        action: &str,
+        raw_payload: &str,
+        profile: Result<&GateProfile, &String>,
+        trace: &mut FixtureTrace,
+    ) -> SplashAdapterDecision {
+        let mut observe = |event: AdapterCoreEvent<'_>| match event {
+            AdapterCoreEvent::Gate(decision) => {
+                trace
+                    .entries
+                    .push(FixtureTraceEntry::Gate(decision.clone()));
+            }
+            AdapterCoreEvent::Review(outcome) => {
+                trace
+                    .entries
+                    .push(FixtureTraceEntry::Review(outcome.clone()));
+            }
+        };
+        adapter.process_impl(action, raw_payload, profile, &mut observe)
+    }
+
+    fn profile_named(name: &str) -> GateProfile {
+        match name {
+            "aichat" => parse_gate_profile(cfp_lite_core::fixtures::AICHAT_GATE_V1_JSON)
+                .expect("embedded aichat profile must parse"),
+            "synthetic_readonly" => synthetic_readonly_profile(),
+            other => panic!("unsupported fixture profile {other}"),
+        }
+    }
+
+    fn run_fixture_step(
+        adapter: &mut SplashGateAdapter,
+        trace: &mut FixtureTrace,
+        profile: &GateProfile,
+        step: &serde_json::Value,
+    ) {
+        let operation = step["op"]
+            .as_str()
+            .expect("fixture step op must be a string");
+        let (decision, is_adapter_operation) = match operation {
+            "notify" => {
+                let action = step["action"]
+                    .as_str()
+                    .expect("notify action must be a string");
+                let raw_payload = step["payload"].to_string();
+                (
+                    process_traced(adapter, action, &raw_payload, Ok(profile), trace),
+                    false,
+                )
+            }
+            "approve_active" => (
+                process_traced(adapter, "host.confirm", "{}", Ok(profile), trace),
+                false,
+            ),
+            "reject_active" => (
+                process_traced(adapter, "host.deny", "{}", Ok(profile), trace),
+                false,
+            ),
+            "adapter_notify" => {
+                let action = step["action"]
+                    .as_str()
+                    .expect("adapter action must be a string");
+                let raw_payload = step["payload"].to_string();
+                (
+                    process_traced(adapter, action, &raw_payload, Ok(profile), trace),
+                    true,
+                )
+            }
+            other => panic!("unsupported fixture operation {other}"),
+        };
+
+        if let SplashAdapterDecision::Dispatch { intent, .. } = &decision {
+            trace.dispatch = Some(intent.clone());
+        }
+        if is_adapter_operation {
+            trace.adapter_decision = Some(decision);
+        }
+    }
+
+    fn fixture_projection(
+        adapter: &SplashGateAdapter,
+        trace: &FixtureTrace,
+    ) -> serde_json::Value {
+        let decisions: Vec<_> = trace
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                FixtureTraceEntry::Gate(cfp_lite_core::GateDecision::Dispatch {
+                    intent,
+                    permission,
+                }) => serde_json::json!({
+                    "kind": "Dispatch",
+                    "permission": format!("{permission:?}"),
+                    "action": intent.action(),
+                }),
+                FixtureTraceEntry::Gate(cfp_lite_core::GateDecision::Park(park)) => {
+                    serde_json::json!({
+                        "kind": "Park",
+                        "action": park.intent.action(),
+                    })
+                }
+                FixtureTraceEntry::Gate(cfp_lite_core::GateDecision::Refuse {
+                    code,
+                    action,
+                }) => serde_json::json!({
+                    "kind": "Refuse",
+                    "code": format!("{code:?}"),
+                    "action": action,
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Proposed {
+                    review_id,
+                    replaced_review_id,
+                }) => serde_json::json!({
+                    "kind": "Proposed",
+                    "review_id": review_id,
+                    "replaced_review_id": replaced_review_id,
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Approved {
+                    review_id,
+                    intent,
+                }) => serde_json::json!({
+                    "kind": "Approved",
+                    "review_id": review_id,
+                    "action": intent.action(),
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Rejected {
+                    review_id,
+                }) => serde_json::json!({
+                    "kind": "Rejected",
+                    "review_id": review_id,
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Deferred {
+                    review_id,
+                }) => serde_json::json!({
+                    "kind": "Deferred",
+                    "review_id": review_id,
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Withdrawn {
+                    review_id,
+                }) => serde_json::json!({
+                    "kind": "Withdrawn",
+                    "review_id": review_id,
+                }),
+                FixtureTraceEntry::Review(cfp_lite_core::ReviewOutcome::Expired {
+                    review_id,
+                }) => serde_json::json!({
+                    "kind": "Expired",
+                    "review_id": review_id,
+                }),
+            })
+            .collect();
+
+        let records: Vec<_> = adapter
+            .review_chain
+            .records()
+            .iter()
+            .map(|record| {
+                serde_json::json!({
+                    "proposal_seq": record.proposal_seq(),
+                    "review_id": record.review_id(),
+                    "intent_hash": record.intent_hash(),
+                    "principal": { "id": record.principal().id },
+                    "scope": { "app_id": record.scope().app_id },
+                    "intent": {
+                        "action": record.intent().action(),
+                        "payload": record.intent().payload(),
+                    },
+                    "status": format!("{:?}", record.status()),
+                })
+            })
+            .collect();
+        let active_review_id = adapter.review_chain.active_review_id();
+        let active_record = active_review_id.and_then(|active_review_id| {
+            adapter
+                .review_chain
+                .records()
+                .iter()
+                .position(|record| record.review_id() == active_review_id)
+        });
+        let dispatch = trace.dispatch.as_ref().map(|intent| {
+            serde_json::json!({
+                "action": intent.action(),
+                "payload": intent.payload(),
+            })
+        });
+        let adapter_decision = trace.adapter_decision.as_ref().map(|decision| match decision {
+            SplashAdapterDecision::Dispatch { .. } => serde_json::json!({
+                "kind": "Dispatch",
+                "success": true,
+                "discarded": null,
+            }),
+            SplashAdapterDecision::Park { .. } => serde_json::json!({
+                "kind": "Park",
+                "success": true,
+                "discarded": null,
+            }),
+            SplashAdapterDecision::Discard { review_id } => serde_json::json!({
+                "kind": "Discard",
+                "success": true,
+                "discarded": review_id,
+            }),
+            SplashAdapterDecision::Refuse { .. } => serde_json::json!({
+                "kind": "Refuse",
+                "success": false,
+                "discarded": null,
+            }),
+        });
+
+        serde_json::json!({
+            "decisions": decisions,
+            "active_review_id": active_review_id,
+            "active_record": active_record,
+            "records": records,
+            "dispatch": dispatch,
+            "adapter": adapter_decision,
+        })
+    }
+
+    fn run_shared_gate_fixture() {
+        let root: serde_json::Value = serde_json::from_str(
+            cfp_lite_core::fixtures::AICHAT_GATE_V1_JSON,
+        )
+        .expect("shared fixture must parse");
+        let cases = root["cases"]
+            .as_array()
+            .expect("shared fixture cases must be an array");
+        assert_eq!(cases.len(), 14);
+        let mut executed_ids = std::collections::BTreeSet::new();
+
+        for case in cases {
+            let case_id = case["id"]
+                .as_str()
+                .expect("fixture case id must be a string");
+            assert!(
+                executed_ids.insert(case_id),
+                "fixture case {case_id} must execute once"
+            );
+            let mut adapter = SplashGateAdapter::default();
+            let mut trace = FixtureTrace::default();
+            let profile = profile_named(
+                case["profile"]
+                    .as_str()
+                    .expect("fixture profile must be a string"),
+            );
+            for step in case["steps"]
+                .as_array()
+                .expect("fixture case steps must be an array")
+            {
+                run_fixture_step(&mut adapter, &mut trace, &profile, step);
+            }
+            assert_eq!(
+                fixture_projection(&adapter, &trace),
+                case["expected"],
+                "fixture case {case_id} projection"
+            );
+        }
+
+        assert_eq!(executed_ids.len(), cases.len());
+    }
 
     #[test]
     fn test_local_gate_review_definitions_are_removed() {
