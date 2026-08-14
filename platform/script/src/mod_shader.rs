@@ -11,6 +11,13 @@ use makepad_live_id::*;
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct ShaderIoType(pub(crate) u32);
 
+impl ShaderIoType {
+    /// Stable numeric tag, for hashing an object's io signature.
+    pub fn to_u32(self) -> u32 {
+        self.0
+    }
+}
+
 pub const SHADER_IO_RUST_INSTANCE: ShaderIoType = ShaderIoType(0);
 pub const SHADER_IO_DYN_INSTANCE: ShaderIoType = ShaderIoType(1);
 pub const SHADER_IO_DYN_UNIFORM: ShaderIoType = ShaderIoType(2);

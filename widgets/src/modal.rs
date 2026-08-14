@@ -142,17 +142,24 @@ impl Widget for Modal {
         let draw_list = self.draw_list.as_mut().unwrap();
         draw_list.begin_overlay_reuse(cx);
         cx.begin_root_turtle_for_pass(self.view.layout);
-        self.draw_bg.begin(cx, self.view.walk, self.view.layout);
 
+        // Only emit draw items while open. A closed modal used to still draw
+        // its pass-sized `draw_bg` quad — invisible (transparent), but every
+        // closed modal in the app cost a full-screen blended quad per frame,
+        // which is pure overdraw on GPU backends and catastrophic for the
+        // headless CPU rasterizer (~1 Mpx of fill per closed modal per frame).
         if self.is_open {
+            self.draw_bg.begin(cx, self.view.walk, self.view.layout);
+
             let bg_view = self.view.widget(cx, ids!(bg_view));
             let _ = bg_view.draw_walk(cx, scope, walk.with_abs_pos(Vec2d { x: 0., y: 0. }));
 
             let content = self.view.widget(cx, ids!(content));
             let _ = content.draw_all(cx, scope);
+
+            self.draw_bg.end(cx);
         }
 
-        self.draw_bg.end(cx);
         cx.end_pass_sized_turtle();
         self.draw_list.as_mut().unwrap().end(cx);
 
