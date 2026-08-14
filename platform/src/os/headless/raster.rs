@@ -784,9 +784,55 @@ impl Cx {
 
             let shader_id = draw_call.draw_shader_id;
             let sh = &self.draw_shaders.shaders[shader_id.index];
+            // SHDBG: dump draw calls intersecting a debug rect (x0,y0,x1,y1)
+            if let Ok(dbgrect) = std::env::var("MAKEPAD_HEADLESS_DEBUG_RECT") {
+                let nums: Vec<f32> = dbgrect.split(',').filter_map(|v| v.parse().ok()).collect();
+                if nums.len() == 4 {
+                    if let Some(insts) = draw_item.instances.as_ref() {
+                        let stride = sh.mapping.instances.total_slots.max(1);
+                        let is_text = match &sh.mapping.code {
+                            CxDrawShaderCode::Combined { code } => code.contains("sample_text_pixel"),
+                            CxDrawShaderCode::Separate { fragment, .. } => {
+                                fragment.contains("sample_text_pixel")
+                            }
+                        };
+                        let inst_count = insts.len() / stride;
+                        for chunk in insts.chunks(stride).take(64) {
+                            // rect_pos/rect_size are the first rust-instance
+                            // slots for DrawQuad-family shaders
+                            if chunk.len() >= 4 {
+                                let (x, y, w, h) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+                                if x < nums[2] && x + w > nums[0] && y < nums[3] && y + h > nums[1] {
+                                    let head: Vec<String> = chunk.iter().take(24)
+                                        .map(|v| format!("{v:.2}")).collect();
+                                    crate::log!(
+                                        "[SHDBG] drawcall shader={} list={:?}({}) text={} n={} inst_slots={} dyn_uni[0..8]={:?} inst={}",
+                                        shader_id.index,
+                                        self.draw_lists[draw_list_id].debug_id,
+                                        draw_list_id.index(),
+                                        is_text, inst_count, stride,
+                                        &draw_call.dyn_uniforms[0..8.min(draw_call.dyn_uniforms.len())],
+                                        head.join(",")
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let skip_dbg = {
+                static SKIP_DBG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                *SKIP_DBG
+                    .get_or_init(|| std::env::var("MAKEPAD_HEADLESS_SKIP_DEBUG").is_ok())
+            };
             let os_shader_id = match sh.os_shader_id {
                 Some(id) => id,
-                None => continue,
+                None => {
+                    if skip_dbg {
+                        eprintln!("SKIPDBG shader={} os_shader_id=None", shader_id.index);
+                    }
+                    continue;
+                }
             };
             let is_draw_text_shader = match &sh.mapping.code {
                 CxDrawShaderCode::Combined { code } => code.contains("sample_text_pixel"),
@@ -806,17 +852,35 @@ impl Cx {
             let os_shader = &self.draw_shaders.os_shaders[os_shader_id];
             let module = match &os_shader.module {
                 Some(m) => m,
-                None => continue,
+                None => {
+                    if skip_dbg {
+                        eprintln!(
+                            "SKIPDBG shader={} module=None load_error={:?}",
+                            shader_id.index, os_shader.load_error
+                        );
+                    }
+                    continue;
+                }
             };
 
             // Load function pointers
             let vertex_fn: VertexFn = match module.symbol("makepad_headless_vertex") {
                 Ok(f) => f,
-                Err(_) => continue,
+                Err(e) => {
+                    if skip_dbg {
+                        eprintln!("SKIPDBG shader={} vertex symbol err: {e}", shader_id.index);
+                    }
+                    continue;
+                }
             };
             let fragment_fn: FragmentFn = match module.symbol("makepad_headless_fragment") {
                 Ok(f) => f,
-                Err(_) => continue,
+                Err(e) => {
+                    if skip_dbg {
+                        eprintln!("SKIPDBG shader={} fragment symbol err: {e}", shader_id.index);
+                    }
+                    continue;
+                }
             };
 
             // RenderCx layout info
@@ -1174,6 +1238,23 @@ impl Cx {
             }
             if let Some(p) = profile.as_deref_mut() {
                 p.raster_ms += raster_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            {
+                static SLOW_DRAWS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                if *SLOW_DRAWS
+                    .get_or_init(|| std::env::var("MAKEPAD_HEADLESS_SLOW_DRAWS").is_ok())
+                {
+                    let ms = raster_start.elapsed().as_secs_f64() * 1000.0;
+                    if ms > 20.0 {
+                        crate::log!(
+                            "[SLOWDRAW] shader={} inst={} tris={} raster={:.1}ms",
+                            shader_id.index,
+                            instance_count,
+                            tri_count * instance_count,
+                            ms
+                        );
+                    }
+                }
             }
         }
     }

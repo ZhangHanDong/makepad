@@ -26,20 +26,28 @@ impl DrawVars {
         if let Some(io_self) = value.as_object() {
             {
                 let cx = vm.host.cx();
-                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&io_self) {
+                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&(vm.bx.heap.heap_key(), io_self)) {
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
             }
 
-            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self);
+            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self)
+                // Scope the function-hash dedup to the owning heap: two objects in
+                // DIFFERENT heaps can share identical fns (a Splash isolate's stock
+                // Button vs the app's themed one) while collecting different io, so a
+                // cross-heap hit reuses a shader whose instance mapping doesn't match
+                // this object -- fills and text then read from the wrong slots and
+                // render invisibly. Within one heap the fn hash implies the same
+                // prototype chain, so the dedup stays valid there.
+                .bytes_append(&vm.bx.heap.heap_key().to_le_bytes());
             {
                 let cx = vm.host.cx();
                 if let Some(&shader_id) = cx.draw_shaders.cache_functions_to_shader.get(&fnhash) {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
@@ -118,7 +126,7 @@ impl DrawVars {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     cx.draw_shaders
                         .cache_functions_to_shader
                         .insert(fnhash, shader_id);
@@ -169,7 +177,7 @@ impl DrawVars {
             let shader_id = DrawShaderId { index };
             cx.draw_shaders
                 .cache_object_id_to_shader
-                .insert(io_self, shader_id);
+                .insert((vm.bx.heap.heap_key(), io_self), shader_id);
             cx.draw_shaders
                 .cache_functions_to_shader
                 .insert(fnhash, shader_id);
@@ -223,6 +231,9 @@ impl Cx {
                 crate::log!("{}", source);
             }
             let source_hash = hash_string(source);
+            if std::env::var("MAKEPAD_HEADLESS_DUMP_SHADERS").is_ok() {
+                crate::log!("[SHMAP] shader_index={} source_hash={:016x}", shader_index, source_hash);
+            }
 
             if let Some((existing_index, _)) = self
                 .draw_shaders
@@ -283,6 +294,9 @@ impl Cx {
                         }
                     }
                     os_shader.module = jit_output.module;
+                    if let Some(err) = &os_shader.load_error {
+                        crate::error!("headless shader dylib load failed: {err}");
+                    }
                 }
                 Err(err) => {
                     os_shader.load_error = Some(err.clone());
@@ -530,14 +544,18 @@ fn write_render_cx_struct(output: &ShaderOutput, vm: &ScriptVm, out: &mut String
         }
     }
 
-    // Group 7: Vertex position (vertex shader only)
-    if output
-        .io
-        .iter()
-        .any(|io| matches!(io.kind, ShaderIoKind::VertexPosition))
-    {
-        writeln!(out, "    vtx_pos: Vec4f,").ok();
-    }
+    // Group 7: Vertex position (vertex shader only).
+    //
+    // Emitted UNCONDITIONALLY: the module prologue zeroes `rcx.vtx_pos.w`,
+    // the vertex wrapper stores into it for return-style `vertex: fn()`s
+    // (`rcx.vtx_pos = io_vertex(..)`), and the epilogue reads it into
+    // `out_pos` — all regardless of whether the script body ever references
+    // `self.vertex_pos`. A shader whose vertex fn RETURNS its position
+    // (e.g. the theme's circle/rounded views) collects no `VertexPosition`
+    // io, and gating the field on that made every such shader fail rustc
+    // with E0609 `no field vtx_pos` — the widget then silently renders
+    // nothing.
+    writeln!(out, "    vtx_pos: Vec4f,").ok();
 
     // Group 8: Fragment output
     for io in &output.io {
