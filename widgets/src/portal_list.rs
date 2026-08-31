@@ -51,6 +51,13 @@ enum ScrollState {
         delta: f64,
         next_frame: NextFrame,
     },
+    /// Velocity-based momentum for precision touchpad scrolling.
+    WheelMomentum {
+        velocity: f64,
+        last_input_time: f64,
+        last_frame_time: f64,
+        next_frame: NextFrame,
+    },
     Pulldown {
         next_frame: NextFrame,
     },
@@ -371,6 +378,14 @@ pub struct PortalList {
     flick_scroll_scaling: f64,
     #[live(0.97)]
     flick_scroll_decay: f64,
+    /// Per-60-Hz-frame velocity retention after a precision touchpad gesture ends.
+    #[live(0.94)]
+    wheel_scroll_friction: f64,
+    /// Seconds without a new axis event before momentum takes over.
+    #[live(0.045)]
+    wheel_scroll_idle_delay: f64,
+    #[live(5.0)]
+    wheel_scroll_minimum_velocity: f64,
     #[live(80.0)]
     max_pull_down: f64,
     #[live(true)]
@@ -2029,6 +2044,31 @@ impl Widget for PortalList {
                     }
                 }
             }
+            ScrollState::WheelMomentum {
+                velocity,
+                last_input_time,
+                last_frame_time,
+                next_frame,
+            } => {
+                if let Some(ne) = next_frame.is_event(event) {
+                    let frame_dt = (ne.time - *last_frame_time).clamp(1.0 / 240.0, 1.0 / 30.0);
+                    *last_frame_time = ne.time;
+                    *next_frame = cx.new_next_frame();
+                    if ne.time - *last_input_time >= self.wheel_scroll_idle_delay {
+                        *velocity *= self.wheel_scroll_friction.powf(frame_dt * 60.0);
+                        if velocity.abs() > self.wheel_scroll_minimum_velocity {
+                            let delta = *velocity * frame_dt;
+                            self.delta_top_scroll(cx, delta, true, false);
+                            cx.widget_action(uid, PortalListAction::Scroll);
+                            self.area.redraw(cx);
+                        } else {
+                            self.scroll_state = ScrollState::Stopped;
+                            self.was_scrolling = false;
+                            return;
+                        }
+                    }
+                }
+            }
             ScrollState::Pulldown { next_frame } => {
                 if next_frame.is_event(event).is_some() {
                     if self.first_id == self.range_start && self.first_scroll > 0.0 {
@@ -2114,11 +2154,40 @@ impl Widget for PortalList {
                 Hit::FingerScroll(e) => {
                     self.tail_range = false;
                     self.detect_tail_in_draw = true;
-                    self.was_scrolling = false;
-                    self.scroll_state = ScrollState::Stopped;
+                    let wheel_delta = -e.scroll.index(vi);
+                    // macOS already emits native momentum deltas for a precision
+                    // trackpad. Windows currently exposes scroll input as a mouse
+                    // wheel here. Apply synthetic inertia only to Linux precision
+                    // touchpad input, where Wayland sends raw axis deltas.
+                    let use_touchpad_momentum = cfg!(target_os = "linux") && !e.is_mouse;
+                    self.was_scrolling = use_touchpad_momentum;
+                    if use_touchpad_momentum {
+                        match &mut self.scroll_state {
+                            ScrollState::WheelMomentum {
+                                velocity,
+                                last_input_time,
+                                ..
+                            } => {
+                                let dt = (e.time - *last_input_time).clamp(1.0 / 240.0, 0.05);
+                                let measured_velocity = wheel_delta / dt;
+                                *velocity = *velocity * 0.65 + measured_velocity * 0.35;
+                                *last_input_time = e.time;
+                            }
+                            _ => {
+                                self.scroll_state = ScrollState::WheelMomentum {
+                                    velocity: 0.0,
+                                    last_input_time: e.time,
+                                    last_frame_time: e.time,
+                                    next_frame: cx.new_next_frame(),
+                                };
+                            }
+                        }
+                    } else {
+                        self.scroll_state = ScrollState::Stopped;
+                    }
                     // For mouse wheel: clip to top and don't transition to pulldown
                     // (pulldown/overscroll is only for touch drag/flick)
-                    self.delta_top_scroll(cx, -e.scroll.index(vi), true, false);
+                    self.delta_top_scroll(cx, wheel_delta, true, false);
                     // Note: we intentionally do NOT reset `at_end` here.
                     // `at_end` is authoritatively recalculated each draw cycle
                     // in `end()`, and the redraw is already triggered below.
@@ -2557,6 +2626,10 @@ impl PortalListRef {
             ScrollState::Flick { delta: d, .. } => {
                 state = "Flick";
                 delta = *d;
+            }
+            ScrollState::WheelMomentum { velocity: pending, .. } => {
+                state = "WheelMomentum";
+                delta = *pending;
             }
             ScrollState::Pulldown { .. } => {
                 state = "Pulldown";
