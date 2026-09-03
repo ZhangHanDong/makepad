@@ -30,6 +30,7 @@ use {
     },
     std::{
         any::{Any, TypeId},
+        collections::VecDeque,
         ops::Range,
         rc::Rc,
     },
@@ -357,15 +358,16 @@ impl NativeMountQueue {
         self.mutations.push(mutation);
     }
 
-    pub fn flush_into(&mut self, platform_ops: &mut Vec<CxOsOp>) {
+    pub fn flush_into(&mut self, platform_ops: &mut std::collections::VecDeque<CxOsOp>) {
         if self.in_flush || self.mutations.is_empty() {
             return;
         }
         self.in_flush = true;
         let mutations = std::mem::take(&mut self.mutations);
         let mutations = Self::coalesce(mutations);
-        for mutation in mutations.into_iter().rev() {
-            platform_ops.push(mutation.into_os_op());
+        // platform_ops is FIFO (pop_front), so push in order.
+        for mutation in mutations.into_iter() {
+            platform_ops.push_back(mutation.into_os_op());
         }
         self.in_flush = false;
     }
@@ -633,14 +635,14 @@ impl<'a> CxSystemBrowser<'a> {
     }
 
     pub fn spawn(&mut self, url: &str) {
-        self.cx.platform_ops.push(CxOsOp::SpawnSystemBrowser {
+        self.cx.platform_ops.push_back(CxOsOp::SpawnSystemBrowser {
             browser_id: self.id.0,
             url: url.to_string(),
         });
     }
 
     pub fn update(&mut self, area: Area, visible: bool) {
-        self.cx.platform_ops.push(CxOsOp::UpdateSystemBrowser {
+        self.cx.platform_ops.push_back(CxOsOp::UpdateSystemBrowser {
             browser_id: self.id.0,
             area,
             visible,
@@ -648,13 +650,13 @@ impl<'a> CxSystemBrowser<'a> {
     }
 
     pub fn detach(&mut self) {
-        self.cx.platform_ops.push(CxOsOp::DetachSystemBrowser {
+        self.cx.platform_ops.push_back(CxOsOp::DetachSystemBrowser {
             browser_id: self.id.0,
         });
     }
 
     pub fn set_url(&mut self, url: &str, replace: bool) {
-        self.cx.platform_ops.push(CxOsOp::SetSystemBrowserUrl {
+        self.cx.platform_ops.push_back(CxOsOp::SetSystemBrowserUrl {
             browser_id: self.id.0,
             url: url.to_string(),
             replace,
@@ -662,14 +664,14 @@ impl<'a> CxSystemBrowser<'a> {
     }
 
     pub fn history_go(&mut self, delta: i32) {
-        self.cx.platform_ops.push(CxOsOp::SystemBrowserHistoryGo {
+        self.cx.platform_ops.push_back(CxOsOp::SystemBrowserHistoryGo {
             browser_id: self.id.0,
             delta,
         });
     }
 
     pub fn close(&mut self) {
-        self.cx.platform_ops.push(CxOsOp::CloseSystemBrowser {
+        self.cx.platform_ops.push_back(CxOsOp::CloseSystemBrowser {
             browser_id: self.id.0,
         });
     }
@@ -692,6 +694,14 @@ pub trait CxOsApi {
     fn browser_update_url(&mut self, _url: &str, _replace: bool) {}
 
     fn browser_history_go(&mut self, _delta: i32) {}
+
+    /// Platform hook shared by native and synthetic pointer injection. Cocoa
+    /// uses it to activate the clicked window before the down is dispatched.
+    fn activate_window_on_pointer_down(&mut self, _window_id: WindowId) {}
+
+    /// Re-evaluate any platform pacing override after widget capture state
+    /// may have changed in a pointer callback.
+    fn update_pointer_capture_pacing(&mut self) {}
 
     fn seconds_since_app_start(&self) -> f64;
 
@@ -787,8 +797,29 @@ pub enum CxOsOp {
     HideWindowButtons(WindowId),
     ShowWindowButtons(WindowId),
     SetTopmost(WindowId, bool),
+    /// `true`: drop the native maximized-state border/titlebar strip a
+    /// backend would otherwise keep (Windows only; other backends ignore
+    /// it) so a maximized window reads as a clean fullscreen picture
+    /// rather than a decorated window pinned to the work area.
+    SetChromelessWhenMaximized(WindowId, bool),
+    SetWindowTitle(WindowId, String),
     SetWindowVisuals(WindowId, WindowVisuals),
     ShowInDock(bool),
+    /// FPS-style pointer lock: `true` hides the cursor and freezes it in
+    /// place while mouse deltas keep arriving (as synthesized absolute
+    /// positions, so existing MouseMove consumers work unchanged); `false`
+    /// releases. Backends without support ignore it.
+    LockMousePointer(bool),
+    /// Widget-scoped pointer pin for value scrubbing: cursor stays at its
+    /// press point (hidden) while deltas keep flowing; restored in place
+    /// on release. Engage at the drag threshold, never on the press.
+    PinMousePointer(bool),
+    /// Per-frame lock maintenance, pushed by the captured app every frame:
+    /// re-pins the hardware cursor. Exists because OS-level disassociation
+    /// proves unreliable on some systems (it silently drops on app
+    /// deactivation and other events) — SDL's fallback is the same
+    /// warp-every-frame. No-op when unlocked or unsupported.
+    RepinMousePointer,
     /// Tints the system bar (status/navigation bar) icons: `true` requests
     /// dark icons, `false` requests light icons. Honored on Android and iOS
     /// (iOS only has a status bar).
@@ -814,6 +845,14 @@ pub enum CxOsOp {
     Quit,
 
     StartDragging(Vec<DragItem>),
+    /// Begin an operating-system drag whose destination may be another
+    /// application. This is deliberately separate from `StartDragging`:
+    /// several Makepad widgets use that operation for the framework's
+    /// immediate, synthetic in-window drag protocol.
+    StartExternalDragging {
+        window_id: WindowId,
+        items: Vec<DragItem>,
+    },
     UpdateMacosMenu(MacosMenu),
     ShowClipboardActions {
         has_selection: bool,
@@ -842,6 +881,9 @@ pub enum CxOsOp {
         permission: crate::permission::Permission,
         request_id: i32,
     },
+
+    StartLocationUpdates,
+    StopLocationUpdates,
 
     HttpRequest {
         request_id: LiveId,
@@ -930,6 +972,8 @@ pub enum CxOsOp {
     SeekVideoPlayback(LiveId, u64),
     SetVideoVolume(LiveId, f64),
     SetVideoPlaybackRate(LiveId, f64),
+    SelectVideoTrack(LiveId, usize),
+    SelectAudioTrack(LiveId, usize),
     UpdateVideoSurfaceTexture(LiveId),
 
     CreateWebView {
@@ -975,8 +1019,13 @@ impl std::fmt::Debug for CxOsOp {
             Self::HideWindowButtons(..) => write!(f, "HideWindowButtons"),
             Self::ShowWindowButtons(..) => write!(f, "ShowWindowButtons"),
             Self::SetTopmost(..) => write!(f, "SetTopmost"),
+            Self::SetChromelessWhenMaximized(..) => write!(f, "SetChromelessWhenMaximized"),
+            Self::SetWindowTitle(..) => write!(f, "SetWindowTitle"),
             Self::SetWindowVisuals(..) => write!(f, "SetWindowVisuals"),
             Self::ShowInDock(..) => write!(f, "ShowInDock"),
+            Self::LockMousePointer(..) => write!(f, "LockMousePointer"),
+            Self::PinMousePointer(..) => write!(f, "PinMousePointer"),
+            Self::RepinMousePointer => write!(f, "RepinMousePointer"),
             Self::SetSystemBarDarkIcons(..) => write!(f, "SetSystemBarDarkIcons"),
 
             Self::ShowTextIME(..) => write!(f, "ShowTextIME"),
@@ -988,6 +1037,7 @@ impl std::fmt::Debug for CxOsOp {
             Self::Quit => write!(f, "Quit"),
 
             Self::StartDragging(..) => write!(f, "StartDragging"),
+            Self::StartExternalDragging { .. } => write!(f, "StartExternalDragging"),
             Self::UpdateMacosMenu(..) => write!(f, "UpdateMacosMenu"),
             Self::ShowClipboardActions { .. } => write!(f, "ShowClipboardActions"),
             Self::HideClipboardActions => write!(f, "HideClipboardActions"),
@@ -1000,6 +1050,8 @@ impl std::fmt::Debug for CxOsOp {
 
             Self::CheckPermission { .. } => write!(f, "CheckPermission"),
             Self::RequestPermission { .. } => write!(f, "RequestPermission"),
+            Self::StartLocationUpdates => write!(f, "StartLocationUpdates"),
+            Self::StopLocationUpdates => write!(f, "StopLocationUpdates"),
 
             Self::HttpRequest { .. } => write!(f, "HttpRequest"),
             Self::CancelHttpRequest { .. } => write!(f, "CancelHttpRequest"),
@@ -1030,6 +1082,8 @@ impl std::fmt::Debug for CxOsOp {
             Self::SeekVideoPlayback(..) => write!(f, "SeekVideoPlayback"),
             Self::SetVideoVolume(..) => write!(f, "SetVideoVolume"),
             Self::SetVideoPlaybackRate(..) => write!(f, "SetVideoPlaybackRate"),
+            Self::SelectVideoTrack(..) => write!(f, "SelectVideoTrack"),
+            Self::SelectAudioTrack(..) => write!(f, "SelectAudioTrack"),
             Self::UpdateVideoSurfaceTexture(..) => write!(f, "UpdateVideoSurfaceTexture"),
             Self::CreateWebView { .. } => write!(f, "CreateWebView"),
             Self::UpdateWebView { .. } => write!(f, "UpdateWebView"),
@@ -1051,6 +1105,16 @@ impl std::fmt::Debug for CxOsOp {
         }
     }
 }
+
+/// Requeue an OS op that cannot run yet. FIFO: append so remaining already-queued
+/// ops still run first. Returns `true` if the drain should continue (`len() > 1`);
+/// `false` if this is the only op left — break and retry on the next event.
+#[allow(dead_code)] // only drivers that defer ops call this (macos, windows today)
+pub(crate) fn defer_platform_op(platform_ops: &mut VecDeque<CxOsOp>, op: CxOsOp) -> bool {
+    platform_ops.push_back(op);
+    platform_ops.len() > 1
+}
+
 impl Cx {
     pub(crate) fn queue_native_mount_mutation(&mut self, mutation: NativeMountMutation) {
         self.native_mount_queue.push(mutation);
@@ -1105,6 +1169,13 @@ impl Cx {
     /// helper is dead code on those builds, hence the `allow(dead_code)`.
     #[allow(dead_code)]
     pub(crate) fn dpi_override_scale(&self, pos: &mut Vec2d, window_id: WindowId) {
+        // Native window callbacks can be delivered after a window has been
+        // destroyed.  In that case their Cocoa back-pointer no longer names a
+        // live Cx window.  Pointer events are best-effort, so never let a stale
+        // callback index the generational pool (and abort the whole app).
+        if !self.windows.is_valid(window_id) || !self.windows[window_id].is_created {
+            return;
+        }
         *pos = self.windows[window_id].remap_dpi_override(*pos);
     }
 
@@ -1293,7 +1364,7 @@ impl Cx {
         // Loaded yet, allow direct dependency lookup as a synchronous fallback.
         if self.os_type().is_web() {
             let resources = self.script_data.resources.resources.borrow();
-            if let Some(res) = resources.iter().find(|res| res.handle == handle) {
+            if let Some(res) = resources.iter().find(|res| res.has_handle(handle)) {
                 if let Some(dep_path) = res.dependency_path.as_deref() {
                     if let Ok(data) = self.get_dependency(dep_path) {
                         return Some(data);
@@ -1310,7 +1381,7 @@ impl Cx {
         let resources = self.script_data.resources.resources.borrow();
         resources
             .iter()
-            .find(|res| res.handle == handle)
+            .find(|res| res.has_handle(handle))
             .map(|res| res.abs_path.clone())
     }
 
@@ -1323,7 +1394,7 @@ impl Cx {
             let resources = self.script_data.resources.resources.borrow();
             resources
                 .iter()
-                .find(|res| res.handle == handle)
+                .find(|res| res.has_handle(handle))
                 .map(|res| res.abs_path.clone())
         };
 
@@ -1390,35 +1461,35 @@ impl Cx {
     }
 
     pub fn update_macos_menu(&mut self, menu: MacosMenu) {
-        self.platform_ops.push(CxOsOp::UpdateMacosMenu(menu));
+        self.platform_ops.push_back(CxOsOp::UpdateMacosMenu(menu));
     }
 
     pub fn xr_start_presenting(&mut self) {
-        self.platform_ops.push(CxOsOp::XrStartPresenting);
+        self.platform_ops.push_back(CxOsOp::XrStartPresenting);
     }
 
     pub fn xr_set_render_scale(&mut self, scale: f32) {
-        self.platform_ops.push(CxOsOp::XrSetRenderScale(scale));
+        self.platform_ops.push_back(CxOsOp::XrSetRenderScale(scale));
     }
 
     pub fn xr_advertise_anchor(&mut self, anchor: XrAnchor) {
-        self.platform_ops.push(CxOsOp::XrAdvertiseAnchor(anchor));
+        self.platform_ops.push_back(CxOsOp::XrAdvertiseAnchor(anchor));
     }
 
     pub fn xr_set_local_anchor(&mut self, anchor: XrAnchor) {
-        self.platform_ops.push(CxOsOp::XrSetLocalAnchor(anchor));
+        self.platform_ops.push_back(CxOsOp::XrSetLocalAnchor(anchor));
     }
 
     pub fn xr_set_local_floor(&mut self, floor_y: f32) {
-        self.platform_ops.push(CxOsOp::XrSetLocalFloor(floor_y));
+        self.platform_ops.push_back(CxOsOp::XrSetLocalFloor(floor_y));
     }
 
     pub fn xr_discover_anchor(&mut self, id: u8) {
-        self.platform_ops.push(CxOsOp::XrDiscoverAnchor(id));
+        self.platform_ops.push_back(CxOsOp::XrDiscoverAnchor(id));
     }
 
     pub fn quit(&mut self) {
-        self.platform_ops.push(CxOsOp::Quit);
+        self.platform_ops.push_back(CxOsOp::Quit);
     }
 
     pub fn request_quit(&mut self, reason: QuitReason) -> bool {
@@ -1473,8 +1544,53 @@ impl Cx {
 
     // Determines whether to show your application in the dock when it runs. The default value is true.
     // You can remove the dock icon by setting this value to false.
+    /// FPS mouse capture: lock hides and freezes the hardware cursor while
+    /// deltas keep flowing as MouseMove events; unlock restores the cursor.
+    /// Convention: lock on the game's own click, RELEASE ON ESCAPE.
+    pub fn lock_mouse_pointer(&mut self, lock: bool) {
+        self.platform_ops.push_back(CxOsOp::LockMousePointer(lock));
+    }
+
+    /// Call once per frame while holding the lock — keeps the hardware
+    /// cursor pinned even when the OS quietly drops the disassociation.
+    pub fn repin_mouse_pointer(&mut self) {
+        self.platform_ops.push_back(CxOsOp::RepinMousePointer);
+    }
+
+    /// Pin the CURRENT mouse capture for value scrubbing: the hardware
+    /// cursor hides AT its position and detaches so deltas keep flowing
+    /// with infinite range; the drag owner keeps receiving FingerMove
+    /// through its ordinary capture, and nothing else in the window sees
+    /// the pointer (no hover, no new captures). Engage only when the drag
+    /// actually starts (the 3px threshold crossing), never on the initial
+    /// press. Release is AUTOMATIC: the pin rides on the capture, and the
+    /// hardware button-up releases both (plus focus-loss and the platform
+    /// layer's own unconditional release) — the cursor restores at the
+    /// press point. Call `unpin_pointer_capture` only to cancel EARLY
+    /// (Escape / right-click) while the button is still held.
+    pub fn pin_pointer_capture(&mut self) {
+        if self.fingers.pin_mouse_capture() {
+            self.platform_ops.push_back(CxOsOp::PinMousePointer(true));
+        }
+    }
+
+    /// Cancel a scrub pin while the button is still held (Escape /
+    /// right-click cancel): clears the capture's pin flag and restores the
+    /// cursor at the press point.
+    /// The repaint counter: one step per presented frame. Two reads apart
+    /// in time say whether the app paints on its own.
+    pub fn repaint_id(&self) -> u64 {
+        self.repaint_id
+    }
+
+    pub fn unpin_pointer_capture(&mut self) {
+        if self.fingers.unpin_captures() {
+            self.platform_ops.push_back(CxOsOp::PinMousePointer(false));
+        }
+    }
+
     pub fn show_in_dock(&mut self, show: bool) {
-        self.platform_ops.push(CxOsOp::ShowInDock(show));
+        self.platform_ops.push_back(CxOsOp::ShowInDock(show));
     }
 
     /// Controls how the system bars (status bar and navigation bar) icons and
@@ -1493,8 +1609,18 @@ impl Cx {
     }
     pub fn push_unique_platform_op(&mut self, op: CxOsOp) {
         if self.platform_ops.iter().find(|o| **o == op).is_none() {
-            self.platform_ops.push(op);
+            self.platform_ops.push_back(op);
         }
+    }
+
+    /// Requeue an OS op that cannot run yet (typical case: `SetTopmost` before
+    /// any native window exists). FIFO: append so remaining already-queued ops
+    /// still run first in this drain. Returns `true` if the drain should
+    /// continue (`len() > 1`); `false` if this is the only op left — break and
+    /// retry on the next event instead of spinning.
+    #[allow(dead_code)] // only drivers that defer ops call this (macos, windows today)
+    pub(crate) fn defer_platform_op(&mut self, op: CxOsOp) -> bool {
+        defer_platform_op(&mut self.platform_ops, op)
     }
 
     pub fn show_text_ime(&mut self, area: Area, pos: Vec2d) {
@@ -1519,7 +1645,7 @@ impl Cx {
         if !self.keyboard.text_ime_dismissed {
             self.ime_area = area;
             self.platform_ops
-                .push(CxOsOp::ShowTextIME(area, cursor_rect, config));
+                .push_back(CxOsOp::ShowTextIME(area, cursor_rect, config));
         }
     }
 
@@ -1529,7 +1655,7 @@ impl Cx {
         selection: Range<CharOffset>,
         composition: Option<Range<CharOffset>>,
     ) {
-        self.platform_ops.push(CxOsOp::SyncImeState {
+        self.platform_ops.push_back(CxOsOp::SyncImeState {
             text,
             selection,
             composition,
@@ -1538,12 +1664,12 @@ impl Cx {
 
     pub fn hide_text_ime(&mut self) {
         self.keyboard.reset_text_ime_dismissed();
-        self.platform_ops.push(CxOsOp::HideTextIME);
+        self.platform_ops.push_back(CxOsOp::HideTextIME);
     }
 
     pub fn text_ime_was_dismissed(&mut self) {
         self.keyboard.set_text_ime_dismissed();
-        self.platform_ops.push(CxOsOp::HideTextIME);
+        self.platform_ops.push_back(CxOsOp::HideTextIME);
     }
 
     /// Set or clear a window's `dpi_override` at runtime.
@@ -1612,7 +1738,7 @@ impl Cx {
     /// the text selection from Rust directly. The `has_selection` parameter is only
     /// used to determine which menu items to show, not for the operations themselves.
     pub fn show_clipboard_actions(&mut self, has_selection: bool, rect: Rect, keyboard_shift: f64) {
-        self.platform_ops.push(CxOsOp::ShowClipboardActions {
+        self.platform_ops.push_back(CxOsOp::ShowClipboardActions {
             has_selection,
             rect,
             keyboard_shift,
@@ -1621,7 +1747,7 @@ impl Cx {
 
     /// Hides the clipboard actions menu
     pub fn hide_clipboard_actions(&mut self) {
-        self.platform_ops.push(CxOsOp::HideClipboardActions);
+        self.platform_ops.push_back(CxOsOp::HideClipboardActions);
     }
 
     /// Copies the given string to the clipboard.
@@ -1629,14 +1755,14 @@ impl Cx {
     /// Due to lack of platform clipboard support, it does not work on Web or tvOS.
     pub fn copy_to_clipboard(&mut self, content: &str) {
         self.platform_ops
-            .push(CxOsOp::CopyToClipboard(content.to_owned()));
+            .push_back(CxOsOp::CopyToClipboard(content.to_owned()));
     }
 
     /// Sets the primary selection (Linux middle-click paste).
     /// No-op on non-Linux platforms.
     pub fn set_primary_selection(&mut self, content: &str) {
         self.platform_ops
-            .push(CxOsOp::SetPrimarySelection(content.to_owned()));
+            .push_back(CxOsOp::SetPrimarySelection(content.to_owned()));
     }
 
     /// Forward an accessibility tree update to the platform adapter.
@@ -1645,7 +1771,7 @@ impl Cx {
     /// downcast it when an accessibility adapter is active.
     pub fn update_accessibility_tree(&mut self, update: Box<dyn std::any::Any + Send>) {
         self.platform_ops
-            .push(CxOsOp::AccessibilityUpdate(AccessibilityUpdatePayload(
+            .push_back(CxOsOp::AccessibilityUpdate(AccessibilityUpdatePayload(
                 update,
             )));
     }
@@ -1653,18 +1779,18 @@ impl Cx {
     /// Show native selection handles at the given start and end positions (mobile).
     pub fn show_selection_handles(&mut self, start: Vec2d, end: Vec2d) {
         self.platform_ops
-            .push(CxOsOp::ShowSelectionHandles { start, end });
+            .push_back(CxOsOp::ShowSelectionHandles { start, end });
     }
 
     /// Update positions of visible selection handles (mobile).
     pub fn update_selection_handles(&mut self, start: Vec2d, end: Vec2d) {
         self.platform_ops
-            .push(CxOsOp::UpdateSelectionHandles { start, end });
+            .push_back(CxOsOp::UpdateSelectionHandles { start, end });
     }
 
     /// Hide selection handles (mobile).
     pub fn hide_selection_handles(&mut self) {
-        self.platform_ops.push(CxOsOp::HideSelectionHandles);
+        self.platform_ops.push_back(CxOsOp::HideSelectionHandles);
     }
 
     pub fn start_dragging(&mut self, items: Vec<DragItem>) {
@@ -1673,7 +1799,26 @@ impl Cx {
                 panic!("start drag twice");
             }
         });
-        self.platform_ops.push(CxOsOp::StartDragging(items));
+        self.platform_ops.push_back(CxOsOp::StartDragging(items));
+    }
+
+    /// Starts a native drag-and-drop session that can leave the Makepad app.
+    ///
+    /// `FilePath` items must contain absolute paths to existing regular files
+    /// and must not carry an `internal_id`. The source window is explicit so
+    /// a multi-window application never starts the session from a stale Cocoa
+    /// event or the wrong native surface. Unsupported item/platform
+    /// combinations are rejected by the platform adapter. Every accepted or
+    /// rejected request completes with `Event::DragEnd`, allowing callers to
+    /// release gesture state without platform-specific timeouts.
+    pub fn start_external_dragging(&mut self, window_id: WindowId, items: Vec<DragItem>) {
+        self.platform_ops.iter().for_each(|op| {
+            if matches!(op, CxOsOp::StartExternalDragging { .. }) {
+                panic!("start external drag twice");
+            }
+        });
+        self.platform_ops
+            .push_back(CxOsOp::StartExternalDragging { window_id, items });
     }
 
     pub fn set_cursor(&mut self, cursor: MouseCursor) {
@@ -1684,12 +1829,29 @@ impl Cx {
         }) {
             *p = CxOsOp::SetCursor(cursor)
         } else {
-            self.platform_ops.push(CxOsOp::SetCursor(cursor))
+            self.platform_ops.push_back(CxOsOp::SetCursor(cursor))
         }
     }
 
     pub fn sweep_lock(&mut self, value: Area) {
         self.fingers.sweep_lock(value);
+    }
+
+    /// Hand the finger currently captured by `from` over to `to` (with sweep area
+    /// `to_sweep`), so a drag begun on one widget can continue on another — e.g. a
+    /// long-pressed drawer app handing its touch to the home pager for placement.
+    /// Returns true if a live capture on `from` was found and handed over; false if
+    /// the finger was already released, so callers can avoid starting a dead drag.
+    pub fn switch_finger_capture(&mut self, from: Area, to: Area, to_sweep: Area) -> bool {
+        self.fingers.switch_capture_area(from, to, to_sweep)
+    }
+
+    /// Hand a finger grabbed by an interactive child up to `over`, a container
+    /// that already co-captures it via `capture_overload` — so `over` (e.g. the
+    /// home pager) can drive a pan/drag even when the press started on a button
+    /// inside one of its children. Returns true if a child capture was dropped.
+    pub fn promote_finger_capture_over(&mut self, over: Area) -> bool {
+        self.fingers.promote_capture_over(over)
     }
 
     pub fn sweep_unlock(&mut self, value: Area) {
@@ -1724,7 +1886,7 @@ impl Cx {
 
     pub fn start_timeout(&mut self, delay: f64) -> Timer {
         self.timer_id += 1;
-        self.platform_ops.push(CxOsOp::StartTimer {
+        self.platform_ops.push_back(CxOsOp::StartTimer {
             timer_id: self.timer_id,
             interval: delay,
             repeats: false,
@@ -1734,7 +1896,7 @@ impl Cx {
 
     pub fn start_interval(&mut self, interval: f64) -> Timer {
         self.timer_id += 1;
-        self.platform_ops.push(CxOsOp::StartTimer {
+        self.platform_ops.push_back(CxOsOp::StartTimer {
             timer_id: self.timer_id,
             interval,
             repeats: true,
@@ -1744,13 +1906,13 @@ impl Cx {
 
     pub fn stop_timer(&mut self, timer: Timer) {
         if timer.0 != 0 {
-            self.platform_ops.push(CxOsOp::StopTimer(timer.0));
+            self.platform_ops.push_back(CxOsOp::StopTimer(timer.0));
         }
     }
 
     pub fn request_permission(&mut self, permission: crate::permission::Permission) -> i32 {
         self.permissions_request_id += 1;
-        self.platform_ops.push(CxOsOp::RequestPermission {
+        self.platform_ops.push_back(CxOsOp::RequestPermission {
             request_id: self.permissions_request_id,
             permission,
         });
@@ -1759,11 +1921,26 @@ impl Cx {
 
     pub fn check_permission(&mut self, permission: crate::permission::Permission) -> i32 {
         self.permissions_request_id += 1;
-        self.platform_ops.push(CxOsOp::CheckPermission {
+        self.platform_ops.push_back(CxOsOp::CheckPermission {
             request_id: self.permissions_request_id,
             permission,
         });
         self.permissions_request_id
+    }
+
+    /// Start streaming position fixes from the platform location service
+    /// (CoreLocation on macOS/iOS, LocationManager on Android,
+    /// `navigator.geolocation` on web). Fixes arrive as
+    /// [`Event::LocationUpdate`]; permission prompts are handled by the
+    /// platform, failures arrive as [`Event::LocationError`]. Platforms
+    /// without a location service log an error and stay silent.
+    pub fn start_location_updates(&mut self) {
+        self.platform_ops.push_back(CxOsOp::StartLocationUpdates);
+    }
+
+    /// Stop streaming position fixes.
+    pub fn stop_location_updates(&mut self) {
+        self.platform_ops.push_back(CxOsOp::StopLocationUpdates);
     }
 
     pub fn get_dpi_factor_of(&mut self, area: &Area) -> f64 {
@@ -2060,14 +2237,14 @@ impl Cx {
     }
     /*
         pub fn web_socket_open(&mut self, request_id: LiveId, request: HttpRequest) {
-            self.platform_ops.push(CxOsOp::WebSocketOpen{
+            self.platform_ops.push_back(CxOsOp::WebSocketOpen{
                 request,
                 request_id,
             });
         }
 
         pub fn web_socket_send_binary(&mut self, request_id: LiveId, data: Vec<u8>) {
-            self.platform_ops.push(CxOsOp::WebSocketSendBinary{
+            self.platform_ops.push_back(CxOsOp::WebSocketSendBinary{
                 request_id,
                 data,
             });
@@ -2143,7 +2320,7 @@ impl Cx {
             let _request_id = self.request_permission(permission);
             return;
         }
-        self.platform_ops.push(CxOsOp::PrepareVideoPlayback(
+        self.platform_ops.push_back(CxOsOp::PrepareVideoPlayback(
             video_id,
             source,
             camera_preview_mode,
@@ -2172,7 +2349,7 @@ impl Cx {
             }
             match result.status {
                 crate::permission::PermissionStatus::Granted => {
-                    self.platform_ops.push(CxOsOp::PrepareVideoPlayback(
+                    self.platform_ops.push_back(CxOsOp::PrepareVideoPlayback(
                         p.video_id,
                         p.source,
                         p.camera_preview_mode,
@@ -2201,11 +2378,11 @@ impl Cx {
 
     pub fn attach_camera_native_preview(&mut self, video_id: LiveId, area: Area) {
         self.platform_ops
-            .push(CxOsOp::AttachCameraNativePreview { video_id, area });
+            .push_back(CxOsOp::AttachCameraNativePreview { video_id, area });
     }
 
     pub fn update_camera_native_preview(&mut self, video_id: LiveId, area: Area, visible: bool) {
-        self.platform_ops.push(CxOsOp::UpdateCameraNativePreview {
+        self.platform_ops.push_back(CxOsOp::UpdateCameraNativePreview {
             video_id,
             area,
             visible,
@@ -2214,34 +2391,58 @@ impl Cx {
 
     pub fn detach_camera_native_preview(&mut self, video_id: LiveId) {
         self.platform_ops
-            .push(CxOsOp::DetachCameraNativePreview { video_id });
+            .push_back(CxOsOp::DetachCameraNativePreview { video_id });
     }
 
     pub fn begin_video_playback(&mut self, video_id: LiveId) {
-        self.platform_ops.push(CxOsOp::BeginVideoPlayback(video_id));
+        self.drop_pending_video_transport(video_id);
+        self.platform_ops.push_back(CxOsOp::BeginVideoPlayback(video_id));
     }
 
     pub fn pause_video_playback(&mut self, video_id: LiveId) {
-        self.platform_ops.push(CxOsOp::PauseVideoPlayback(video_id));
+        // Last-wins coalescing: one frame should apply a single play/pause
+        // intent even though the queue is FIFO.
+        self.drop_pending_video_transport(video_id);
+        self.platform_ops.push_back(CxOsOp::PauseVideoPlayback(video_id));
     }
 
     pub fn resume_video_playback(&mut self, video_id: LiveId) {
+        self.drop_pending_video_transport(video_id);
         self.platform_ops
-            .push(CxOsOp::ResumeVideoPlayback(video_id));
+            .push_back(CxOsOp::ResumeVideoPlayback(video_id));
     }
 
     pub fn mute_video_playback(&mut self, video_id: LiveId) {
-        self.platform_ops.push(CxOsOp::MuteVideoPlayback(video_id));
+        self.drop_pending_video_mute(video_id);
+        self.platform_ops.push_back(CxOsOp::MuteVideoPlayback(video_id));
     }
 
     pub fn unmute_video_playback(&mut self, video_id: LiveId) {
+        self.drop_pending_video_mute(video_id);
         self.platform_ops
-            .push(CxOsOp::UnmuteVideoPlayback(video_id));
+            .push_back(CxOsOp::UnmuteVideoPlayback(video_id));
+    }
+
+    /// Keep only the latest play/pause/begin intent for `video_id`.
+    fn drop_pending_video_transport(&mut self, video_id: LiveId) {
+        self.platform_ops.retain(|op| match op {
+            CxOsOp::BeginVideoPlayback(id)
+            | CxOsOp::PauseVideoPlayback(id)
+            | CxOsOp::ResumeVideoPlayback(id) => *id != video_id,
+            _ => true,
+        });
+    }
+
+    fn drop_pending_video_mute(&mut self, video_id: LiveId) {
+        self.platform_ops.retain(|op| match op {
+            CxOsOp::MuteVideoPlayback(id) | CxOsOp::UnmuteVideoPlayback(id) => *id != video_id,
+            _ => true,
+        });
     }
 
     pub fn cleanup_video_playback_resources(&mut self, video_id: LiveId) {
         self.platform_ops
-            .push(CxOsOp::CleanupVideoPlaybackResources(video_id));
+            .push_back(CxOsOp::CleanupVideoPlaybackResources(video_id));
     }
 
     pub fn cancel_pending_camera_playback(&mut self, video_id: LiveId) {
@@ -2251,17 +2452,27 @@ impl Cx {
 
     pub fn seek_video_playback(&mut self, video_id: LiveId, position_ms: u64) {
         self.platform_ops
-            .push(CxOsOp::SeekVideoPlayback(video_id, position_ms));
+            .push_back(CxOsOp::SeekVideoPlayback(video_id, position_ms));
     }
 
     pub fn set_video_volume(&mut self, video_id: LiveId, volume: f64) {
         self.platform_ops
-            .push(CxOsOp::SetVideoVolume(video_id, volume));
+            .push_back(CxOsOp::SetVideoVolume(video_id, volume));
     }
 
     pub fn set_video_playback_rate(&mut self, video_id: LiveId, rate: f64) {
         self.platform_ops
-            .push(CxOsOp::SetVideoPlaybackRate(video_id, rate));
+            .push_back(CxOsOp::SetVideoPlaybackRate(video_id, rate));
+    }
+
+    pub fn select_video_track(&mut self, video_id: LiveId, index: usize) {
+        self.platform_ops
+            .push_back(CxOsOp::SelectVideoTrack(video_id, index));
+    }
+
+    pub fn select_audio_track(&mut self, video_id: LiveId, index: usize) {
+        self.platform_ops
+            .push_back(CxOsOp::SelectAudioTrack(video_id, index));
     }
 
     pub fn prepare_audio_playback(
@@ -2271,7 +2482,7 @@ impl Cx {
         autoplay: bool,
         should_loop: bool,
     ) {
-        self.platform_ops.push(CxOsOp::PrepareAudioPlayback(
+        self.platform_ops.push_back(CxOsOp::PrepareAudioPlayback(
             video_id,
             source,
             autoplay,
@@ -2285,22 +2496,46 @@ impl Cx {
 
     pub fn open_system_savefile_dialog(&mut self) {
         self.platform_ops
-            .push(CxOsOp::SaveFileDialog(FileDialog::new()));
+            .push_back(CxOsOp::SaveFileDialog(FileDialog::new()));
     }
 
     pub fn open_system_openfile_dialog(&mut self) {
         self.platform_ops
-            .push(CxOsOp::SelectFileDialog(FileDialog::new()));
+            .push_back(CxOsOp::SelectFileDialog(FileDialog::new()));
+    }
+
+    /// Open the platform's native file picker, configured (title, start
+    /// location, type filters, multi-select, id) by `dialog`. The answer
+    /// arrives later as a [`crate::file_dialogs::FileDialogAction`] in the
+    /// actions pass — `FileSelected` with the chosen paths, or
+    /// `FileCancelled`; both carry the dialog's id back.
+    pub fn open_select_file_dialog(&mut self, dialog: FileDialog) {
+        self.platform_ops.push_back(CxOsOp::SelectFileDialog(dialog));
+    }
+
+    /// Open the platform's native save panel. The OS asks about
+    /// overwriting before answering `SaveFileSelected`.
+    pub fn open_save_file_dialog(&mut self, dialog: FileDialog) {
+        self.platform_ops.push_back(CxOsOp::SaveFileDialog(dialog));
     }
 
     pub fn open_system_savefolder_dialog(&mut self) {
         self.platform_ops
-            .push(CxOsOp::SaveFolderDialog(FileDialog::new()));
+            .push_back(CxOsOp::SaveFolderDialog(FileDialog::new()));
     }
 
     pub fn open_system_openfolder_dialog(&mut self) {
         self.platform_ops
-            .push(CxOsOp::SelectFolderDialog(FileDialog::new()));
+            .push_back(CxOsOp::SelectFolderDialog(FileDialog::new()));
+    }
+
+    /// Open the platform's native folder picker, configured (title, start
+    /// location) by `dialog`. The answer arrives later as a
+    /// [`crate::file_dialogs::FileDialogAction`] in the actions pass —
+    /// `FolderSelected` with the chosen path, or `FolderCancelled`.
+    pub fn open_select_folder_dialog(&mut self, dialog: FileDialog) {
+        self.platform_ops
+            .push_back(CxOsOp::SelectFolderDialog(dialog));
     }
 
     pub fn event_id(&self) -> u64 {
@@ -2312,6 +2547,35 @@ impl Cx {
 /// Possible values: `""` (cannot play), `"maybe"`, `"probably"`.
 pub fn can_play_type(mime: &str) -> &'static str {
     can_play_type_impl(mime)
+}
+
+#[cfg(test)]
+mod stale_window_tests {
+    use super::*;
+    use crate::window::WindowHandle;
+
+    #[test]
+    fn dpi_override_ignores_closed_and_out_of_range_windows() {
+        let mut cx = Cx::new(Box::new(|_cx: &mut Cx, _event: &Event| {}));
+        let window = WindowHandle::new(&mut cx);
+        let window_id = window.window_id();
+        cx.windows[window_id].is_created = true;
+        cx.windows[window_id].os_dpi_factor = Some(2.0);
+        cx.windows[window_id].dpi_override = Some(1.0);
+
+        let mut live_pos = dvec2(12.0, 8.0);
+        cx.dpi_override_scale(&mut live_pos, window_id);
+        assert_eq!(live_pos, dvec2(24.0, 16.0));
+
+        cx.windows[window_id].is_created = false;
+        let mut closed_pos = dvec2(12.0, 8.0);
+        cx.dpi_override_scale(&mut closed_pos, window_id);
+        assert_eq!(closed_pos, dvec2(12.0, 8.0));
+
+        let mut stale_pos = dvec2(12.0, 8.0);
+        cx.dpi_override_scale(&mut stale_pos, WindowId(usize::MAX, u64::MAX));
+        assert_eq!(stale_pos, dvec2(12.0, 8.0));
+    }
 }
 
 #[cfg(all(
@@ -2367,7 +2631,7 @@ fn can_play_type_impl(_mime: &str) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+mod native_mount_tests {
     use super::*;
     use crate::native_host_schema::{native_host_component, NativeHostFieldType};
 
@@ -2412,12 +2676,12 @@ mod tests {
             visible: true,
         });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
-        assert!(matches!(ops.pop(), Some(CxOsOp::CreateNativeView { .. })));
+        assert!(matches!(ops.pop_front(), Some(CxOsOp::CreateNativeView { .. })));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout { .. })
         ));
         assert!(ops.is_empty());
@@ -2453,16 +2717,16 @@ mod tests {
             },
         });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 2);
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout { visible: true, .. })
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 update: NativeHostPropUpdate::TextInputText { text, .. },
                 ..
@@ -2491,7 +2755,7 @@ mod tests {
         });
         queue.push(NativeMountMutation::Close { id });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert!(ops.is_empty());
@@ -2517,11 +2781,11 @@ mod tests {
         });
         queue.push(NativeMountMutation::Close { id });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 1);
-        assert!(matches!(ops.pop(), Some(CxOsOp::CloseNativeView { .. })));
+        assert!(matches!(ops.pop_front(), Some(CxOsOp::CloseNativeView { .. })));
     }
 
     #[test]
@@ -2538,19 +2802,19 @@ mod tests {
             command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
         });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 2);
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
                 ..
             })
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
                 ..
@@ -2582,26 +2846,26 @@ mod tests {
             },
         });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 3);
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 update: NativeHostPropUpdate::TextInputText { text, .. },
                 ..
             }) if text == "before command"
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Copy),
                 ..
             })
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 update: NativeHostPropUpdate::TextInputText { text, .. },
                 ..
@@ -2629,23 +2893,23 @@ mod tests {
             visible: true,
         });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 3);
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout { visible: false, .. })
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
                 ..
             })
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout { visible: true, .. })
         ));
     }
@@ -2668,16 +2932,16 @@ mod tests {
         });
         queue.push(NativeMountMutation::Close { id: closing_id });
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert_eq!(ops.len(), 2);
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout { id, .. }) if id == other_id
         ));
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CloseNativeView { id }) if id == closing_id
         ));
     }
@@ -2692,7 +2956,7 @@ mod tests {
         });
         queue.in_flush = true;
 
-        let mut ops = Vec::new();
+        let mut ops = std::collections::VecDeque::new();
         queue.flush_into(&mut ops);
 
         assert!(ops.is_empty());
@@ -2702,7 +2966,7 @@ mod tests {
         queue.flush_into(&mut ops);
 
         assert!(matches!(
-            ops.pop(),
+            ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 id: op_id,
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
@@ -2729,7 +2993,7 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 4);
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::CreateNativeView {
                 id: op_id,
                 kind: NativeHostKind::TextInput,
@@ -2737,7 +3001,7 @@ mod tests {
             }) if op_id == id.0 && text == "initial" && placeholder == "placeholder" && editable && !secure
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout {
                 id: op_id,
                 visible: true,
@@ -2745,14 +3009,14 @@ mod tests {
             }) if op_id == id.0
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 id: op_id,
                 update: NativeHostPropUpdate::TextInputText { text, programmatic },
             }) if op_id == id.0 && text == "next" && programmatic
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 id: op_id,
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Focus),
@@ -2776,35 +3040,35 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 5);
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 id: op_id,
                 update: NativeHostPropUpdate::TextInputPlaceholder { placeholder },
             }) if op_id == id.0 && placeholder == "hint"
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 id: op_id,
                 update: NativeHostPropUpdate::TextInputEditable { editable },
             }) if op_id == id.0 && !editable
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 id: op_id,
                 update: NativeHostPropUpdate::TextInputSecure { secure },
             }) if op_id == id.0 && secure
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::CommandNativeView {
                 id: op_id,
                 command: NativeHostCommand::TextInput(NativeTextInputCommand::Blur),
             }) if op_id == id.0
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::DetachNativeView { id: op_id }) if op_id == id.0
         ));
     }
@@ -2829,7 +3093,7 @@ mod tests {
         ];
         for expected_command in expected {
             assert!(matches!(
-                cx.platform_ops.pop(),
+                cx.platform_ops.pop_front(),
                 Some(CxOsOp::CommandNativeView {
                     id: op_id,
                     command: NativeHostCommand::TextInput(command),
@@ -2875,7 +3139,7 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 3);
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::CreateNativeView {
                 id: op_id,
                 kind: NativeHostKind::Label,
@@ -2883,7 +3147,7 @@ mod tests {
             }) if op_id == id.0 && text == "label"
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewLayout {
                 id: op_id,
                 visible: true,
@@ -2891,7 +3155,7 @@ mod tests {
             }) if op_id == id.0
         ));
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::UpdateNativeViewProps {
                 id: op_id,
                 update: NativeHostPropUpdate::LabelText { text },
@@ -2925,7 +3189,7 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 1);
         assert!(matches!(
-            cx.platform_ops.pop(),
+            cx.platform_ops.pop_front(),
             Some(CxOsOp::CloseNativeView { id: op_id }) if op_id == id.0
         ));
     }
@@ -3140,4 +3404,54 @@ macro_rules! register_component_factory {
                 ),
             );
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn defer_platform_op_breaks_when_requeued_op_is_alone() {
+        let window_id = WindowId(0, 0);
+        let mut platform_ops = VecDeque::new();
+
+        assert!(!defer_platform_op(
+            &mut platform_ops,
+            CxOsOp::SetTopmost(window_id, true),
+        ));
+        assert_eq!(platform_ops, vec![CxOsOp::SetTopmost(window_id, true)]);
+    }
+
+    #[test]
+    fn defer_platform_op_appends_so_pending_ops_still_run_first() {
+        let window_id = WindowId(0, 0);
+        let mut platform_ops = VecDeque::from(vec![CxOsOp::CreateWindow(window_id)]);
+
+        assert!(defer_platform_op(
+            &mut platform_ops,
+            CxOsOp::SetTopmost(window_id, true),
+        ));
+        assert_eq!(
+            platform_ops,
+            vec![
+                CxOsOp::CreateWindow(window_id),
+                CxOsOp::SetTopmost(window_id, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn platform_ops_drain_fifo_create_window_then_set_topmost() {
+        let window_id = WindowId(0, 0);
+        let mut platform_ops = VecDeque::new();
+        platform_ops.push_back(CxOsOp::CreateWindow(window_id));
+        platform_ops.push_back(CxOsOp::SetTopmost(window_id, true));
+
+        let first = platform_ops.pop_front().unwrap();
+        let second = platform_ops.pop_front().unwrap();
+        assert!(matches!(first, CxOsOp::CreateWindow(_)));
+        assert!(matches!(second, CxOsOp::SetTopmost(_, true)));
+        assert!(platform_ops.is_empty());
+    }
 }

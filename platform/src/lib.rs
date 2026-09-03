@@ -19,11 +19,13 @@ pub mod midi;
 pub mod script;
 pub mod thread;
 pub mod video;
+pub mod gpu_texture;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod video_decode;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod video_encode;
+pub mod video_file;
 
 mod draw_list;
 mod draw_matrix;
@@ -47,8 +49,11 @@ pub mod ime;
 mod live_reload;
 mod macos_menu;
 mod performance_stats;
+pub mod memory_watchdog;
 pub mod perf_monitor;
+pub mod sploded;
 pub mod permission;
+mod screen;
 mod texture;
 mod uniform_buffer;
 mod window;
@@ -74,7 +79,17 @@ pub mod native_texture_layer;
 
 #[macro_use]
 mod app_main;
+pub mod remote;
+pub mod devtools;
+pub mod pixel_probe;
+pub mod screen_capture;
+pub mod audio_output_tap;
+pub mod shader_error;
 pub use crate::app_main::{resolve_studio_http, should_run_stdin_loop_from_env};
+// Working-tree startup instrumentation (MAKEPAD_STARTUP_TRACE=1).
+pub use crate::cx::{
+    startup_acc, startup_since_exec_ms, startup_trace, startup_trace_enabled, startup_trace_flush,
+};
 pub use crate::cx_api::{
     can_play_type, CxNativeLabel, CxNativeTextInput, CxSystemBrowser, NativeHostCommand,
     NativeHostKind, NativeHostPropUpdate, NativeHostProps, NativeLabelCloseRequested,
@@ -129,6 +144,7 @@ pub use {
             DrawPassId, ScriptDrawPass,
         },
         draw_vars::DrawVars,
+        sploded::{SplodedParams, SplodedView},
         event::{
             CharOffset,
             DigitDevice,
@@ -160,6 +176,8 @@ pub use {
             KeyFocusEvent,
             KeyModifiers,
             MouseButton,
+            LocationErrorEvent,
+            LocationUpdateEvent,
             MouseDownEvent,
             MouseMoveEvent,
             MouseUpEvent,
@@ -194,6 +212,7 @@ pub use {
             XrState,
             XrUpdateEvent,
         },
+        file_dialogs::{FileDialog, FileDialogAction},
         game_input::*,
         geometry::{Geometry, GeometryId},
         gpu_info::GpuPerformance,
@@ -211,6 +230,7 @@ pub use {
             MseDecodedFrame, MseEngineOutput, MseInitMetadata, MsePlaybackEngine,
             MseVideoTrackInfo, PlaybackPrepared, VideoFrameDecoder,
         },
+        memory_watchdog::*,
         midi::*,
         os::*,
         perf_monitor::*,
@@ -220,9 +240,11 @@ pub use {
             unregister_media_playback_session, MediaPlaybackSessionId,
         },
         script::vm::*,
+        screen::{fit_window_rect_to_screens, ScreenGeom, MIN_WINDOW_SIZE},
         shared_bytes::{MappedBytes, SharedBytes, SharedBytesStats},
         texture::{
-            Texture, TextureAnimation, TextureFormat, TextureId, TextureSize, TextureUpdated,
+            image_cache_use_mipmaps, Texture, TextureAnimation, TextureFormat, TextureId,
+            TextureSize, TextureUpdated, TextureWrap,
         },
         thread::*,
         ui_runner::*,
@@ -266,3 +288,7 @@ pub use {
     smallvec,
     smallvec::SmallVec,
 };
+
+/// The compiled-shader handle the const-table API is keyed by
+/// (`Cx::shader_const_table`, `shader_const_patch`, `shader_const_reset`).
+pub use crate::draw_shader::DrawShaderId;

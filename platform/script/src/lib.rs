@@ -14,10 +14,12 @@ macro_rules! script_eval {
 }
 
 pub mod colorhex;
+pub mod docs;
 pub mod gen_index;
 pub mod heap;
 pub mod mod_gc;
 pub mod mod_html;
+pub mod math_aot;
 pub mod mod_math;
 pub mod mod_pod;
 pub mod mod_regex;
@@ -48,6 +50,7 @@ pub mod opcodes_calls;
 pub mod opcodes_control;
 pub mod opcodes_loops;
 pub mod opcodes_ops;
+pub mod opcodes_slots;
 pub mod opcodes_vars;
 pub mod pod;
 pub mod pod_heap;
@@ -77,6 +80,7 @@ pub mod vm;
 
 pub use apply::*;
 pub use array::*;
+pub use docs::*;
 pub use function::*;
 pub use gc::*;
 pub use handle::*;

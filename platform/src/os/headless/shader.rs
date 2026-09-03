@@ -50,6 +50,9 @@ impl DrawVars {
             // function signatures, bodies, struct defs, and type names.
             output.backend = ShaderBackend::Rust;
             output.use_vulkan = false;
+            // The headless renderer folds annotated literals like any other:
+            // it is a reference rasterizer, not a tweaking surface.
+            output.const_table = false;
             output.pre_collect_rust_instance_io(vm, io_self);
             output.pre_collect_shader_io(vm, io_self);
 
@@ -89,6 +92,7 @@ impl DrawVars {
             }
 
             if output.has_errors {
+                DrawVars::log_shader_compile_failure(vm, io_self, &output);
                 return;
             }
 
@@ -530,14 +534,10 @@ fn write_render_cx_struct(output: &ShaderOutput, vm: &ScriptVm, out: &mut String
         }
     }
 
-    // Group 7: Vertex position (vertex shader only)
-    if output
-        .io
-        .iter()
-        .any(|io| matches!(io.kind, ShaderIoKind::VertexPosition))
-    {
-        writeln!(out, "    vtx_pos: Vec4f,").ok();
-    }
+    // Group 7: Vertex position (vertex shader only). Always present: the vertex entry
+    // template reads/writes rcx.vtx_pos unconditionally, and shaders whose custom vertex
+    // fn RETURNS the position (e.g. clip_and_transform_vertex) have no VertexPosition io.
+    writeln!(out, "    vtx_pos: Vec4f,").ok();
 
     // Group 8: Fragment output
     for io in &output.io {

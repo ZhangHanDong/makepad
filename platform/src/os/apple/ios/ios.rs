@@ -21,6 +21,10 @@ use {
         makepad_objc_sys::objc_block,
         media_api::CxMediaApi,
         media_plugin::PlaybackPrepared,
+        gpu_texture::{
+            adopt_metal_nv12_biplanar, detach_metal_nv12_present, MetalNv12Frame,
+            MetalNv12PresentCache,
+        },
         os::{
             apple::{
                 apple_ios_native_text_input::IosNativeTextInput,
@@ -32,6 +36,7 @@ use {
                 ios::{
                     ios_app::{self, init_ios_app_global, with_ios_app, IosApp},
                     ios_event::IosEvent,
+                    ios_file_dialog,
                 },
             },
             apple_classes::init_apple_classes_global,
@@ -43,15 +48,17 @@ use {
         texture::{CxTexturePool, Texture, TextureFormat, TextureId},
         thread::SignalToUI,
         video::{
-            CameraFrameInputFn, CameraFrameLatest, CameraFrameLayout, CameraFrameRef,
-            VideoFormatId, VideoInputId, MAX_VIDEO_DEVICE_INDEX,
+            CameraColorMatrix, CameraFrameInputFn, CameraFrameLatest, CameraFrameLayout,
+            CameraFrameRef, VideoFormatId, VideoInputId, MAX_VIDEO_DEVICE_INDEX,
         },
+        video_decode::yuv::YuvColorMatrix,
         window::CxWindowPool,
         DVec2, Rect,
     },
     std::{
         cell::RefCell,
         collections::HashMap,
+        panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
         rc::Rc,
         sync::{
             mpsc::{channel, Receiver, Sender},
@@ -72,7 +79,10 @@ pub(crate) struct IosCameraPlayer {
     prepare_notified: bool,
     yuv_matrix: f32,
     yuv_biplanar: bool,
+    yuv_full_range: bool,
     yuv_metal: AppleYuvMetal,
+    nv12_present: MetalNv12PresentCache,
+    gpu_frame_keep_alive: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
     latest_nv12: Arc<Mutex<Option<crate::os::apple::av_capture::AvCapturePixelBuffer>>>,
     i420_frames: CameraFrameLatest,
     camera_access: Option<Arc<Mutex<crate::os::apple::av_capture::AvCaptureAccess>>>,
@@ -145,6 +155,7 @@ impl IosCameraPlayer {
         );
 
         let yuv_metal = AppleYuvMetal::new(metal_device, "iOS camera");
+        let nv12_present = MetalNv12PresentCache::new(metal_device);
 
         Self {
             video_id,
@@ -157,7 +168,10 @@ impl IosCameraPlayer {
             prepare_notified: false,
             yuv_matrix: 0.0,
             yuv_biplanar: false,
+            yuv_full_range: false,
             yuv_metal,
+            nv12_present,
+            gpu_frame_keep_alive: None,
             latest_nv12,
             i420_frames,
             camera_access: Some(camera_access),
@@ -216,21 +230,41 @@ impl IosCameraPlayer {
             self.width = frame.width as u32;
             self.height = frame.height as u32;
             self.yuv_matrix = frame.matrix.as_yuv_uniform();
-            let wrapped = self.yuv_metal.wrap_nv12_cv_pixel_buffer(
-                textures,
-                self.tex_y_id,
-                self.tex_u_id,
-                self.tex_v_id,
+            let matrix = match frame.matrix {
+                CameraColorMatrix::BT601 => YuvColorMatrix::BT601,
+                CameraColorMatrix::BT2020 => YuvColorMatrix::BT2020,
+                CameraColorMatrix::BT709 | CameraColorMatrix::Unknown => YuvColorMatrix::BT709,
+            };
+            if let Some(gpu) = MetalNv12Frame::from_owned_cv_pixel_buffer(
                 frame.pixel_buffer,
-                frame.width as u32,
-                frame.height as u32,
-            );
-            unsafe {
-                CVPixelBufferRelease(frame.pixel_buffer);
-            }
-            if wrapped {
-                self.yuv_biplanar = true;
-                return true;
+                self.width,
+                self.height,
+                matrix,
+            ) {
+                match adopt_metal_nv12_biplanar(
+                    textures,
+                    self.tex_y_id,
+                    self.tex_u_id,
+                    self.tex_v_id,
+                    &gpu,
+                    &mut self.nv12_present,
+                ) {
+                    Ok(()) => {
+                        self.gpu_frame_keep_alive = Some(gpu.keep_alive.clone());
+                        self.yuv_biplanar = true;
+                        self.yuv_full_range = gpu.full_range;
+                        return true;
+                    }
+                    Err(err) => {
+                        crate::error!("VIDEO: iOS camera Metal NV12 adopt failed: {err}");
+                        // Keep the previous zero-copy frame; `gpu` drop only
+                        // releases this failed buffer. Fall through to I420.
+                    }
+                }
+            } else {
+                unsafe {
+                    CVPixelBufferRelease(frame.pixel_buffer);
+                }
             }
         }
 
@@ -247,19 +281,43 @@ impl IosCameraPlayer {
         let cw = width.div_ceil(2);
         let ch = height.div_ceil(2);
 
+        // Leaving biplanar Metal wraps live while uploading Ru8 U/V would reuse
+        // an RGu8 UV (and IOSurface-backed Y) texture — detach first.
+        detach_metal_nv12_present(
+            textures,
+            self.tex_y_id,
+            self.tex_u_id,
+            &mut self.nv12_present,
+        );
+        self.gpu_frame_keep_alive = None;
+
         self.yuv_metal.upload_r8_plane(
             textures,
             self.tex_y_id,
             &frame.planes[0].bytes,
             width,
             height,
+            width,
         );
-        self.yuv_metal
-            .upload_r8_plane(textures, self.tex_u_id, &frame.planes[1].bytes, cw, ch);
-        self.yuv_metal
-            .upload_r8_plane(textures, self.tex_v_id, &frame.planes[2].bytes, cw, ch);
+        self.yuv_metal.upload_r8_plane(
+            textures,
+            self.tex_u_id,
+            &frame.planes[1].bytes,
+            cw,
+            ch,
+            cw,
+        );
+        self.yuv_metal.upload_r8_plane(
+            textures,
+            self.tex_v_id,
+            &frame.planes[2].bytes,
+            cw,
+            ch,
+            cw,
+        );
 
         self.yuv_biplanar = false;
+        self.yuv_full_range = false;
         self.yuv_matrix = frame.matrix.as_yuv_uniform();
 
         true
@@ -273,6 +331,10 @@ impl IosCameraPlayer {
         }
     }
 
+    fn yuv_full_range(&self) -> bool {
+        self.yuv_full_range
+    }
+
     fn cleanup(&mut self) {
         if let Some(frame) = self.latest_nv12.lock().unwrap().take() {
             unsafe {
@@ -280,6 +342,8 @@ impl IosCameraPlayer {
             }
         }
 
+        self.nv12_present.release_textures();
+        self.gpu_frame_keep_alive = None;
         self.yuv_metal.cleanup();
 
         if let Some(cam) = self.camera_access.take() {
@@ -362,8 +426,47 @@ impl Drop for IosNativeCameraPreview {
     }
 }
 
+fn ios_panic_summary(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let payload = if let Some(payload) = info.payload().downcast_ref::<&str>() {
+        (*payload).to_string()
+    } else if let Some(payload) = info.payload().downcast_ref::<String>() {
+        payload.clone()
+    } else {
+        "non-string panic payload".to_string()
+    };
+    let location = info
+        .location()
+        .map(|location| {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        })
+        .unwrap_or_else(|| "<unknown>".to_string());
+    let thread = std::thread::current();
+    let thread_name = thread.name().unwrap_or("<unnamed>");
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    format!(
+        "iOS panic hook: thread={thread_name} location={location} payload={payload}\n{backtrace}"
+    )
+}
+
+/// The default hook writes to stderr, which goes nowhere on a device, so route
+/// panics through `error!` (NSLog) while the panicking frame is still on the stack.
+fn install_ios_panic_hook() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        crate::error!("{}", ios_panic_summary(info));
+        previous_hook(info);
+    }));
+}
+
 impl Cx {
     pub fn event_loop(cx: Rc<RefCell<Cx>>) {
+        install_ios_panic_hook();
+
         let data_path = IosApp::get_ios_directory_paths();
 
         // Get device info
@@ -402,13 +505,20 @@ impl Cx {
                     let event_flow = cx_ref.ios_event_callback(event, &mut metal_cx);
                     let executor = cx_ref.executor.take().unwrap();
                     drop(cx_ref);
-                    executor.run_until_stalled();
+                    // Put the executor back even if a spawned task panics, so
+                    // the `take` above can't hand a `None` to the next event.
+                    let stalled = catch_unwind(AssertUnwindSafe(|| executor.run_until_stalled()));
                     let mut cx_ref = cx.borrow_mut();
                     cx_ref.executor = Some(executor);
+                    drop(cx_ref);
+                    if let Err(payload) = stalled {
+                        resume_unwind(payload);
+                    }
                     event_flow
                 }
             }),
         );
+        cx.borrow_mut().publish_metal_device_for_media();
         // lets set our signal poll timer
 
         // final bit of initflow
@@ -715,11 +825,15 @@ impl Cx {
                                     video_id: player.video_id,
                                     current_position_ms: player.current_position_ms(),
                                     yuv: crate::event::video_playback::VideoYuvMetadata {
-                                        enabled: player.is_software_mode(),
+                                        enabled: player.yuv_shader_enabled(),
                                         matrix: player.yuv_matrix(),
                                         biplanar: player.yuv_biplanar() > 0.5,
+                                        full_range: player.yuv_full_range(),
                                         rotation_steps: 0.0,
+                                    external: false,
+                                    array: false,
                                     },
+                                rgba_gl_2d: false,
                                 },
                             ));
                         }
@@ -774,8 +888,12 @@ impl Cx {
                                         enabled: true,
                                         matrix: player.yuv_matrix,
                                         biplanar: player.yuv_biplanar() > 0.5,
+                                        full_range: player.yuv_full_range(),
                                         rotation_steps: 0.0,
+                                    external: false,
+                                    array: false,
                                     },
+                                rgba_gl_2d: false,
                                 },
                             ));
                         }
@@ -970,7 +1088,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self, metal_cx: &MetalCx) {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     let window = &mut self.windows[window_id];
@@ -1048,6 +1166,12 @@ impl Cx {
                     request_id,
                 } => {
                     self.handle_permission_request(permission, request_id);
+                }
+                CxOsOp::StartLocationUpdates => {
+                    self.apple_start_location_updates();
+                }
+                CxOsOp::StopLocationUpdates => {
+                    self.apple_stop_location_updates();
                 }
                 CxOsOp::HttpRequest {
                     request_id,
@@ -1349,12 +1473,7 @@ impl Cx {
                         );
                         self.os.camera_players.insert(video_id, player);
                         self.call_event_handler(&Event::VideoYuvTexturesReady(
-                            VideoYuvTexturesReady {
-                                video_id,
-                                tex_y,
-                                tex_u,
-                                tex_v,
-                            },
+                            VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v),
                         ));
                         continue;
                     }
@@ -1379,12 +1498,7 @@ impl Cx {
                         should_loop,
                     );
                     self.os.video_players.insert(video_id, player);
-                    self.call_event_handler(&Event::VideoYuvTexturesReady(VideoYuvTexturesReady {
-                        video_id,
-                        tex_y,
-                        tex_u,
-                        tex_v,
-                    }));
+                    self.call_event_handler(&Event::VideoYuvTexturesReady(VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v)));
                 }
                 CxOsOp::BeginVideoPlayback(video_id) => {
                     if self.os.camera_players.contains_key(&video_id)
@@ -1489,6 +1603,8 @@ impl Cx {
                         player.set_playback_rate(rate);
                     }
                 }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 CxOsOp::PrepareAudioPlayback(video_id, source, autoplay, should_loop) => {
                     use crate::texture::TextureId;
                     let player = AppleUnifiedVideoPlayer::new(
@@ -1516,6 +1632,22 @@ impl Cx {
                 }
                 CxOsOp::StartDragging(items) => {
                     self.os.internal_drag_items = Some(Arc::new(items));
+                }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on iOS");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                CxOsOp::SelectFileDialog(settings) => {
+                    ios_file_dialog::open_select_file_dialog(settings);
+                }
+                CxOsOp::SaveFileDialog(settings) => {
+                    ios_file_dialog::open_save_file_dialog(settings);
+                }
+                CxOsOp::SelectFolderDialog(settings) => {
+                    ios_file_dialog::open_select_folder_dialog(settings);
+                }
+                CxOsOp::SaveFolderDialog(settings) => {
+                    ios_file_dialog::open_save_folder_dialog(settings);
                 }
                 CxOsOp::SetSystemBarDarkIcons(dark_icons) => {
                     IosApp::set_status_bar_dark_icons(dark_icons);
@@ -1572,6 +1704,7 @@ impl Cx {
             crate::permission::Permission::SceneAccess => {
                 crate::permission::PermissionStatus::DeniedPermanent
             }
+            crate::permission::Permission::Location => Self::apple_location_permission_status(),
         };
 
         self.call_event_handler(&crate::event::Event::PermissionResult(
@@ -1597,6 +1730,7 @@ impl Cx {
             crate::permission::Permission::SceneAccess => {
                 crate::permission::PermissionStatus::DeniedPermanent
             }
+            crate::permission::Permission::Location => Self::apple_location_permission_status(),
         };
         match status {
             crate::permission::PermissionStatus::NotDetermined => match permission {
@@ -1608,6 +1742,9 @@ impl Cx {
                 }
                 crate::permission::Permission::HeadsetCamera => {}
                 crate::permission::Permission::SceneAccess => {}
+                crate::permission::Permission::Location => {
+                    self.apple_request_location_permission(request_id);
+                }
             },
             _ => {
                 self.call_event_handler(&crate::event::Event::PermissionResult(

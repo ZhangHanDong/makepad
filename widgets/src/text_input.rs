@@ -31,6 +31,7 @@ script_mod! {
 
     mod.widgets.TextInputBase = #(TextInput::register_widget(vm))
 
+    /** The flat text field: an inset well with text, selection band and caret layers. */
     mod.widgets.TextInputFlat = set_type_default() do mod.widgets.TextInputBase{
         width: Fill
         height: Fit
@@ -48,19 +49,30 @@ script_mod! {
             drag_scrolling: true
         }
 
+        /** The field well: an inset SDF box with a bevel stroke and optional gradient fill. */
         draw_bg +: {
+            /** pointer-hover mix 0..1 step 0.01 */
             hover: instance(0.0)
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** pressed mix 0..1 step 0.01 */
             down: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
+            /** placeholder-showing mix 0..1 step 0.01 */
             empty: instance(0.0)
 
+            /** corner rounding radius 0..24 step 0.5 */
             border_radius: uniform(theme.corner_radius)
+            /** bevel border thickness in pixels 0..4 step 0.5 */
             border_size: uniform(theme.beveling)
 
+            /** bevel gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_border_horizontal: uniform(0.0)
+            /** fill gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_fill_horizontal: uniform(0.0)
 
+            /** dither the gradient fill to hide banding 0..1 step 1 */
             color_dither: uniform(1.0)
 
             color: theme.color_inset
@@ -70,6 +82,7 @@ script_mod! {
             color_empty: uniform(theme.color_inset_empty)
             color_disabled: uniform(theme.color_inset_disabled)
 
+            /** fill gradient end stop; negative alpha means flat fill */
             color_2: uniform(vec4(-1.0, -1.0, -1.0, -1.0))
             color_2_hover: uniform(theme.color_inset_2_hover)
             color_2_focus: uniform(theme.color_inset_2_focus)
@@ -84,6 +97,7 @@ script_mod! {
             border_color_empty: uniform(theme.color_bevel_empty)
             border_color_disabled: uniform(theme.color_bevel_disabled)
 
+            /** bevel gradient end stop; negative alpha means flat stroke */
             border_color_2: uniform(vec4(-1.0, -1.0, -1.0, -1.0))
             border_color_2_hover: uniform(theme.color_bevel_inset_2_hover)
             border_color_2_focus: uniform(theme.color_bevel_inset_2_focus)
@@ -125,7 +139,7 @@ script_mod! {
                 let mut color_fill_disabled = self.color_disabled
 
                 if self.color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gradient_fill = vec2(
                         self.pos.x * scale_factor_fill.x - border_sz_uv.x * 2. + dither
                         self.pos.y * scale_factor_fill.y - border_sz_uv.y * 2. + dither
@@ -147,7 +161,7 @@ script_mod! {
                 let mut color_stroke_disabled = self.border_color_disabled
 
                 if self.border_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gradient_border = vec2(
                         self.pos.x + dither
                         self.pos.y + dither
@@ -180,11 +194,17 @@ script_mod! {
             }
         }
 
+        /** The field ink: the typed text, or the placeholder while empty. */
         draw_text +: {
+            /** pointer-hover mix 0..1 step 0.01 */
             hover: instance(0.0)
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** pressed mix 0..1 step 0.01 */
             down: instance(0.0)
+            /** placeholder-showing mix 0..1 step 0.01 */
             empty: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
 
             color: theme.color_text
@@ -215,15 +235,24 @@ script_mod! {
             }
         }
 
+        /** The selection band: one rounded quad per selected run, drawn behind the ink. */
         draw_selection +: {
+            /** pointer-hover mix 0..1 step 0.01 */
             hover: instance(0.0)
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** pressed mix 0..1 step 0.01 */
             down: instance(0.0)
+            /** placeholder-showing mix 0..1 step 0.01 */
             empty: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
 
+            /** dither the gradient fill to hide banding 0..1 step 1 */
             color_dither: uniform(1.0)
+            /** selection band corner rounding 0..8 step 0.5 */
             border_radius: uniform(theme.textselection_corner_radius)
+            /** fill gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_fill_horizontal: uniform(0.0)
 
             color: uniform(theme.color_selection)
@@ -233,6 +262,7 @@ script_mod! {
             color_empty: uniform(theme.color_selection_empty)
             color_disabled: uniform(theme.color_selection_disabled)
 
+            /** fill gradient end stop; negative alpha means flat fill */
             color_2: uniform(vec4(-1.0, -1.0, -1.0, -1.0))
             color_2_hover: uniform(theme.color_selection_hover)
             color_2_focus: uniform(theme.color_selection_focus)
@@ -259,7 +289,7 @@ script_mod! {
                 let mut color_fill_disabled = self.color_disabled
 
                 if self.color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let dir = if self.gradient_fill_horizontal > 0.5 self.pos.x + dither else self.pos.y + dither
                     color_fill = mix(self.color, self.color_2, dir)
                     color_fill_hover = mix(self.color_hover, self.color_2_hover, dir)
@@ -280,13 +310,20 @@ script_mod! {
             }
         }
 
+        /** The caret: a rounded bar, visible only while focused and between blinks. */
         draw_cursor +: {
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** pressed mix 0..1 step 0.01 */
             down: instance(0.0)
+            /** placeholder-showing mix 0..1 step 0.01 */
             empty: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
+            /** blink phase; 1 hides the caret 0..1 step 0.01 */
             blink: instance(0.0)
 
+            /** caret corner rounding 0..4 step 0.25 */
             border_radius: uniform(0.5)
 
             color: uniform(theme.color_text_cursor)
@@ -307,6 +344,7 @@ script_mod! {
             }
         }
 
+        /** The IME composition underline: a flat bar under uncommitted text. */
         draw_composition_underline +: {
             color: uniform(#8)
 
@@ -426,6 +464,7 @@ script_mod! {
         }
     }
 
+    /** The standard text field: the flat well plus the theme's inset bevel. */
     mod.widgets.TextInput = mod.widgets.TextInputFlat{
         draw_bg +: {
             border_color: theme.color_bevel_inset_1
@@ -567,6 +606,11 @@ pub struct TextInput {
     laidout_text: Option<Rc<LaidoutText>>,
     #[rust]
     laidout_width: Option<f32>,
+    /// `draw_text.max_lines` as of the cached layout. Part of the cache key:
+    /// clamping a field to one row is a runtime change (collapse/expand), and
+    /// without this the cached multi-row layout survives it.
+    #[rust]
+    laidout_max_lines: usize,
     #[rust]
     text_area: Area,
     #[rust]
@@ -639,7 +683,11 @@ impl TextInput {
         cx.widget_action(uid, TextInputAction::Changed(self.text.clone()));
         if let Some(handler) = self.on_change.as_object() {
             let text = self.text.clone();
-            let vm_id = cx.script_ref_vm_id(&self.source);
+            // Nothing to call into if the isolate that minted this input is
+            // already gone.
+            let Some(vm_id) = cx.script_ref_vm_id(&self.source) else {
+                return;
+            };
             cx.with_script_vm_id(vm_id, |vm| {
                 let str_val = vm.bx.heap.new_string_from_str(&text);
                 vm.with_instruction_limit(
@@ -656,7 +704,11 @@ impl TextInput {
         cx.widget_action(uid, TextInputAction::Returned(self.text.clone(), mods));
         if let Some(handler) = self.on_return.as_object() {
             let text = self.text.clone();
-            let vm_id = cx.script_ref_vm_id(&self.source);
+            // Nothing to call into if the isolate that minted this input is
+            // already gone.
+            let Some(vm_id) = cx.script_ref_vm_id(&self.source) else {
+                return;
+            };
             cx.with_script_vm_id(vm_id, |vm| {
                 let str_val = vm.bx.heap.new_string_from_str(&text);
                 vm.with_instruction_limit(
@@ -694,6 +746,90 @@ impl TextInput {
         self.scroll_x = 0.0;
         self.cached_max_scroll_x = 0.0;
         self.laidout_text = None;
+        self.draw_bg.redraw(cx);
+    }
+
+    /// Clamps how many rows the field lays out; 0 means unlimited.
+    ///
+    /// Rows made by hard newlines count too, so this genuinely folds a
+    /// multi-line draft to one line rather than only disabling soft wrap —
+    /// which is what makes it usable for a composer that collapses when it
+    /// loses focus. Pair with `draw_text.text_overflow = Ellipsis` to mark the
+    /// truncation.
+    ///
+    /// Exists so callers don't have to reach for a script apply to change one
+    /// number: applying script to a TextInput resets its `#[live]` fields, and
+    /// `text` is one of them — so doing this the scripted way silently emptied
+    /// the field.
+    pub fn set_max_lines(&mut self, cx: &mut Cx, max_lines: usize) {
+        if self.draw_text.max_lines == max_lines {
+            return;
+        }
+        self.draw_text.max_lines = max_lines;
+        // Deliberately does NOT clear `laidout_text`. `max_lines` is part of
+        // the layout cache key, so the next draw re-lays out anyway — whereas
+        // dropping the layout HERE leaves the field with none for the rest of
+        // the event batch, and every cursor operation in that window fails
+        // ("can't move cursor because layout was invalidated by an earlier
+        // event") and silently returns. Since this is called from focus and
+        // blur handling, that window is exactly when the user is clicking into
+        // the field, so the click would place no caret at all.
+        self.draw_bg.redraw(cx);
+    }
+
+    pub fn max_lines(&self) -> usize {
+        self.draw_text.max_lines
+    }
+
+    /// Takes key focus AND turns the caret on.
+    ///
+    /// Use this instead of the bare `Widget::set_key_focus` whenever the app
+    /// hands focus to a field itself. The caret is drawn as
+    /// `(1.0 - blink) * focus`, and both come from the `focus`/`blink`
+    /// animators, which only move when the widget is dealt a `Hit::KeyFocus`.
+    /// Setting key focus on a field that ALREADY holds it is a no-op at the
+    /// platform level — no hit is dispatched — so a field that was focused,
+    /// then hidden (hiding doesn't clear `Cx`'s key focus) and shown again
+    /// comes back typable but with no caret and no selection highlight, its
+    /// animators still parked where the last focus-lost left them.
+    pub fn take_key_focus(&mut self, cx: &mut Cx) {
+        cx.set_key_focus(self.draw_bg.area());
+        // Unconditional, not gated on the focus actually changing: the whole
+        // point is to repair the visuals when it did NOT.
+        self.animator_play(cx, ids!(focus.on));
+        self.reset_blink_timer(cx);
+        self.draw_bg.redraw(cx);
+    }
+
+    /// Overrides the height this field asks its parent for.
+    ///
+    /// For a composer that folds to one line when it loses focus. Pinning the
+    /// HEIGHT is the safe way to do that — unlike clamping `max_lines`, it
+    /// leaves the laid-out text alone, and the laid-out text is what maps a
+    /// click to a caret position. Fold by re-layout and the press that
+    /// re-focuses the field resolves against the folded layout while the
+    /// expanded one is on screen, putting the caret and any drag-selection on
+    /// the wrong text. Overflow is clipped, so pick a whole number of lines or
+    /// the last one is sliced through the middle of its glyphs.
+    pub fn set_height(&mut self, cx: &mut Cx, height: Size) {
+        self.walk.height = height;
+        self.draw_bg.redraw(cx);
+    }
+
+    /// Scrolls back to the very start of the text.
+    ///
+    /// For a field that folds down to a fixed height when it loses focus: the
+    /// scroll offset survives the blur, so a draft last edited near its end
+    /// would fold showing whichever line the caret had scrolled to rather than
+    /// its first. Deliberately leaves `laidout_text` alone — scrolling doesn't
+    /// change the layout, and dropping it here would break every cursor
+    /// operation for the rest of the event batch (see `set_max_lines`).
+    pub fn scroll_to_top(&mut self, cx: &mut Cx) {
+        if self.scroll_x == 0.0 && self.scroll_y == 0.0 {
+            return;
+        }
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
         self.draw_bg.redraw(cx);
     }
 
@@ -900,7 +1036,10 @@ impl TextInput {
         } else {
             None
         };
-        if self.laidout_text.is_some() && self.laidout_width == max_width_in_lpxs {
+        if self.laidout_text.is_some()
+            && self.laidout_width == max_width_in_lpxs
+            && self.laidout_max_lines == self.draw_text.max_lines
+        {
             return;
         }
         let text = if self.is_password {
@@ -916,6 +1055,7 @@ impl TextInput {
 
         let wrap = self.is_multiline && cx.turtle().layout().flow == Flow::right_wrap();
         self.laidout_width = max_width_in_lpxs;
+        self.laidout_max_lines = self.draw_text.max_lines;
         self.laidout_text = Some(self.draw_text.layout(
             cx,
             0.0,
@@ -2064,13 +2204,15 @@ impl Widget for TextInput {
                 let trap = vm.bx.threads.cur().trap.pass();
                 let value = vm.bx.heap.vec_value(args_obj, 0, trap);
                 if !value.is_err() {
-                    let new_text = vm.bx.heap.temp_string_with(|heap, out| {
-                        heap.cast_to_string(value, out);
-                        out.to_string()
-                    });
-                    vm.with_cx_mut(|cx| {
-                        self.set_text(cx, &new_text);
-                    });
+                    if let Some(new_text) = vm
+                        .bx
+                        .heap
+                        .cast_to_owned_string(value, "copying text input contents")
+                    {
+                        vm.with_cx_mut(|cx| {
+                            self.set_text(cx, &new_text);
+                        });
+                    }
                 }
             }
             return ScriptAsyncResult::Return(NIL);
@@ -2186,7 +2328,14 @@ impl Widget for TextInput {
 
         // Self-detect focus loss from taps outside our area
         // But NOT if we've captured the finger (e.g., during a selection drag that ends outside)
-        if cx.has_key_focus(self.draw_bg.area())
+        // And only from a LIVE area: an input not drawn in its list's current
+        // redraw holds a stale area (or Empty) that can compare equal to the
+        // focus another widget just took — every such input then cleared
+        // the global focus on the same click, so a FabValueInput's editor
+        // committed the old value before a keystroke could reach it.
+        if !self.draw_bg.area().is_empty()
+            && self.draw_bg.area().is_valid(cx)
+            && cx.has_key_focus(self.draw_bg.area())
             && !cx.fingers.is_area_captured(self.draw_bg.area())
         {
             let rect = self.draw_bg.area().rect(cx);
@@ -2993,6 +3142,38 @@ impl Widget for TextInput {
 }
 
 impl TextInputRef {
+    /// See [`TextInput::set_max_lines`].
+    pub fn set_max_lines(&self, cx: &mut Cx, max_lines: usize) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_max_lines(cx, max_lines);
+        }
+    }
+
+    pub fn max_lines(&self) -> usize {
+        self.borrow().map(|inner| inner.max_lines()).unwrap_or(0)
+    }
+
+    /// See [`TextInput::take_key_focus`].
+    pub fn take_key_focus(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.take_key_focus(cx);
+        }
+    }
+
+    /// See [`TextInput::set_height`].
+    pub fn set_height(&self, cx: &mut Cx, height: Size) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_height(cx, height);
+        }
+    }
+
+    /// See [`TextInput::scroll_to_top`].
+    pub fn scroll_to_top(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.scroll_to_top(cx);
+        }
+    }
+
     pub fn is_multiline(&self) -> bool {
         if let Some(inner) = self.borrow() {
             inner.is_multiline()

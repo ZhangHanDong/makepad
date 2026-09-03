@@ -15,6 +15,8 @@ pub struct CxAppleMedia {
     pub(crate) core_audio_change: SignalToUI,
     pub(crate) core_midi_change: SignalToUI,
     pub(crate) av_capture_change: SignalToUI,
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) location: crate::os::apple::apple_geo::CxAppleLocation,
 }
 
 impl Cx {
@@ -49,6 +51,8 @@ impl Cx {
                 .get_updated_descs();
             self.call_event_handler(&Event::VideoInputs(VideoInputsEvent { descs }));
         }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        self.handle_location_signals();
     }
 }
 
@@ -241,6 +245,19 @@ impl CxMediaApi for Cx {
             .use_audio_inputs(devices);
     }
 
+    fn use_audio_inputs_with_options(
+        &mut self,
+        devices: &[AudioDeviceId],
+        options: AudioInputOptions,
+    ) {
+        self.os
+            .media
+            .audio_unit()
+            .lock()
+            .unwrap()
+            .use_audio_inputs_with_options(devices, options);
+    }
+
     fn use_audio_outputs(&mut self, devices: &[AudioDeviceId]) {
         self.os
             .media
@@ -250,7 +267,7 @@ impl CxMediaApi for Cx {
             .use_audio_outputs(devices);
     }
 
-    fn audio_output_box(&mut self, index: usize, f: AudioOutputFn) {
+    fn audio_output_box_os(&mut self, index: usize, f: AudioOutputFn) {
         *self.os.media.audio_unit().lock().unwrap().audio_output_cb[index]
             .lock()
             .unwrap() = Some(f);

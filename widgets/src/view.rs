@@ -712,7 +712,15 @@ impl WidgetNode for View {
     fn set_visible(&mut self, cx: &mut Cx, visible: bool) {
         if self.visible != visible {
             self.visible = visible;
-            self.redraw(cx);
+            // A view that has never drawn has an empty area, so its own
+            // redraw is a no-op and the visibility change only lands on
+            // the next unrelated full repaint (the classic "appears after
+            // hot reload" bug). Escalate to a full redraw in that case.
+            if visible && matches!(self.area, Area::Empty) {
+                cx.redraw_all();
+            } else {
+                self.redraw(cx);
+            }
         }
     }
 
@@ -729,6 +737,18 @@ impl Widget for View {
         args: ScriptValue,
     ) -> ScriptAsyncResult {
         if method == live_id!(render) {
+            // `me` protos off `self.source`, and the caller's `args` object
+            // travels into the VM that owns `on_render` — both are heap values,
+            // and a heap value means nothing outside the heap that minted it.
+            // Refuse when this view was minted somewhere else: rendering it
+            // would build `me` here holding another heap's object index (or
+            // plant these args over there), and nothing would notice until that
+            // heap's next GC walked the value and indexed out of bounds, in
+            // code that did nothing wrong. Includes the case that actually
+            // bites — a view whose isolate has since been torn down.
+            if !self.source.is_zero() && self.source.heap_key() != vm.bx.heap.heap_key() {
+                return ScriptAsyncResult::MethodNotFound;
+            }
             let me = self.make_render_me(vm);
             return vm.with_cx_mut(|cx| {
                 cx.widget_to_script_async_call_fwd(
@@ -750,8 +770,31 @@ impl Widget for View {
             return;
         };
 
-        if call.method() == id!(render) && !result.is_err() {
+        if call.method() == id!(render) {
+            if result.is_err() {
+                // An error mid-closure abandons every child emitted before it
+                // and used to do so with ZERO diagnostics — the "on_render
+                // silently renders nothing" family cost days to bisect. Say
+                // what happened.
+                let msg = vm.bx.heap.temp_string_with(|heap, out| {
+                    heap.cast_to_string(result, out);
+                    out.to_string()
+                });
+                error!("on_render closure failed; discarding its output: {msg}");
+                return;
+            }
             if let Some(me_obj) = call.me().as_object() {
+                // The closure's FINAL statement becomes its return value (the
+                // parser converts the last commit into a RETURN), so a widget
+                // emitted last would otherwise vanish. Commit it as the last
+                // child; non-widget values are skipped downstream anyway.
+                if let Some(ret_obj) = result.as_object() {
+                    if ret_obj != me_obj {
+                        // Unchecked: `me` is this render's own throwaway
+                        // object (make_render_me), never frozen.
+                        vm.bx.heap.vec_push_unchecked(me_obj, NIL, result);
+                    }
+                }
                 // `#[source]` is reassigned by any non-eval script apply, so this Reload
                 // would leave `source` pointing at `me`. Keep it on the declaration object:
                 // the next `make_render_me` protos off it (see there), and `me` is a
@@ -783,29 +826,46 @@ impl Widget for View {
                 return;
             }
         }
+        if let Event::ClearHover = event {
+            if self.animator.is_defined {
+                self.animator_play(cx, ids!(hover.off));
+                self.animator_play(cx, ids!(down.off));
+            }
+        }
+        // A press that catches an in-progress momentum fling stops the scroll and is consumed:
+        // it must not also activate a child widget under the finger, as on iOS, Android, and
+        // macOS. So when the scroll bars report a caught fling, skip dispatching this press to
+        // children. This runs before the child loop below, since children would otherwise
+        // capture the press first.
+        let mut fling_caught = false;
         if let Some(scroll_bars) = &mut self.scroll_bars_obj {
             let mut actions = Vec::new();
             scroll_bars.handle_main_event(cx, event, scope, &mut actions);
             if actions.len() > 0 {
                 cx.redraw_area_and_children(self.area);
             };
+            fling_caught = scroll_bars.catch_fling_on_press(cx, event);
         }
 
-        match &self.event_order {
-            EventOrder::Up => {
-                for (_id, child) in self.children.iter_mut().rev() {
-                    child.handle_event(cx, event, scope);
-                }
-            }
-            EventOrder::Down => {
-                for (_id, child) in self.children.iter_mut() {
-                    child.handle_event(cx, event, scope);
-                }
-            }
-            EventOrder::List(list) => {
-                for id in list {
-                    if let Some((_, child)) = self.children.iter_mut().find(|(id2, _)| id2 == id) {
+        if !fling_caught {
+            match &self.event_order {
+                EventOrder::Up => {
+                    for (_id, child) in self.children.iter_mut().rev() {
                         child.handle_event(cx, event, scope);
+                    }
+                }
+                EventOrder::Down => {
+                    for (_id, child) in self.children.iter_mut() {
+                        child.handle_event(cx, event, scope);
+                    }
+                }
+                EventOrder::List(list) => {
+                    for id in list {
+                        if let Some((_, child)) =
+                            self.children.iter_mut().find(|(id2, _)| id2 == id)
+                        {
+                            child.handle_event(cx, event, scope);
+                        }
                     }
                 }
             }
@@ -813,7 +873,11 @@ impl Widget for View {
 
         event.hit_tweak_ray(self.area(), self.widget_uid());
 
-        if self.visible && self.cursor.is_some() || self.animator.is_defined {
+        // Also skip this View's own press-driven hit handling when a fling was caught, so the
+        // catching press is fully consumed (it neither activates a child nor fires this
+        // View's own FingerDown/animator). `fling_caught` is only ever true on a press event
+        // over a flinging scroll view, so key/hover handling is unaffected.
+        if !fling_caught && (self.visible && self.cursor.is_some() || self.animator.is_defined) {
             match event.hits_with_capture_overload(cx, self.area(), self.capture_overload) {
                 Hit::FingerDown(e) => {
                     if self.grab_key_focus {
@@ -1091,6 +1155,13 @@ enum DrawState {
 }
 
 impl View {
+    /// The design-mode container seam: a view marked `design_mode: true` is
+    /// transparent to the tweaker's pick resolution — its children resolve,
+    /// it never consumes the hit itself.
+    pub fn design_mode(&self) -> bool {
+        self.design_mode
+    }
+
     pub fn swap_child(&mut self, pos_a: usize, pos_b: usize) {
         self.children.swap(pos_a, pos_b);
     }
@@ -1163,15 +1234,21 @@ impl View {
     }
 
     pub fn walk_from_previous_size(&self, walk: Walk) -> Walk {
+        // Fill and Fixed sizes are already known before drawing, so keep them live —
+        // a Fixed size can be fresh truth for this frame (e.g. a deferred fill the
+        // parent just resolved), and pinning it to the previous frame's measurement
+        // would make the cached-draw dirty check miss a pure size change. Only
+        // content-driven sizes fall back to the previous measurement, since they
+        // cannot be known before the children draw.
         let view_size = self.view_size.unwrap_or(Vec2d::default());
         Walk {
             abs_pos: walk.abs_pos,
-            width: if walk.width.is_fill() {
+            width: if walk.width.is_fill() || walk.width.is_fixed() {
                 walk.width
             } else {
                 Size::Fixed(view_size.x)
             },
-            height: if walk.height.is_fill() {
+            height: if walk.height.is_fill() || walk.height.is_fixed() {
                 walk.height
             } else {
                 Size::Fixed(view_size.y)

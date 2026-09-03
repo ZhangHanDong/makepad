@@ -19,6 +19,14 @@ use crate::{
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+fn texture_slots_neq(a: &Option<Texture>, b: &Option<Texture>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.texture_id() != b.texture_id(),
+        (None, None) => false,
+        _ => true,
+    }
+}
+
 #[derive(Debug)]
 pub struct DrawList(PoolId);
 
@@ -111,29 +119,33 @@ impl Cx {
             TextureFormat::VecMipBGRAu8_32 {
                 width,
                 height,
+                data,
                 updated,
                 ..
             } => {
                 if let TextureUpdated::Empty = updated {
                     0
                 } else {
-                    (*width as u64)
-                        .saturating_mul(*height as u64)
-                        .saturating_mul(4)
+                    // The data buffer holds the full mip chain (~4/3 of level 0), so use its
+                    // actual length when present rather than just level-0 (width*height*4).
+                    data.as_ref()
+                        .map(|d| (d.len() as u64).saturating_mul(4))
+                        .unwrap_or_else(|| (*width as u64).saturating_mul(*height as u64).saturating_mul(4))
                 }
             }
             TextureFormat::VecMipRGBAf32 {
                 width,
                 height,
+                data,
                 updated,
                 ..
             } => {
                 if let TextureUpdated::Empty = updated {
                     0
                 } else {
-                    (*width as u64)
-                        .saturating_mul(*height as u64)
-                        .saturating_mul(16)
+                    data.as_ref()
+                        .map(|d| (d.len() as u64).saturating_mul(16))
+                        .unwrap_or_else(|| (*width as u64).saturating_mul(*height as u64).saturating_mul(16))
                 }
             }
             TextureFormat::VecRGBAf32 {
@@ -315,6 +327,19 @@ impl CxDrawListPool {
         DrawList(self.0.alloc())
     }
 
+    /// Every live draw list id (the tweaker's colour pulse walks all
+    /// draw calls in place).
+    pub fn id_iter(&self) -> impl Iterator<Item = DrawListId> + '_ {
+        self.0.pool.iter().enumerate().filter_map(|(i, d)| {
+            let id = DrawListId(i, d.generation);
+            if self.is_id_freed(id) {
+                None
+            } else {
+                Some(id)
+            }
+        })
+    }
+
     pub fn checked_index(&self, index: DrawListId) -> Option<&CxDrawList> {
         let d = &self.0.pool[index.0];
         if d.generation != index.1 {
@@ -377,7 +402,8 @@ pub struct DrawCallUniforms {
 }
 
 impl DrawCallUniforms {
-    pub fn as_slice(&self) -> &[f32; std::mem::size_of::<DrawCallUniforms>()] {
+    // The array length is in f32 elements, not bytes, hence the >> 2.
+    pub fn as_slice(&self) -> &[f32; std::mem::size_of::<DrawCallUniforms>() >> 2] {
         unsafe { std::mem::transmute(self) }
     }
     /*
@@ -385,8 +411,17 @@ impl DrawCallUniforms {
         self.draw_scroll
     }*/
 
-    pub fn set_zbias(&mut self, zbias: f32) {
+    /// Sets the zbias, returning `true` if it actually changed.
+    ///
+    /// The zbias is recomputed from the global draw order on every frame, so it shifts whenever
+    /// a sibling draw list grows or shrinks -- including for a cached draw call that was not
+    /// redrawn and therefore has `uniforms_dirty` unset. Backends that only upload
+    /// `DrawCallUniforms` when `uniforms_dirty` is set must also upload when this returns `true`,
+    /// or the GPU keeps a stale depth for that draw call and the depth test rejects it.
+    pub fn set_zbias(&mut self, zbias: f32) -> bool {
+        let changed = self.zbias != zbias;
         self.zbias = zbias;
+        changed
     }
     /*
     pub fn set_clip(&mut self, clip: (Vec2f, Vec2f)) {
@@ -472,10 +507,16 @@ pub struct CxDrawCall {
     pub uniform_buffer_slots: [Option<UniformBuffer>; DRAW_CALL_UNIFORM_BUFFER_SLOTS],
     pub instance_dirty: bool,
     pub uniforms_dirty: bool,
+    /// Component nesting depth (`Cx::nesting_depth`) at the moment this call
+    /// was created. The exploded z-layer view hands this to the shader in
+    /// place of the paint-order zbias, so one plane = one nesting level.
+    /// Stamped always (one f32 write per call creation); read only while the
+    /// mode is up.
+    pub turtle_depth: f32,
 }
 
 impl CxDrawCall {
-    pub fn new(mapping: &CxDrawShaderMapping, draw_vars: &DrawVars) -> Self {
+    pub fn new(mapping: &CxDrawShaderMapping, draw_vars: &DrawVars, turtle_depth: f32) -> Self {
         CxDrawCall {
             geometry_id: draw_vars.geometry_id,
             options: draw_vars.options.clone(),
@@ -488,9 +529,27 @@ impl CxDrawCall {
             uniform_buffer_slots: draw_vars.uniform_buffer_slots.clone(),
             instance_dirty: true,
             uniforms_dirty: true,
+            turtle_depth,
         }
     }
+
+    /// The z the shader sees in `world.z`. Paint order normally; the emitting
+    /// component's nesting depth while the pass is exploded — deeper nesting
+    /// is a larger z, and the ortho maps larger z nearer the viewer, so
+    /// children lift toward you and parents stay at the bottom of the stack.
+    pub fn resolve_zbias(&mut self, paint_order: f32, sploded: bool) -> bool {
+        let z = if sploded {
+            // One level is worth far more than any widget's own `draw_depth`,
+            // so those stay an in-plane tie-break instead of whole planes of
+            // separation. See `sploded::SPLODED_DEPTH_UNIT`.
+            self.turtle_depth * crate::sploded::SPLODED_DEPTH_UNIT
+        } else {
+            paint_order
+        };
+        self.draw_call_uniforms.set_zbias(z)
+    }
 }
+
 
 #[derive(Clone, Script, ScriptHook)]
 #[repr(C)]
@@ -520,7 +579,8 @@ impl Default for DrawListUniforms {
 }
 
 impl DrawListUniforms {
-    pub fn as_slice(&self) -> &[f32; std::mem::size_of::<DrawListUniforms>()] {
+    // The array length is in f32 elements, not bytes, hence the >> 2.
+    pub fn as_slice(&self) -> &[f32; std::mem::size_of::<DrawListUniforms>() >> 2] {
         unsafe { std::mem::transmute(self) }
     }
 }
@@ -580,6 +640,26 @@ pub struct CxDrawList {
     pub debug_dump_count: u32,
     pub reset_zbias: bool,
 
+    /// Depth floor for this draw list and everything drawn under it, in
+    /// `world.z` units. `0.0` — every ordinary list — costs one compare and
+    /// changes nothing.
+    ///
+    /// A 2D pass has ONE depth buffer shared by every draw list in it, and a
+    /// 2D vertex lands at `world.z = draw_depth + draw_call.zbias`. The
+    /// `zbias` half is the paint-order counter the backend walk accumulates
+    /// (`zbias_step`, 0.001), so "drawn later" only outranks "drawn earlier"
+    /// by a thousandth — nothing at all against a widget that spends whole
+    /// units of `draw_depth` to order its own ink. That is why an overlay,
+    /// which by construction paints after the body, could still be rejected by
+    /// the depth test and disappear behind it.
+    ///
+    /// A list with a floor raises the running counter to it on entry
+    /// (`raise_zbias_to_floor`), so every draw call beneath it — including
+    /// nested plain draw lists, which inherit the same counter — starts above
+    /// the band the body was using. Set by `DrawList2d::begin_overlay_inner`;
+    /// see the constants there for the scheme and its headroom.
+    pub overlay_z_lift: f32,
+
     pub codeflow_parent_id: Option<DrawListId>, // the id of the parent we nest in, codeflow wise
 
     pub redraw_id: u64,
@@ -587,6 +667,14 @@ pub struct CxDrawList {
 
     pub draw_items: CxDrawItems,
     pub draw_item_reorder: Option<Vec<usize>>,
+
+    /// For a draw list registered as a sub-list of the window Overlay: the
+    /// position in which it was BEGUN this frame. Overlay slots are handed out
+    /// first-come and kept for the life of the process, so without this the
+    /// paint order of every glass surface is the order they were first
+    /// created rather than the order they are drawn. `Overlay::end` turns
+    /// these into `draw_item_reorder`.
+    pub overlay_order: u64,
 
     pub draw_list_uniforms: DrawListUniforms,
     pub draw_list_has_clip: bool,
@@ -602,6 +690,23 @@ pub struct CxRectArea {
 }
 
 impl CxDrawList {
+    /// Raise a backend walk's running paint-order depth counter to this
+    /// sub-list's floor, on the way into it. See [`CxDrawList::overlay_z_lift`].
+    ///
+    /// It raises and never lowers, so the counter stays monotone across the
+    /// whole pass: two overlays sharing a floor still order by draw position,
+    /// and a nested overlay's higher floor is not undone by a sibling drawn
+    /// after it. Every backend's `render_view` calls this at exactly one
+    /// place — the sub-list branch, beside the `reset_zbias` check — and for
+    /// an ordinary list (`overlay_z_lift == 0.0`) it is one compare that
+    /// changes nothing.
+    #[inline]
+    pub fn raise_zbias_to_floor(&self, zbias: &mut f32) {
+        if *zbias < self.overlay_z_lift {
+            *zbias = self.overlay_z_lift;
+        }
+    }
+
     fn append_trace_enabled() -> bool {
         false
     }
@@ -659,10 +764,14 @@ impl CxDrawList {
             && target_draw_call_group != barrier_draw_call_group
     }
 
+    /// `depth_target` is `Some` only while the exploded z-layer view is up:
+    /// batches must then stay depth-homogeneous, because the whole call shares
+    /// one z. `None` — the ordinary case — leaves batching exactly as it was.
     pub fn find_appendable_drawcall(
         &mut self,
         sh: &CxDrawShader,
         draw_vars: &DrawVars,
+        depth_target: Option<f32>,
     ) -> Option<usize> {
         // find our drawcall to append to the current layer
         if draw_vars.draw_shader_id.is_none() {
@@ -689,6 +798,18 @@ impl CxDrawList {
                 draw_call.append_group_id,
                 draw_call.options.draw_call_group.0,
             );
+
+            // Exploded view: a call carries ONE z, so it may only hold
+            // instances from one nesting level. A depth mismatch is treated
+            // like any other uniform difference.
+            if let Some(depth) = depth_target {
+                if draw_call.turtle_depth != depth {
+                    if can_cross {
+                        continue;
+                    }
+                    break;
+                }
+            }
 
             if self.find_appendable_draw_shader_check[i] == draw_shader_check {
                 // TODO! figure out why this can happen
@@ -730,16 +851,10 @@ impl CxDrawList {
                         }
 
                         for i in 0..sh.mapping.textures.len() {
-                            fn neq(a: &Option<Texture>, b: &Option<Texture>) -> bool {
-                                if let Some(a) = a {
-                                    if let Some(b) = b {
-                                        return a.texture_id() != b.texture_id();
-                                    }
-                                    return true;
-                                }
-                                return false;
-                            }
-                            if neq(&draw_call.texture_slots[i], &draw_vars.texture_slots[i]) {
+                            if texture_slots_neq(
+                                &draw_call.texture_slots[i],
+                                &draw_vars.texture_slots[i],
+                            ) {
                                 diff = true;
                                 break;
                             }
@@ -825,6 +940,7 @@ impl CxDrawList {
         redraw_id: u64,
         sh: &CxDrawShader,
         draw_vars: &DrawVars,
+        turtle_depth: f32,
     ) -> &mut CxDrawItem {
         Self::append_trace_log(format!(
             "append_new shader={} group={} draw_call_group={} items_before={}",
@@ -844,7 +960,7 @@ impl CxDrawList {
         }
         self.draw_items.push_item(
             redraw_id,
-            CxDrawKind::DrawCall(CxDrawCall::new(&sh.mapping, draw_vars)),
+            CxDrawKind::DrawCall(CxDrawCall::new(&sh.mapping, draw_vars, turtle_depth)),
         )
     }
 
@@ -957,4 +1073,64 @@ impl CxDrawList {
     pub fn get_view_transform(&self) -> Mat4f {
         self.draw_list_uniforms.view_transform
     }*/
+}
+
+impl Cx {
+    /// Every draw list reachable from `pass_id`'s main list through SubList
+    /// items — the lists that are actually on screen this frame. Retained
+    /// lists a container has stopped referencing (a Dock's hidden pages, a
+    /// closed StackNavigation view) keep their items but are not here.
+    pub fn attached_draw_lists(&self, pass_id: DrawPassId) -> std::collections::HashSet<DrawListId> {
+        self.attached_draw_lists_from(self.passes[pass_id].main_draw_list_id)
+    }
+
+    /// Same walk from any set of roots. A list links into its parent only
+    /// when it ENDS, so mid-draw (an overlay drawing while its ancestors
+    /// are still open) the pass root does not yet reach the open chain —
+    /// seed the walk with the open lists too (`Cx2d::open_draw_lists`).
+    pub fn attached_draw_lists_from(
+        &self,
+        roots: impl IntoIterator<Item = DrawListId>,
+    ) -> std::collections::HashSet<DrawListId> {
+        let mut out = std::collections::HashSet::new();
+        let mut stack: Vec<DrawListId> = roots.into_iter().collect();
+        while let Some(list_id) = stack.pop() {
+            if !out.insert(list_id) {
+                continue;
+            }
+            let draw_list = &self.draw_lists[list_id];
+            for order_index in 0..draw_list.draw_item_order_len() {
+                let Some(item_id) = draw_list.draw_item_id_at_order_index(order_index) else {
+                    continue;
+                };
+                if let CxDrawKind::SubList(sub) = &draw_list.draw_items[item_id].kind {
+                    stack.push(*sub);
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::texture::CxTexturePool;
+
+    #[test]
+    fn texture_slot_batching_comparison_is_symmetric() {
+        let mut textures = CxTexturePool::default();
+        let none: Option<Texture> = None;
+        let texture_t = Some(textures.alloc(TextureFormat::Unknown));
+        let texture_u = Some(textures.alloc(TextureFormat::Unknown));
+        let merges = |existing: &Option<Texture>, new: &Option<Texture>| {
+            !texture_slots_neq(existing, new)
+        };
+
+        assert!(merges(&none, &none));
+        assert!(merges(&texture_t, &texture_t));
+        assert!(!merges(&none, &texture_t));
+        assert!(!merges(&texture_t, &none));
+        assert!(!merges(&texture_t, &texture_u));
+    }
 }

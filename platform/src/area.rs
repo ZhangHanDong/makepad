@@ -62,6 +62,20 @@ impl Into<Area> for InstanceArea {
     }
 }
 
+/// Live `Area::Rect` slot, or `None` when the draw list was rebuilt (stale
+/// `redraw_id`) or `rect_id` is past `rect_areas` (partial/sibling redraw).
+fn live_rect_area<'a>(
+    ra: &RectArea,
+    cx: &'a Cx,
+) -> Option<(&'a crate::draw_list::CxDrawList, &'a crate::draw_list::CxRectArea)> {
+    let draw_list = cx.draw_lists.checked_index(ra.draw_list_id)?;
+    if draw_list.redraw_id != ra.redraw_id {
+        return None;
+    }
+    let rect_area = draw_list.rect_areas.get(ra.rect_id)?;
+    Some((draw_list, rect_area))
+}
+
 impl Area {
     pub fn area(&self) -> Self {
         self.clone()
@@ -158,15 +172,7 @@ impl Area {
                 }
                 return false;
             }
-            Area::Rect(list) => {
-                if let Some(draw_list) = cx.draw_lists.checked_index(list.draw_list_id) {
-                    if draw_list.redraw_id != list.redraw_id {
-                        return false;
-                    }
-                    return true;
-                }
-                return false;
-            }
+            Area::Rect(list) => live_rect_area(list, cx).is_some(),
             _ => false,
         };
     }
@@ -239,9 +245,12 @@ impl Area {
                 Rect::default()
             }
             Area::Rect(ra) => {
-                // we need to clip this drawlist too
-                let draw_list = &cx.draw_lists[ra.draw_list_id];
-                let rect_area = &draw_list.rect_areas[ra.rect_id];
+                // Clip this draw list too. Stale rect areas are common after a
+                // hide/rebuild; Instance already bails on redraw_id, Rect must
+                // too, and must bounds-check — Win32 WndProc cannot unwind.
+                let Some((draw_list, rect_area)) = live_rect_area(ra, cx) else {
+                    return Rect::default();
+                };
                 if draw_list.draw_list_has_clip {
                     let p3 = dvec2(
                         draw_list.draw_list_uniforms.view_clip.x as f64,
@@ -266,6 +275,107 @@ impl Area {
             }
             _ => Rect::default(),
         };
+    }
+
+    /// The clipped bounds of EVERY instance in an instance area, not just
+    /// the first. A text run's area spans all its glyphs, and `clipped_rect`
+    /// (first instance only) answers with a single glyph — which is why a
+    /// design pick on a paragraph used to fall through to its container.
+    /// Rect areas and single instances answer exactly as `clipped_rect`.
+    pub fn clipped_rect_union(&self, cx: &Cx) -> Rect {
+        self.clipped_rect_union_inner(cx, false)
+    }
+
+    /// The union rect ignoring the redraw-id freshness guard. Retained draw
+    /// lists (a Dock's tab strip, a cached content view) legitimately keep
+    /// last frame's instances while the global redraw id advances, so their
+    /// widgets' areas read one frame stale — `clipped_rect` then returns
+    /// zero even though the pixels are on screen. A caller that has already
+    /// confirmed the list is ATTACHED (visible this frame) wants the
+    /// geometry regardless; a hidden list is not attached, so this never
+    /// resurrects a stale rect for something off screen.
+    pub fn clipped_rect_union_attached(&self, cx: &Cx) -> Rect {
+        self.clipped_rect_union_inner(cx, true)
+    }
+
+    fn clipped_rect_union_inner(&self, cx: &Cx, ignore_redraw: bool) -> Rect {
+        let Area::Instance(inst) = self else {
+            return self.clipped_rect(cx);
+        };
+        if inst.instance_count == 0 {
+            // A probe, not a draw: an instance-less area is simply "nothing
+            // on screen", not a mark/sweep mistake worth logging.
+            return Rect::default();
+        }
+        let draw_list = &cx.draw_lists[inst.draw_list_id];
+        if !ignore_redraw && draw_list.redraw_id != inst.redraw_id {
+            return Rect::default();
+        }
+        let draw_item = &draw_list.draw_items[inst.draw_item_id];
+        let Some(draw_call) = draw_item.draw_call() else {
+            return Rect::default();
+        };
+        let Some(buf) = draw_item.instances.as_ref() else {
+            return Rect::default();
+        };
+        let sh = &cx.draw_shaders[draw_call.draw_shader_id.index];
+        let (Some(rect_pos), Some(rect_size)) = (sh.mapping.rect_pos, sh.mapping.rect_size) else {
+            return self.clipped_rect(cx);
+        };
+        let stride = sh.mapping.instances.total_slots;
+        if stride == 0 {
+            return self.clipped_rect(cx);
+        }
+        let mut union: Option<Rect> = None;
+        for i in 0..inst.instance_count {
+            let o = inst.instance_offset + i * stride;
+            if o + rect_size + 1 >= buf.len() {
+                break;
+            }
+            let mut rect = Rect {
+                pos: dvec2(buf[o + rect_pos] as f64, buf[o + rect_pos + 1] as f64),
+                size: dvec2(buf[o + rect_size] as f64, buf[o + rect_size + 1] as f64),
+            };
+            if let Some(draw_clip) = sh.mapping.draw_clip {
+                rect = rect.clip((
+                    dvec2(buf[o + draw_clip] as f64, buf[o + draw_clip + 1] as f64),
+                    dvec2(buf[o + draw_clip + 2] as f64, buf[o + draw_clip + 3] as f64),
+                ));
+            }
+            if draw_list.draw_list_has_clip {
+                let u = &draw_list.draw_list_uniforms;
+                rect = rect
+                    .translate(dvec2(u.view_shift.x as f64, u.view_shift.y as f64))
+                    .clip((
+                        dvec2(u.view_clip.x as f64, u.view_clip.y as f64),
+                        dvec2(u.view_clip.z as f64, u.view_clip.w as f64),
+                    ));
+            }
+            if rect.size.x <= 0.0 || rect.size.y <= 0.0 {
+                continue;
+            }
+            union = Some(match union {
+                None => rect,
+                Some(u) => {
+                    let x0 = u.pos.x.min(rect.pos.x);
+                    let y0 = u.pos.y.min(rect.pos.y);
+                    let x1 = (u.pos.x + u.size.x).max(rect.pos.x + rect.size.x);
+                    let y1 = (u.pos.y + u.size.y).max(rect.pos.y + rect.size.y);
+                    Rect { pos: dvec2(x0, y0), size: dvec2(x1 - x0, y1 - y0) }
+                }
+            });
+        }
+        union.unwrap_or_default()
+    }
+
+    /// Is this area on screen right now — its draw list reachable from its
+    /// pass's main list? A page a Dock, StackNavigation or PageFlip has
+    /// hidden keeps its retained draw list and every stale rect in it; a
+    /// design pick that trusts those rects clicks through to widgets that
+    /// are not there.
+    pub fn is_attached(&self, cx: &Cx, attached: &std::collections::HashSet<DrawListId>) -> bool {
+        let _ = cx;
+        self.draw_list_id().is_some_and(|id| attached.contains(&id))
     }
 
     pub fn rect(&self, cx: &Cx) -> Rect {
@@ -304,14 +414,9 @@ impl Area {
                 }
                 Rect::default()
             }
-            Area::Rect(ra) => {
-                let draw_list = &cx.draw_lists[ra.draw_list_id];
-                if draw_list.redraw_id == ra.redraw_id {
-                    let rect_area = &draw_list.rect_areas[ra.rect_id];
-                    return rect_area.rect;
-                }
-                Rect::default()
-            }
+            Area::Rect(ra) => live_rect_area(ra, cx)
+                .map(|(_, rect_area)| rect_area.rect)
+                .unwrap_or_default(),
             _ => Rect::default(),
         };
     }
@@ -342,14 +447,13 @@ impl Area {
                 }
                 abs
             }
-            Area::Rect(ra) => {
-                let draw_list = &cx.draw_lists[ra.draw_list_id];
-                let rect_area = &draw_list.rect_areas[ra.rect_id];
-                Vec2d {
+            Area::Rect(ra) => match live_rect_area(ra, cx) {
+                Some((_, rect_area)) => Vec2d {
                     x: abs.x - rect_area.rect.pos.x,
                     y: abs.y - rect_area.rect.pos.y,
-                }
-            }
+                },
+                None => abs,
+            },
             _ => abs,
         };
     }
@@ -404,8 +508,12 @@ impl Area {
             }
             Area::Rect(ra) => {
                 let draw_list = &mut cx.draw_lists[ra.draw_list_id];
-                let rect_area = &mut draw_list.rect_areas[ra.rect_id];
-                rect_area.rect = *rect
+                if draw_list.redraw_id != ra.redraw_id {
+                    return;
+                }
+                if let Some(rect_area) = draw_list.rect_areas.get_mut(ra.rect_id) {
+                    rect_area.rect = *rect;
+                }
             }
             _ => (),
         }

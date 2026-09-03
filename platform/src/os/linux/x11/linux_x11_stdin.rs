@@ -544,7 +544,7 @@ impl Cx {
 
     fn stdin_handle_platform_ops(&mut self, stdin_windows: &mut Vec<StdinWindow>) {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     while window_id.id() >= stdin_windows.len() {
@@ -590,6 +590,12 @@ impl Cx {
                 }
                 CxOsOp::CopyToClipboard(content) => {
                     Self::stdin_send_to_host(AppToStudio::SetClipboard(content));
+                }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!(
+                        "external file dragging is not available in the Studio stdin runtime"
+                    );
+                    self.call_event_handler(&Event::DragEnd);
                 }
                 _ => (), /*
                          CxOsOp::CloseWindow(_window_id) => {},

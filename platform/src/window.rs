@@ -8,6 +8,7 @@ use crate::{
     makepad_math::*,
     //makepad_live_id::*,
     makepad_script::*,
+    screen::{sanitize_window_geom, DEFAULT_WINDOW_SIZE},
     script::vm::*,
 };
 
@@ -254,6 +255,16 @@ impl CxWindowPool {
         );
     }
 
+    /// Every allocated window slot, as a generation-correct `WindowId`.
+    /// Callers usually want to skip the ones whose `is_created` is false.
+    pub fn id_iter(&self) -> impl Iterator<Item = WindowId> + '_ {
+        self.0
+            .pool
+            .iter()
+            .enumerate()
+            .map(|(index, item)| WindowId(index, item.generation))
+    }
+
     pub fn is_valid(&self, v: WindowId) -> bool {
         if v.0 < self.0.pool.len() {
             if self.0.pool[v.0].generation == v.1 {
@@ -316,22 +327,34 @@ impl ScriptApply for WindowHandle {
     }
 }
 
+/// Linux desktops match a window to its `.desktop` file by app id, and packagers
+/// name that file after the binary, so that's the best default we have.
+pub(crate) fn default_app_id() -> String {
+    std::env::args_os()
+        .next()
+        .as_ref()
+        .and_then(|arg0| std::path::Path::new(arg0).file_name())
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "Makepad".to_string())
+}
+
 impl WindowHandle {
     pub fn new(cx: &mut Cx) -> Self {
         let window = cx.windows.alloc();
         let cxwindow = &mut cx.windows[window.window_id()];
         cxwindow.is_created = false;
-        cxwindow.create_title = "Makepad".to_string();
+        cxwindow.create_title = crate::remote::tag_window_title("Makepad".to_string());
         cxwindow.create_inner_size = None;
         cxwindow.create_position = None;
-        cxwindow.create_app_id = "Makepad".to_string();
+        cxwindow.create_app_id = default_app_id();
         cxwindow.is_popup = false;
         cxwindow.popup_parent = None;
         cxwindow.popup_position = None;
         cxwindow.popup_size = None;
         cxwindow.popup_grab_keyboard = true;
         cx.platform_ops
-            .push(CxOsOp::CreateWindow(window.window_id()));
+            .push_back(CxOsOp::CreateWindow(window.window_id()));
         window
     }
 
@@ -350,7 +373,7 @@ impl WindowHandle {
             cxwindow.create_title = "Makepad Popup".to_string();
             cxwindow.create_inner_size = Some(size);
             cxwindow.create_position = Some(position);
-            cxwindow.create_app_id = "Makepad".to_string();
+            cxwindow.create_app_id = default_app_id();
             cxwindow.is_popup = true;
             cxwindow.popup_parent = Some(parent);
             cxwindow.popup_position = Some(position);
@@ -358,7 +381,7 @@ impl WindowHandle {
             cxwindow.popup_grab_keyboard = true;
             cxwindow.popup_grab_keyboard
         };
-        cx.platform_ops.push(CxOsOp::CreatePopupWindow {
+        cx.platform_ops.push_back(CxOsOp::CreatePopupWindow {
             window_id,
             parent_window_id: parent,
             position,
@@ -375,6 +398,10 @@ pub struct ScriptWindowHandle {
     pub handle: WindowHandle,
     #[live]
     pub title: String,
+    /// Wayland `app_id` and X11 WM_CLASS; must match the installed `.desktop`
+    /// file's basename or desktops can't find the app's icon. Defaults to argv[0].
+    #[live]
+    pub app_id: String,
     #[live]
     pub inner_size: Option<Vec2d>,
     #[live]
@@ -420,7 +447,10 @@ impl ScriptHook for ScriptWindowHandle {
         let cx = vm.host.cx_mut();
         let window_id = self.handle.window_id();
         if !self.title.is_empty() {
-            cx.windows[window_id].create_title = self.title.clone();
+            self.handle.set_title(cx, self.title.clone());
+        }
+        if !self.app_id.is_empty() {
+            cx.windows[window_id].create_app_id = self.app_id.clone();
         }
         if self.inner_size.is_some() {
             cx.windows[window_id].create_inner_size = self.inner_size;
@@ -458,6 +488,18 @@ impl ScriptHook for ScriptWindowHandle {
 }
 
 impl WindowHandle {
+    pub fn set_title(&self, cx: &mut Cx, title: String) {
+        let title = crate::remote::tag_window_title(title);
+        let window_id = self.window_id();
+        if cx.windows[window_id].create_title == title {
+            return;
+        }
+        cx.windows[window_id].create_title = title.clone();
+        if cx.windows[window_id].is_created {
+            cx.push_unique_platform_op(CxOsOp::SetWindowTitle(window_id, title));
+        }
+    }
+
     pub fn set_pass(&self, cx: &mut Cx, pass: &DrawPass) {
         cx.windows[self.window_id()].main_pass_id = Some(pass.draw_pass_id());
         cx.passes[pass.draw_pass_id()].parent = CxDrawPassParent::Window(self.window_id());
@@ -471,7 +513,7 @@ impl WindowHandle {
         title: String,
     ) {
         let window = &mut cx.windows[self.window_id()];
-        window.create_title = title;
+        window.create_title = crate::remote::tag_window_title(title);
         window.create_position = Some(position);
         window.create_inner_size = Some(inner_size);
         window.is_fullscreen = is_fullscreen;
@@ -483,6 +525,8 @@ impl WindowHandle {
         cx.windows[self.window_id()].get_inner_size()
     }
 
+    /// The window's top-left corner, in the space [`Self::reposition`] accepts: physical
+    /// screen pixels on Windows and X11, points on macOS. Never scaled by the DPI factor.
     pub fn get_position(&self, cx: &Cx) -> Vec2d {
         cx.windows[self.window_id()].get_position()
     }
@@ -531,6 +575,18 @@ impl WindowHandle {
         cx.push_unique_platform_op(CxOsOp::SetTopmost(self.window_id(), set_topmost));
     }
 
+    /// Windows only: a maximized window normally keeps a border/titlebar
+    /// strip so its client area matches the monitor work area. Setting this
+    /// drops that strip while maximized instead, so the window reads as a
+    /// clean fullscreen picture (a projector output, say) rather than a
+    /// decorated window pinned to the screen. Other backends ignore it.
+    pub fn set_chromeless_when_maximized(&mut self, cx: &mut Cx, chromeless: bool) {
+        cx.push_unique_platform_op(CxOsOp::SetChromelessWhenMaximized(
+            self.window_id(),
+            chromeless,
+        ));
+    }
+
     pub fn set_window_visuals(&mut self, cx: &mut Cx, visuals: WindowVisuals) {
         let visuals = visuals.normalized();
         let window_id = self.window_id();
@@ -566,6 +622,12 @@ impl WindowHandle {
         cx.push_unique_platform_op(CxOsOp::ResizeWindow(self.window_id(), size));
     }
 
+    /// Moves the window's top-left corner to `position`, in the same space
+    /// [`Self::get_position`] reports: physical screen pixels on Windows and X11, points on
+    /// macOS. Unlike [`Self::resize`], which takes a logical size that scales with the DPI, a
+    /// position is never scaled — a screen coordinate spanning displays of different scales
+    /// has no single factor to be logical in. Backends fit the request to the displays that
+    /// are actually attached, so a window cannot be placed where it could not be reached.
     pub fn reposition(&self, cx: &mut Cx, position: Vec2d) {
         cx.push_unique_platform_op(CxOsOp::RepositionWindow(self.window_id(), position));
     }
@@ -652,6 +714,22 @@ impl Default for CxWindow {
 }
 
 impl CxWindow {
+    /// The geometry to create this window with, reduced to values a windowing system can act
+    /// on: a size no smaller than [`crate::screen::MIN_WINDOW_SIZE`], and a position that is
+    /// either real coordinates or `None` for "the system places it".
+    ///
+    /// Every backend reads its creation geometry through here, so no request — a restored
+    /// state file, a DSL literal, a computed popup rect — can reach a platform call carrying a
+    /// size it will reject or a coordinate that is not a number. Placing the window on a
+    /// display that exists is a separate, per-backend step; see
+    /// [`crate::screen::fit_window_rect_to_screens`].
+    pub fn create_geom(&self) -> (Option<Vec2d>, Vec2d) {
+        sanitize_window_geom(
+            self.create_position,
+            self.create_inner_size.unwrap_or(DEFAULT_WINDOW_SIZE),
+        )
+    }
+
     pub(crate) fn valid_dpi_factor(dpi_factor: f64) -> Option<f64> {
         if dpi_factor.is_finite() && dpi_factor > 0.0 {
             Some(dpi_factor)
@@ -996,6 +1074,7 @@ mod tests {
         let mut script_window = ScriptWindowHandle {
             handle,
             title: "Floating Panel".to_string(),
+            app_id: "floating-panel".to_string(),
             inner_size: Some(dvec2(320.0, 80.0)),
             position: Some(dvec2(40.0, 50.0)),
             kind_id: 7,
@@ -1013,6 +1092,7 @@ mod tests {
         let cx = vm.cx_mut();
         let cx_window = &cx.windows[window_id];
         assert_eq!(cx_window.create_title, "Floating Panel");
+        assert_eq!(cx_window.create_app_id, "floating-panel");
         assert_eq!(cx_window.create_inner_size, Some(dvec2(320.0, 80.0)));
         assert_eq!(cx_window.create_position, Some(dvec2(40.0, 50.0)));
         assert_eq!(cx_window.kind_id, 7);
@@ -1198,5 +1278,18 @@ mod tests {
 
         assert_eq!(cx.platform_ops.len(), 1);
         assert!(matches!(cx.platform_ops[0], CxOsOp::SetTopmost(_, true)));
+    }
+
+    #[test]
+    fn create_window_then_set_topmost_queues_fifo() {
+        let mut cx = test_cx();
+        let mut window = WindowHandle::new(&mut cx);
+        window.set_topmost(&mut cx, true);
+
+        let first = cx.platform_ops.pop_front().unwrap();
+        let second = cx.platform_ops.pop_front().unwrap();
+        assert!(matches!(first, CxOsOp::CreateWindow(_)));
+        assert!(matches!(second, CxOsOp::SetTopmost(_, true)));
+        assert!(cx.platform_ops.is_empty());
     }
 }

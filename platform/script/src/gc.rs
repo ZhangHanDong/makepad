@@ -87,44 +87,77 @@ macro_rules! set_static_val {
     };
 }
 
+/// A mark-walk value whose index is beyond its table came from ANOTHER heap.
+/// Marking must survive it (skip + report): panicking here aborts the whole
+/// host app over one corrupted isolate value.
+#[cold]
+#[inline(never)]
+fn foreign_value_skip(kind: &str, index: u32, len: usize) {
+    eprintln!(
+        "script gc: skipping foreign {kind} index {index} (table len {len}) - \
+         value was minted by a different heap"
+    );
+}
+
 // Mark a value using split field borrows (so callers can iterate maps without snapshot Vecs)
 macro_rules! mark_value_fields {
     ($objects:expr, $arrays:expr, $strings:expr, $pods:expr, $handles:expr, $regexes:expr, $mark_vec:expr, $val:expr) => {
         if let Some(ptr) = $val.as_object() {
-            let object = &$objects[ptr];
-            if !object.tag.is_static() && object.tag.is_alloced() {
-                $mark_vec.push(ScriptGcMark::Object(ptr));
+            if let Some(object) = $objects.get_checked(ptr) {
+                if !object.tag.is_static() && object.tag.is_alloced() {
+                    $mark_vec.push(ScriptGcMark::Object(ptr));
+                }
+            } else {
+                foreign_value_skip("object", ptr.index, $objects.len());
             }
         } else if let Some(ptr) = $val.as_string() {
-            if let Some(str_data) = $strings[ptr].as_mut() {
-                if !str_data.tag.is_static() {
-                    str_data.tag.set_mark();
+            if let Some(slot) = $strings.get_checked_mut(ptr) {
+                if let Some(str_data) = slot.as_mut() {
+                    if !str_data.tag.is_static() {
+                        str_data.tag.set_mark();
+                    }
                 }
+            } else {
+                foreign_value_skip("string", ptr.index, $strings.len());
             }
         } else if let Some(ptr) = $val.as_array() {
-            let array = &$arrays[ptr];
-            if !array.tag.is_static() && array.tag.is_alloced() {
-                $mark_vec.push(ScriptGcMark::Array(ptr));
+            if let Some(array) = $arrays.get_checked(ptr) {
+                if !array.tag.is_static() && array.tag.is_alloced() {
+                    $mark_vec.push(ScriptGcMark::Array(ptr));
+                }
+            } else {
+                foreign_value_skip("array", ptr.index, $arrays.len());
             }
         } else if let Some(ptr) = $val.as_pod() {
-            let pod = &mut $pods[ptr];
-            if !pod.tag.is_static() && pod.tag.is_alloced() {
-                pod.tag.set_mark();
+            if let Some(pod) = $pods.get_checked_mut(ptr) {
+                if !pod.tag.is_static() && pod.tag.is_alloced() {
+                    pod.tag.set_mark();
+                }
+            } else {
+                foreign_value_skip("pod", ptr.index, $pods.len());
             }
         } else if let Some(ptr) = $val.as_handle() {
             // Skip handle index 0 - it's the "null" handle (ScriptHandle::ZERO)
             if ptr.index != 0 {
-                if let Some(handle_data) = $handles[ptr].as_mut() {
-                    if !handle_data.tag.is_static() {
-                        handle_data.tag.set_mark();
+                if let Some(slot) = $handles.get_checked_mut(ptr) {
+                    if let Some(handle_data) = slot.as_mut() {
+                        if !handle_data.tag.is_static() {
+                            handle_data.tag.set_mark();
+                        }
                     }
+                } else {
+                    foreign_value_skip("handle", ptr.index, $handles.len());
                 }
             }
         } else if let Some(ptr) = $val.as_regex() {
-            if let Some(regex_data) = $regexes[ptr].as_mut() {
-                if !regex_data.tag.is_static() {
-                    regex_data.tag.set_mark();
+            if let Some(slot) = $regexes.get_checked_mut(ptr) {
+                if let Some(regex_data) = slot.as_mut() {
+                    if !regex_data.tag.is_static() {
+                        regex_data.tag.set_mark();
+                    }
                 }
+            } else {
+                foreign_value_skip("regex", ptr.index, $regexes.len());
             }
         }
     };
@@ -418,6 +451,10 @@ impl ScriptHeap {
                 for value in thread.stack.iter() {
                     self.mark_value(*value);
                 }
+                // Frame-local slot values
+                for value in thread.slots.iter() {
+                    self.mark_value(*value);
+                }
                 // Scopes
                 for scope in thread.scopes.iter() {
                     self.mark_value((*scope).into());
@@ -449,11 +486,11 @@ impl ScriptHeap {
                     }
                 }
                 // Trap error values
-                for err in thread.trap.err.borrow().iter() {
+                for err in thread.trap.err_borrow().iter() {
                     self.mark_value(err.value);
                 }
                 // Trap return/bail values
-                match thread.trap.on.get() {
+                match thread.trap.get_on() {
                     Some(ScriptTrapOn::Return(v)) | Some(ScriptTrapOn::Bail(v)) => {
                         self.mark_value(v);
                     }
@@ -747,6 +784,49 @@ impl ScriptHeap {
         let handles = self.handles.len() - self.handles_free.len();
         let regexes = self.regexes.len() - self.regexes_free.len();
         objects + strings + arrays + pods + handles + regexes
+    }
+
+    /// Conservative escape barrier. Called by every *checked* store funnel
+    /// (`set_value`, scope def/set, `vec_push`, `array_push`, splat merges,
+    /// `force_value_in_map`): any object VALUE stored into a script-reachable
+    /// container is tagged REFFED, so the eager-free paths
+    /// ([`Self::free_object_if_unreffed`], scope frees at call exit,
+    /// `ScriptVm::release_transient`) can never free an object the script may
+    /// have retained. REFFED does NOT block normal GC — an unreachable REFFED
+    /// object is still swept — it only disables *eager* frees. The
+    /// `*_unchecked` store variants skip the barrier on purpose: they are the
+    /// host fast path for building containers the host itself will release.
+    #[inline]
+    pub fn escape_value(&mut self, v: ScriptValue) {
+        if let Some(obj) = v.as_object() {
+            if self.objects.is_valid(obj) {
+                let tag = &mut self.objects[obj].tag;
+                if tag.is_alloced() {
+                    tag.set_reffed();
+                }
+            }
+        }
+    }
+
+    /// Diagnostic/test accessor for the escape barrier.
+    pub fn is_object_reffed(&self, obj: ScriptObject) -> bool {
+        self.objects.is_valid(obj) && self.objects[obj].tag.is_reffed()
+    }
+
+    /// Live (allocated, non-free) object slot count — the flat-heap metric
+    /// for host transient tests.
+    pub fn live_object_len(&self) -> usize {
+        self.objects.len() - self.objects_free.len()
+    }
+
+    /// Free a host-transient value now if it never escaped into script
+    /// structures (see [`Self::escape_value`]). Safe by construction: a value
+    /// the script retained is REFFED and this is a no-op (normal GC collects
+    /// it when it actually dies). Non-object values are ignored.
+    pub fn free_value_if_unreffed(&mut self, v: ScriptValue) {
+        if let Some(obj) = v.as_object() {
+            self.free_object_if_unreffed(obj);
+        }
     }
 
     pub fn free_object_if_unreffed(&mut self, ptr: ScriptObject) {

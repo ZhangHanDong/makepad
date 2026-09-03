@@ -20,22 +20,33 @@ script_mod! {
         ..mod.draw.DrawQuad // splat in draw quad
     }
 
+    /** The minimal slider: a flat two-band track with a value fill and a hover-grown handle. */
     mod.widgets.SliderMinimal = set_type_default() do mod.widgets.SliderBase{
+        /** lowest value the slider reports */
         min: 0.0
+        /** highest value the slider reports */
         max: 1.0
+        /** value quantization; 0 is continuous 0..1 step 0.01 */
         step: 0.0
         label_align: Align{x: 0., y: 0.}
         margin: theme.mspace_1{top: theme.space_2}
+        /** decimals shown in the value field 0..6 step 1 */
         precision: 2.
         height: 25
         hover_actions_enabled: false
 
+        /** The minimal track material: a shadow band, a highlight band and the value fill. */
         draw_bg +: {
+            /** pointer-hover mix; also grows the handle 0..1 step 0.01 */
             hover: instance(0.0)
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** dragging mix 0..1 step 0.01 */
             drag: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
 
+            /** track band thickness in pixels 0..4 step 0.5 */
             border_size: uniform(theme.beveling)
 
             color: uniform(theme.color_inset_1)
@@ -62,9 +73,12 @@ script_mod! {
             border_color_2_drag: uniform(theme.color_bevel_outset_2)
             border_color_2_disabled: uniform(theme.color_bevel_outset_2_disabled)
 
+            /** track top offset, leaving room for the label in pixels 0..40 step 1 */
             offset_y: uniform(20.)
+            /** handle width at full hover in pixels 0..40 step 1 */
             handle_size: uniform(20.)
 
+            /** the filled-amount color, left of the handle */
             val_color: uniform(theme.color_val)
             val_color_hover: uniform(theme.color_val_hover)
             val_color_focus: uniform(theme.color_val_focus)
@@ -138,7 +152,7 @@ script_mod! {
                     handle_bg_x - handle_sz * 0.5
                     self.offset_y
                     handle_sz
-                    slider_height * 2.
+                    slider_height * /** handle height scale 1..3 step 0.1 */ 2.
                 )
 
                 sdf.fill_keep(
@@ -152,11 +166,17 @@ script_mod! {
             }
         }
 
+        /** The slider label ink, state-mixed with the track. */
         draw_text +: {
+            /** pointer-hover mix 0..1 step 0.01 */
             hover: instance(0.0)
+            /** keyboard-focus mix 0..1 step 0.01 */
             focus: instance(0.0)
+            /** placeholder-showing mix 0..1 step 0.01 */
             empty: instance(0.0)
+            /** dragging mix 0..1 step 0.01 */
             drag: instance(0.0)
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
 
             color: theme.color_label_outer
@@ -333,17 +353,25 @@ script_mod! {
         }
     }
 
+    /** The flat slider: a boxed track with a centre ridge, a value line and a drag handle. */
     mod.widgets.SliderFlat = mod.widgets.SliderMinimal{
         height: 36
 
+        /** The slider face: an inset SDF box with a ridge, a value line and a handle box. */
         draw_bg +: {
+            /** disabled mix 0..1 step 0.01 */
             disabled: instance(0.0)
 
+            /** bevel border thickness in pixels 0..4 step 0.5 */
             border_size: uniform(theme.beveling)
+            /** corner rounding radius 0..24 step 0.5 */
             border_radius: uniform(theme.corner_radius)
+            /** bevel gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_border_horizontal: uniform(0.0)
+            /** fill gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_fill_horizontal: uniform(0.0)
 
+            /** dither the gradient fill to hide banding 0..1 step 1 */
             color_dither: uniform(1.0)
 
             color: uniform(theme.color_inset)
@@ -382,6 +410,7 @@ script_mod! {
             border_color_2_drag: uniform(theme.color_bevel_inset_2_drag)
             border_color_2_disabled: uniform(theme.color_bevel_inset_2_disabled)
 
+            /** value line inset from the track edge in pixels 0..20 step 0.5 */
             val_padding: uniform(5.)
 
             val_color: uniform(theme.color_val)
@@ -390,14 +419,16 @@ script_mod! {
             val_color_drag: uniform(theme.color_val_drag)
             val_color_disabled: uniform(theme.color_val_disabled)
 
+            /** handle width in pixels 4..60 step 1 */
             handle_size: uniform(20.)
+            /** draw the value line from the track centre instead of the left 0..1 step 1 */
             bipolar: uniform(0.0)
 
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 let handle_sz = self.handle_size
 
-                let offset_px = vec2(0., 20.)
+                let offset_px = vec2(0., /** label reserve above track 0..40 step 1 */ 20.)
 
                 let offset_uv = vec2(
                     offset_px.x / self.rect_size.x
@@ -445,7 +476,7 @@ script_mod! {
                 let pos_y_adj = self.pos.y - offset_uv.y
 
                 if self.color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gfx = self.pos.x * scale_factor_fill.x - border_sz_uv.x * 2. + dither
                     let gfy = pos_y_adj * scale_factor_fill.y - border_sz_uv.y * 2. + dither
                     let gradient_fill = vec2(gfx, gfy)
@@ -471,7 +502,7 @@ script_mod! {
                 let mut border_color_2_disabled = self.border_color_disabled
 
                 if self.border_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gbx = self.pos.x * scale_factor_border.x + dither
                     let gby = pos_y_adj * scale_factor_border.y + dither
                     let gradient_border = vec2(gbx, gby)
@@ -501,7 +532,7 @@ script_mod! {
                 let mut handle_stroke_disabled = self.border_color_disabled
 
                 if self.handle_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gfx = self.pos.x * scale_factor_fill.x - border_sz_uv.x * 2. + dither
                     let gfy = pos_y_adj * scale_factor_fill.y - border_sz_uv.y * 2. + dither
                     let gradient_fill = vec2(gfx, gfy)
@@ -514,7 +545,7 @@ script_mod! {
                 }
 
                 if self.border_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gbx = self.pos.x * scale_factor_border.x + dither
                     let gby = pos_y_adj * scale_factor_border.y + dither
                     let gradient_border = vec2(gbx, gby)
@@ -548,7 +579,7 @@ script_mod! {
                 sdf.stroke(stroke, self.border_size)
 
                 // Ridge
-                let offset_sides = self.border_size + 6.
+                let offset_sides = self.border_size + /** track side inset 0..20 step 0.5 */ 6.
                 sdf.rect(
                     self.border_size + offset_sides
                     offset_px.y + (self.rect_size.y - offset_px.y) * 0.5 - self.border_size - 0.5
@@ -596,7 +627,7 @@ script_mod! {
                 // Handle
                 let ctrl_height = self.rect_size.y - offset_px.y
                 let handle_x = self.slide_pos * (self.rect_size.x - handle_sz - offset_sides) - 3
-                let handle_padding = 1.5
+                let handle_padding = /** handle vertical inset 0..6 step 0.5 */ 1.5
                 sdf.box(
                     handle_x + offset_sides + self.border_size
                     offset_px.y + self.border_size + handle_padding
@@ -623,6 +654,7 @@ script_mod! {
         }
     }
 
+    /** The standard slider: the flat face plus the theme's inset bevel and handle gradient. */
     mod.widgets.Slider = mod.widgets.SliderFlat{
         draw_bg +: {
             handle_color: theme.color_handle_1
@@ -662,26 +694,35 @@ script_mod! {
         }
     }
 
+    /** The round slider: a label column beside a pill track with a capsule value fill. */
     mod.widgets.SliderRoundFlat = mod.widgets.SliderMinimal{
         height: 18.
         margin: theme.mspace_1{top: theme.space_2}
 
+        /** The pill track material: a rounded box with a capped value bar and a dot handle. */
         draw_bg +: {
             hover: instance(0.0)
             focus: instance(0.0)
             drag: instance(0.0)
             instance_val: instance(0.0)
 
+            /** label column width, left of the track, in pixels 0..200 step 1 */
             label_size: 75.
 
+            /** bevel gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_border_horizontal: uniform(0.0)
+            /** fill gradient axis: 0 vertical, 1 horizontal 0..1 step 1 */
             gradient_fill_horizontal: uniform(0.0)
 
+            /** exponent biasing the fill gradient along the track 1..20 step 0.5 */
             val_heat: uniform(10.)
 
+            /** bevel border thickness in pixels 0..4 step 0.5 */
             border_size: uniform(theme.beveling)
+            /** corner rounding radius; the pill wants a large one 0..24 step 0.5 */
             border_radius: uniform(theme.corner_radius * 2.)
 
+            /** dither the gradient fill to hide banding 0..1 step 1 */
             color_dither: uniform(1.0)
 
             color: uniform(theme.color_inset)
@@ -708,6 +749,7 @@ script_mod! {
             border_color_2_disabled: uniform(theme.color_bevel_inset_2_disabled)
             border_color_2_drag: uniform(theme.color_bevel_inset_2_drag)
 
+            /** value bar inset from the track edge in pixels 0..20 step 0.5 */
             val_padding: uniform(2.5)
 
             val_color: uniform(theme.color_val)
@@ -748,7 +790,7 @@ script_mod! {
 
                 let label_sz_uv = self.label_size / self.rect_size.x
 
-                let handle_size = 4.0
+                let handle_size = /** round handle radius 1..20 step 0.5 */ 4.0
                 let padding = self.val_padding
 
                 let track_length_bg = self.rect_size.x - self.label_size
@@ -764,7 +806,7 @@ script_mod! {
                 let mut color_fill_disabled = self.color_disabled
 
                 if self.color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let pos_x_heat = pow(self.pos.x, self.val_heat) - label_sz_uv
                     let gfx = pos_x_heat * scale_factor_fill.x - border_sz_uv.x * 2. + dither
                     let gfy = self.pos.y * scale_factor_fill.y - border_sz_uv.y * 2. + dither
@@ -785,7 +827,7 @@ script_mod! {
                 let mut color_stroke_disabled = self.border_color_disabled
 
                 if self.border_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let gbx = self.pos.x + dither
                     let gby = self.pos.y + dither
                     let gradient_border = vec2(gbx, gby)
@@ -805,7 +847,7 @@ script_mod! {
                 let mut val_fill_disabled = self.val_color_disabled
 
                 if self.val_color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let pos_x_heat = pow(self.pos.x, self.val_heat) - label_sz_uv
                     let dir = pos_x_heat * scale_factor_fill.x - border_sz_uv.x * 2. + dither
                     val_fill = mix(self.val_color, self.val_color_2, dir)
@@ -854,7 +896,7 @@ script_mod! {
                     padding + self.border_size
                     val_target_x
                     self.rect_size.y - padding_full - self.border_size * 2.
-                    1.
+                    /** value bar corner radius 0..8 step 0.5 */ 1.
                 )
 
                 sdf.circle(
@@ -944,6 +986,7 @@ script_mod! {
 
     }
 
+    /** The standard round slider: the pill track plus the theme's inset bevel. */
     mod.widgets.SliderRound = mod.widgets.SliderRoundFlat{
         draw_bg +: {
             border_color: theme.color_bevel_inset_1
@@ -985,6 +1028,7 @@ script_mod! {
         }
     }
 
+    /** The rotary knob: the slider value drawn as an arc with the label below. */
     mod.widgets.RotaryFlat = mod.widgets.SliderMinimal{
         height: 95.
         width: 65.
@@ -998,17 +1042,23 @@ script_mod! {
         text_input: TextInput{
             width: Fit
         }
+        /** The knob material: an arc track with a bottom gap and a bevelled rim. */
         draw_bg +: {
             hover: instance(0.0)
             focus: instance(0.0)
             drag: instance(0.0)
 
+            /** opening at the bottom of the arc in degrees 0..180 step 5 */
             gap: uniform(90.)
+            /** rim bevel thickness in pixels 0..4 step 0.5 */
             border_size: uniform(theme.beveling)
 
+            /** arc thickness in pixels 1..30 step 0.5 */
             val_size: uniform(10.)
+            /** inner arc inset in pixels 0..20 step 0.5 */
             val_padding: uniform(5.)
 
+            /** dither the gradient fill to hide banding 0..1 step 1 */
             color_dither: uniform(1.)
 
             color: uniform(theme.color_inset)
@@ -1064,11 +1114,11 @@ script_mod! {
                 let outer_end = start + val_length
                 let val_end = start + val_length * self.slide_pos
 
-                let label_offset_px = 20.
+                let label_offset_px = /** label reserve below knob 0..40 step 1 */ 20.
                 let label_offset_uv = self.rect_size.y
-                let scale_px = min(self.rect_size.x, self.rect_size.y - 2. - theme.beveling)
+                let scale_px = min(self.rect_size.x, self.rect_size.y - /** knob fit inset 0..8 step 0.5 */ 2. - theme.beveling)
 
-                let scale_factor = scale_px * 0.02
+                let scale_factor = scale_px * /** knob metric scale per px 0.005..0.05 step 0.002 */ 0.02
 
                 let outer_width = self.val_size * scale_factor
                 let radius_px = (scale_px - outer_width) * 0.5
@@ -1114,17 +1164,17 @@ script_mod! {
                 let mut color_fill_disabled = self.color_disabled
 
                 let mut gradient_y = self.pos.y
-                let mut gradient_down = pow(self.pos.y, 2.)
-                let mut gradient_up = pow(self.pos.y, 0.5)
+                let mut gradient_down = pow(self.pos.y, /** bevel shade curve 0.5..4 step 0.1 */ 2.)
+                let mut gradient_up = pow(self.pos.y, /** rim shade curve 0.1..2 step 0.05 */ 0.5)
 
                 if self.color_2.x > -0.5 {
-                    let dither = Math.random_2d(self.pos.xy) * 0.04 * self.color_dither
+                    let dither = Math.random_2d(self.pos.xy) * /** dither grain 0..0.5 step 0.01 */ 0.04 * self.color_dither
                     let pos_y_adj = self.pos.y - offset_uv.y
                     let gbx = self.pos.x * scale_border.x + dither
                     let gby = pos_y_adj * scale_border.y + dither
                     gradient_y = gby
-                    gradient_down = pow(gby, 2.)
-                    gradient_up = pow(gby, 0.5)
+                    gradient_down = pow(gby, /** bevel shade curve 0.5..4 step 0.1 */ 2.)
+                    gradient_up = pow(gby, /** rim shade curve 0.1..2 step 0.05 */ 0.5)
                     color_fill = mix(self.color, self.color_2, gby)
                     color_fill_hover = mix(self.color_hover, self.color_2_hover, gby)
                     color_fill_focus = mix(self.color_focus, self.color_2_focus, gby)
@@ -1185,7 +1235,7 @@ script_mod! {
                     radius_px
                     start
                     outer_end
-                    border_sz * 4.
+                    border_sz * /** rim shadow width scale 1..8 step 0.5 */ 4.
                 )
 
                 sdf.fill(
@@ -1202,7 +1252,7 @@ script_mod! {
                     radius_px
                     start
                     outer_end
-                    border_sz * 4.
+                    border_sz * /** track ridge width scale 1..8 step 0.5 */ 4.
                 )
 
                 sdf.fill(
@@ -1290,6 +1340,7 @@ script_mod! {
         }
     }
 
+    /** The standard rotary: the flat knob plus the theme's inset bevel and value gradient. */
     mod.widgets.Rotary = mod.widgets.RotaryFlat{
         draw_bg +: {
             border_color: theme.color_bevel_inset_1
@@ -1322,6 +1373,29 @@ script_mod! {
         }
     }
 
+}
+
+/// Value delta for one scroll event: notch count (Windows wheels send 120
+/// units per notch; trackpads send smaller deltas that accumulate over the
+/// gesture) times the step fraction, scaled by the modifier ladder —
+/// Shift fine (x0.2), plain (x1), Ctrl coarse (x4), Ctrl+Shift (x10).
+/// Scroll up (negative y) raises the value; a zero step disables wheel input.
+pub(crate) fn wheel_value_delta(
+    scroll: Vec2d,
+    modifiers: &KeyModifiers,
+    scroll_step: f64,
+) -> f64 {
+    if scroll_step == 0.0 {
+        return 0.0;
+    }
+    let axis = if scroll.y != 0.0 { -scroll.y } else { -scroll.x };
+    let ladder = match (modifiers.control, modifiers.shift) {
+        (true, true) => 10.0,
+        (true, false) => 4.0,
+        (false, true) => 0.2,
+        (false, false) => 1.0,
+    };
+    (axis / 120.0) * scroll_step * ladder
 }
 
 #[derive(Copy, Clone, Debug, Script, ScriptHook)]
@@ -1388,6 +1462,11 @@ pub struct Slider {
     step: f64,
     #[live]
     default: f64,
+
+    /// Fraction of the value range one scroll-wheel notch moves while the
+    /// pointer hovers this slider. 0.0 (the default) disables wheel input.
+    #[live]
+    scroll_step: f64,
 
     #[live]
     bind: String,
@@ -1497,6 +1576,13 @@ impl Slider {
             self.update_text_input(cx);
         }
     }
+
+    /// Snap back to the DSL `default:` value, as a title-click reset does.
+    pub fn reset_to_default(&mut self, cx: &mut Cx) {
+        self.set_internal(self.default);
+        self.update_text_input(cx);
+        self.draw_bg.redraw(cx);
+    }
 }
 
 impl Widget for Slider {
@@ -1588,6 +1674,19 @@ impl Widget for Slider {
             }
             Hit::FingerHoverOver(_) => {
                 cx.set_cursor(MouseCursor::Grab);
+            }
+            Hit::FingerScroll(e) => {
+                if self.scroll_step > 0.0 && !self.animator_in_state(cx, ids!(disabled.on)) {
+                    let delta = wheel_value_delta(e.scroll, &e.modifiers, self.scroll_step);
+                    if delta != 0.0 && self.dragging.is_none() {
+                        self.relative_value = (self.relative_value + delta).max(0.0).min(1.0);
+                        self.set_internal(self.to_external());
+                        self.draw_bg.redraw(cx);
+                        self.update_text_input(cx);
+                        cx.widget_action(uid, SliderAction::Slide(self.to_external()));
+                        cx.widget_action(uid, SliderAction::EndSlide(self.to_external()));
+                    }
+                }
             }
             Hit::FingerDown(FingerDownEvent {
                 // abs,
@@ -1689,6 +1788,14 @@ impl SliderRef {
         }
     }
 
+    /// Reset to the DSL default and return the value now in effect, so the
+    /// caller can push it into whatever the slider is bound to.
+    pub fn reset_to_default(&self, cx: &mut Cx) -> Option<f64> {
+        let mut inner = self.borrow_mut()?;
+        inner.reset_to_default(cx);
+        Some(inner.to_external())
+    }
+
     pub fn slided(&self, actions: &Actions) -> Option<f64> {
         if let Some(item) = actions.find_widget_action(self.widget_uid()) {
             match item.cast() {
@@ -1729,5 +1836,43 @@ impl SliderRef {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    fn mods(control: bool, shift: bool) -> KeyModifiers {
+        KeyModifiers { control, shift, alt: false, logo: false }
+    }
+
+    #[test]
+    fn wheel_ladder() {
+        // One Windows notch is scroll.y = -120 (wheel up) -> value moves UP.
+        let up = Vec2d { x: 0.0, y: -120.0 };
+        assert!((wheel_value_delta(up, &mods(false, false), 0.025) - 0.025).abs() < 1e-12);
+        assert!((wheel_value_delta(up, &mods(false, true), 0.025) - 0.005).abs() < 1e-12);
+        assert!((wheel_value_delta(up, &mods(true, false), 0.025) - 0.10).abs() < 1e-12);
+        assert!((wheel_value_delta(up, &mods(true, true), 0.025) - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn wheel_down_decreases() {
+        let down = Vec2d { x: 0.0, y: 120.0 };
+        assert!((wheel_value_delta(down, &mods(false, false), 0.025) + 0.025).abs() < 1e-12);
+    }
+
+    #[test]
+    fn horizontal_axis_fallback() {
+        // Tilt wheels / horizontal trackpad gestures land on x when y is 0.
+        let tilt = Vec2d { x: -120.0, y: 0.0 };
+        assert!((wheel_value_delta(tilt, &mods(false, false), 0.025) - 0.025).abs() < 1e-12);
+    }
+
+    #[test]
+    fn zero_step_disables() {
+        let up = Vec2d { x: 0.0, y: -120.0 };
+        assert_eq!(wheel_value_delta(up, &mods(true, true), 0.0), 0.0);
     }
 }

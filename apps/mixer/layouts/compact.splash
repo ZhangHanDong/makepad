@@ -1,0 +1,234 @@
+// COMPACT surface layout (splash) — the proof that the layout seam is real.
+//
+// Same slot contract and same injected `mp` palette as lr_mix.splash (see its
+// header), different surface: name plate on top, big fader + meter, dB
+// readout, mute. No EQ/dyn thumbnails, no gain/threshold rows, no pan. The
+// host binds whatever slots and children a layout chooses to show —
+// everything else simply isn't displayed, and nothing a layout writes can
+// name an OSC address.
+
+let ValueLabel = Label{
+    width: Fill
+    align: Align{x: 0.5}
+    text: "—"
+    draw_text.color: mp.fg_bright
+    draw_text.text_style: theme.font_code{font_size: 10.0}
+}
+
+let FaderSlider = Slider{
+    axis: Vertical
+    width: 40
+    height: Fill
+    min: 0.0
+    max: 1.0
+    step: 0.0
+    text: ""
+    text_input: TextInput{width: 0, height: 0}
+    draw_bg +: {
+        body: uniform(mp.bg_dark)
+        slot: uniform(mp.muted)
+        tick: uniform(mp.muted)
+        cap: uniform(mp.fg_dim)
+        cap_edge: uniform(mp.accent)
+        cap_line: uniform(mp.fg_bright)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            sdf.rect(0.0, 0.0, w, h)
+            sdf.fill(self.body)
+            let rel = self.pos.y
+            let grid = abs(fract(rel * 8.0 + 0.5) - 0.5) * (h / 8.0)
+            let mark = 1.0 - smoothstep(0.4, 0.9, grid)
+            let px = self.pos.x * w
+            if px < 7.0 {
+                sdf.rect(0.0, rel * h - 0.5, 6.0, 1.0)
+                sdf.fill(self.tick * mark)
+            }
+            sdf.rect(w * 0.5 - 1.0, 3.0, 2.0, h - 6.0)
+            sdf.fill(self.slot)
+            let cap_h = 26.0
+            let cy = (1.0 - self.slide_pos) * (h - cap_h)
+            sdf.rect(4.5, cy + 0.5, w - 9.0, cap_h - 1.0)
+            sdf.fill_keep(self.cap)
+            sdf.stroke(self.cap_edge, 1.0)
+            sdf.rect(4.0, cy + cap_h * 0.5 - 1.2, w - 8.0, 2.4)
+            sdf.fill(self.cap_line)
+            return sdf.result
+        }
+    }
+}
+
+let MeterBar = SolidView{
+    width: 14
+    height: Fill
+    draw_bg +: {
+        gutter: uniform(mp.bg)
+        trough: uniform(mp.bg_dark)
+        low: uniform(mp.green)
+        mid: uniform(mp.yellow)
+        hot: uniform(mp.red)
+        tick: uniform(mp.fg_bright)
+        level_db: instance(-90.0)
+        peak_db: instance(-90.0)
+        pixel: fn() {
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            let norm = clamp((self.level_db + 60.0) / 60.0, 0.0, 1.0)
+            let peakn = clamp((self.peak_db + 60.0) / 60.0, 0.0, 1.0)
+            let frac = 1.0 - self.pos.y
+            let ladder = self.low.mix(self.mid, smoothstep(0.70, 0.88, frac))
+                .mix(self.hot, smoothstep(0.88, 0.97, frac))
+            let seg = 0.88 + 0.12 * smoothstep(0.35, 0.5, abs(fract(frac * 30.0) - 0.5))
+            var col = self.trough.mix(self.hot, 0.16 * step(0.955, frac))
+            if frac < norm {
+                col = self.trough.mix(ladder, seg)
+            }
+            if abs(frac - peakn) < 1.5 / h && peakn > 0.01 {
+                col = self.tick
+            }
+            let x = self.pos.x * w
+            if x < 1.0 || x > w - 1.0 {
+                col = self.gutter
+            }
+            return col
+        }
+    }
+}
+
+let MutePlate = SolidView{
+    width: Fill
+    height: 26
+    cursor: MouseCursor.Hand
+    new_batch: true
+    align: Align{x: 0.5, y: 0.5}
+    draw_bg +: {
+        idle: uniform(mp.bg_light)
+        idle_edge: uniform(mp.muted)
+        lit: uniform(mp.red)
+        deep: uniform(mp.bg_dark)
+        muted: instance(0.0)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.5, 0.5, self.rect_size.x - 1.0, self.rect_size.y - 1.0)
+            let fill = self.idle.mix(self.lit.mix(self.deep, 0.5), self.muted)
+            // fill_keep, not fill: `fill` clears the shape, so a stroke after
+            // it draws nothing at all.
+            sdf.fill_keep(fill)
+            sdf.stroke(self.idle_edge.mix(self.lit, self.muted), 1.0)
+            return sdf.result
+        }
+    }
+    Label{
+        text: "MUTE"
+        draw_text.color: mp.fg_bright
+        draw_text.text_style: theme.font_code{font_size: 8.5}
+    }
+}
+
+let NamePlate = SolidView{
+    width: Fill
+    height: 28
+    cursor: MouseCursor.Hand
+    new_batch: true
+    align: Align{x: 0.5, y: 0.5}
+    draw_bg +: {
+        idle: uniform(mp.bg_light)
+        // The muted key, until the console reports its scribble colour.
+        plate_rgb: instance(vec3(0.254, 0.282, 0.408))
+        plate_filled: instance(0.0)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.5, 0.5, self.rect_size.x - 1.0, self.rect_size.y - 1.0)
+            sdf.fill_keep(self.idle.mix(vec4(self.plate_rgb, 1.0), self.plate_filled))
+            sdf.stroke(vec4(self.plate_rgb, 1.0), 1.0)
+            return sdf.result
+        }
+    }
+    name_lbl := Label{
+        text: "—"
+        draw_text.color: mp.fg
+        draw_text.text_style: theme.font_code{font_size: 9.0}
+    }
+}
+
+let Strip = View{
+    width: 96
+    height: Fill
+    flow: Down
+    spacing: 5
+    padding: Inset{top: 6, bottom: 6, left: 8, right: 8}
+    show_bg: true
+    new_batch: true
+    draw_bg +: {
+        fill: uniform(mp.bg)
+        edge: uniform(mp.muted)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.0, 0.0, self.rect_size.x, self.rect_size.y)
+            sdf.fill(self.fill)
+            sdf.rect(self.rect_size.x - 1.0, 0.0, 1.0, self.rect_size.y)
+            sdf.fill(self.edge)
+            return sdf.result
+        }
+    }
+
+    name_plate := NamePlate{}
+    strip_lbl := Label{
+        width: Fill
+        align: Align{x: 0.5}
+        text: ""
+        draw_text.color: mp.fg_dim
+        draw_text.text_style: theme.font_code{font_size: 8.0}
+    }
+    fader_db := ValueLabel{}
+    fader_block := View{
+        width: Fill
+        height: Fill
+        flow: Right
+        spacing: 6
+        align: Align{x: 0.5}
+        fader := FaderSlider{}
+        meter := MeterBar{}
+    }
+    mute := MutePlate{}
+}
+
+View{
+    width: Fill
+    height: Fit
+    flow: Down
+    show_bg: true
+    new_batch: true
+    draw_bg.color: mp.bg_dark
+
+    surface_note := Label{
+        width: Fill
+        align: Align{x: 0.5}
+        text: ""
+        draw_text.color: mp.fg_dim
+        draw_text.text_style: theme.font_code{font_size: 8.0}
+    }
+    strip_row := View{
+        width: Fill
+        height: 600
+        flow: Right
+        spacing: 0
+        strip_0 := Strip{}
+        strip_1 := Strip{}
+        strip_2 := Strip{}
+        strip_3 := Strip{}
+        strip_4 := Strip{}
+        strip_5 := Strip{}
+        strip_6 := Strip{}
+        strip_7 := Strip{}
+        strip_8 := Strip{}
+        strip_9 := Strip{}
+        strip_10 := Strip{}
+        strip_11 := Strip{}
+        strip_12 := Strip{}
+        strip_13 := Strip{}
+        strip_14 := Strip{}
+        strip_15 := Strip{}
+    }
+}

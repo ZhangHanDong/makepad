@@ -3,10 +3,14 @@ use crate::{
     makepad_draw::*,
     view::View,
     widget::*,
-    widget_async::{CxSplashVmExt, SplashVmId, MAIN_SPLASH_VM_ID},
+    widget_async::{
+        CxSplashVmExt, SplashVmId, MAIN_SPLASH_VM_ID, WIDGET_SCRIPT_INSTRUCTION_LIMIT,
+    },
     widget_tree::CxWidgetExt,
 };
 
+/// Fork (ZhangHanDong/makepad): actions a Splash script raises toward its host
+/// through the injected `agent` module (`agent.notify(event_id, payload)`).
 #[derive(Clone, Debug, Default)]
 pub enum SplashAction {
     Notify {
@@ -17,6 +21,8 @@ pub enum SplashAction {
     None,
 }
 
+/// Registers the `agent` module (`agent.notify`) on a script VM. Called from
+/// `makepad_widgets::script_mod`, so every VM — main or isolate — has it.
 pub fn register_agent_module(vm: &mut ScriptVm) {
     let agent = vm.new_module(id!(agent));
     vm.add_method(
@@ -63,42 +69,74 @@ pub struct Splash {
     body: ArcStringMut,
     #[live]
     allow_net: bool,
+    /// The app's private storage directory — the root of its jailed `fs`
+    /// module (see splash_storage.rs). None (the default) = every storage
+    /// call errors, which is right for previews/validation-less contexts.
     #[rust]
-    eval_generation: u64,
-    #[rust]
-    tick_timer: Timer,
-    /// The unique_id used for the last full eval, so tick() runs in the same scope.
-    #[rust]
-    last_unique_id: usize,
-    /// This Splash's own VM, allocated on first eval (upstream isolation model).
+    sandbox_dir: Option<std::path::PathBuf>,
     #[rust]
     vm_id: SplashVmId,
-    /// Body text of the previous eval. Used to detect streaming extensions
-    /// (the new body forward-extends the old) so repeated set_text(full growing
-    /// text) reuses ONE vm body instead of a fresh generation per frame.
+    /// Index of this Splash's script body in its isolate's bodies list, cached
+    /// at eval time so host->script calls don't depend on re-deriving the
+    /// pointer-based ScriptMod identity (the struct could in principle move
+    /// between eval and a later call).
     #[rust]
-    last_eval_body: String,
+    body_id: Option<u16>,
+    /// Host-trusted identity carried on every `host.request` this isolate
+    /// makes (see splash_host.rs). None = requests arrive untagged, which a
+    /// policy-enforcing host treats as deniable — right for previews.
+    #[rust]
+    host_tag: Option<String>,
+    /// Granted-capability names `host.capabilities()` reports. Informational
+    /// for the script's UI; enforcement is the host's per-request decision.
+    #[rust]
+    host_caps: Vec<String>,
+    /// Whether this isolate's surface may raise user prompts (true for a
+    /// foreground app host, false for background surfaces like home-screen
+    /// widget tiles). Rides on every host.request as `may_prompt`.
+    #[rust(true)]
+    host_prompts: bool,
+    /// Whole-jail byte cap when the host has granted this app extra room.
+    /// None leaves the storage default.
+    #[rust]
+    storage_quota: Option<u64>,
+    /// What to call this script in error messages. Set by the host to the
+    /// mini-app's id; empty for previews and one-off evals.
+    ///
+    /// Script errors are logged as `{file}:{line}:{col} - {message}` with
+    /// nothing else to go on, and every Splash app used to report an empty
+    /// file — so an error from a generated app named neither the app nor a
+    /// usable line, and finding the culprit meant grepping every installed
+    /// script by hand.
+    #[rust]
+    debug_name: String,
+    /// Fork: 1s interval driving a top-level `fn tick()` when the script
+    /// defines one (canvas / aichat generated apps rely on this convention).
+    #[rust]
+    tick_timer: Timer,
 }
 
-/// Prefix for View-children mode: wraps code inside a View
-const SPLASH_PREFIX_VIEW: &str = "use mod.prelude.widgets.*View{height:Fit, ";
-/// Prefix for full-script mode: just imports, code must evaluate to a widget
-const SPLASH_PREFIX_SCRIPT: &str = "use mod.prelude.widgets.*\n";
-/// Net-enabled variants (allow_net: true) additionally import mod.net
-const SPLASH_PREFIX_VIEW_NET: &str = "use mod.prelude.widgets.*\nuse mod.net\nView{height:Fit, ";
-const SPLASH_PREFIX_SCRIPT_NET: &str = "use mod.prelude.widgets.*\nuse mod.net\n";
+// `let fs = mod.fs` puts the jailed storage module (splash_storage.rs) in
+// scope as a bare name — app scripts say `fs.read("/x")`, not `mod.fs.read`.
+// A script reassigning `fs` only sabotages its own binding; the jail itself
+// lives host-side.
+/// Lines the no-net prefix occupies, which is the amount every reported
+/// script line is ahead of the app's own file. Subtract it to get the line in
+/// the `.splash` source; net-enabled apps carry one extra line
+/// ([`SPLASH_NET_PREFIX_LINES`]).
+///
+/// It cannot be zero: the prefix would then have to share line 1 with the
+/// app's first line, and a generated app's first line is its `// name:`
+/// header — a comment, which would swallow the rest of the prefix.
+pub const SPLASH_PREFIX_LINES: u32 = 3;
+/// Line offset for net-enabled apps (their prefix adds `use mod.net`).
+pub const SPLASH_NET_PREFIX_LINES: u32 = 4;
+
+const SPLASH_PREFIX: &str =
+    "use mod.prelude.widgets.*\nlet fs = mod.fs\nlet host = mod.host\nView{height:Fit, ";
+const SPLASH_NET_PREFIX: &str =
+    "use mod.prelude.widgets.*\nuse mod.net\nlet fs = mod.fs\nlet host = mod.host\nView{height:Fit, ";
 const SPLASH_EVAL_INSTRUCTION_LIMIT: usize = 200_000;
-
-/// Detect whether Splash code is a full script (starts with `let`, `fn`,
-/// or a widget constructor like `View{`, `SolidView{`) vs View children
-/// (starts with properties like `flow:`, `width:`, or lowercase names).
-fn is_full_script(body: &str) -> bool {
-    let trimmed = body.trim_start();
-    // Only treat as full script if it starts with scripting keywords
-    // (let/fn/mod) — these can't appear inside a View{} property list.
-    // Uppercase widget names (View{, SolidView{, Label{) stay in View-children mode.
-    trimmed.starts_with("let ") || trimmed.starts_with("fn ") || trimmed.starts_with("mod.")
-}
 
 impl Splash {
     /// Stable identity for the streaming script body, based on pointer address.
@@ -106,250 +144,241 @@ impl Splash {
         self as *const Self as usize
     }
 
+    /// Names this script for error reporting — see [`Self::debug_name`].
+    pub fn set_debug_name(&mut self, name: &str) {
+        self.debug_name = name.to_string();
+    }
+
+    /// The body's identity within its isolate, carried in `ScriptMod`'s
+    /// `module_path`.
+    ///
+    /// It used to live in `line`, which the VM adds to a script's real line
+    /// when it reports an error (`ScriptCode::ip_to_loc`) — so every location
+    /// came out as `real_line + a_pointer_address`, i.e. numbers like
+    /// 1804943384. `module_path` is a free-form string nobody else reads for
+    /// these bodies, so identity and line no longer fight over one field.
+    fn body_key(&self) -> String {
+        format!("splash#{}", self.self_id())
+    }
+
+    /// The name a script error reports. Falls back to something searchable
+    /// rather than the empty string that made these untraceable.
+    ///
+    /// Errors read `splash:<name>:<line>:<col>`, where `<line>` is ahead of
+    /// the app's own file by [`SPLASH_PREFIX_LINES`].
+    fn source_label(&self) -> String {
+        if self.debug_name.is_empty() {
+            format!("splash:{}", self.self_id())
+        } else {
+            format!("splash:{}", self.debug_name)
+        }
+    }
+
     fn eval_body(&mut self, cx: &mut Cx) {
-        let body = self.body.as_ref().to_string();
+        let body = self.body.as_ref();
         if body.is_empty() {
             return;
         }
-
-        // Stop any previous tick timer
         cx.stop_timer(self.tick_timer);
 
-        // Allocate this Splash's own VM on first eval so streaming
-        // (stream_append) evaluates in an isolated scope.
+
         if self.vm_id == MAIN_SPLASH_VM_ID {
             self.vm_id = cx.alloc_splash_vm_with_network(self.allow_net);
         }
+        // (Re)bind this isolate's storage jail and host-bridge identity.
+        // Keyed by heap so the script can neither read nor retarget them.
+        let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+        crate::splash_storage::set_root_for_heap(heap_key, self.sandbox_dir.clone());
+        crate::splash_host::set_tag_for_heap(heap_key, self.host_tag.clone());
+        crate::splash_host::set_caps_for_heap(heap_key, self.host_caps.clone());
+        crate::splash_host::set_prompts_for_heap(heap_key, self.host_prompts);
+        crate::splash_storage::set_quota_for_heap(heap_key, self.storage_quota);
 
-        // Only start a NEW vm body (bump the generation) on a genuine content
-        // replacement — NOT a streaming extension of the previous body. aichat
-        // streams runsplash by calling set_text() with the full, growing block
-        // string every frame; without this each frame got its own generation,
-        // accumulating dozens of stale bodies whose widgets/closures lingered
-        // (clicking a button then hit a stale generation -> "widget not found in
-        // tree" -> the app vanished). A forward-extension reuses the same
-        // unique_id so eval_with_append_source does its incremental checkpoint
-        // parse (the same path stream_append uses). Compare the raw body (not the
-        // prefixed code) so an is_full_script flip can't cause a false miss.
-        let is_extension =
-            !self.last_eval_body.is_empty() && body.starts_with(self.last_eval_body.as_str());
-        if !is_extension {
-            self.eval_generation += 1;
-        }
-        self.last_eval_body = body.clone();
-        let unique_id = self.self_id().wrapping_add(self.eval_generation as usize);
-        self.last_unique_id = unique_id;
-
-        // Choose prefix based on code style (fork) x network access (upstream)
-        let prefix = match (is_full_script(&body), self.allow_net) {
-            (true, false) => SPLASH_PREFIX_SCRIPT,
-            (true, true) => SPLASH_PREFIX_SCRIPT_NET,
-            (false, false) => SPLASH_PREFIX_VIEW,
-            (false, true) => SPLASH_PREFIX_VIEW_NET,
+        let body_key = self.body_key();
+        // Full code string: prefix + body (no closing - parser auto-closes)
+        let prefix = if self.allow_net {
+            SPLASH_NET_PREFIX
+        } else {
+            SPLASH_PREFIX
         };
         let code = format!("{}{}", prefix, body);
 
+        // Identity is stable (same module_path each call) AND the location
+        // fields are left alone, so `ip_to_loc` reports the script's own line
+        // instead of one offset by a pointer address.
         let script_mod = ScriptMod {
             cargo_manifest_path: String::new(),
-            module_path: String::new(),
-            file: String::new(),
-            line: unique_id,
+            module_path: self.body_key(),
+            file: self.source_label(),
+            line: 0,
             column: 0,
             code: String::new(),
             values: vec![],
         };
 
-        log!(
-            "[SPLASH] eval_body: {} bytes, prefix={}, uid={}, gen={}, ext={}",
-            body.len(),
-            if is_full_script(&body) {
-                "script"
-            } else {
-                "view"
-            },
-            unique_id,
-            self.eval_generation,
-            is_extension
-        );
-
-        // Evaluate in THIS Splash's own isolated vm and inject a `ui` global
-        // rooted at this Splash (self.uid). That scopes `ui.<id>` to this
-        // Splash's subtree (find_flood), so ids like `display` don't collide
-        // with other Splash apps in the same chat. Then register the widgets
-        // under this vm and mark the tree dirty so lookups can resolve them.
         let vm_id = self.vm_id;
-        let self_uid = self.uid;
-        let new_view = cx.with_script_vm_id(vm_id, |vm| {
-            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
-            let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
-                vm.eval_with_append_source(script_mod, &code, NIL.into())
+        let mut new_view = None;
+        crate::widget_async::contain_isolate_panic("app source eval", || {
+            new_view = cx.with_script_vm_id(vm_id, |vm| {
+                let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
+                    vm.eval_with_append_source(script_mod, &code, NIL.into())
+                });
+                if !value.is_err() && !value.is_nil() {
+                    Some(View::script_from_value(vm, value))
+                } else {
+                    // A body that fails to evaluate leaves the Splash showing
+                    // its previous view — or nothing at all. Say so: a silent
+                    // blank widget is the hardest bug in this file to find.
+                    if value.is_err() {
+                        for e in vm.take_errors() {
+                            log!("splash: {}", e);
+                        }
+                    } else {
+                        log!("splash: script body evaluated to nothing (no root view)");
+                    }
+                    None
+                }
             });
-            if !value.is_err() && !value.is_nil() {
-                Some(View::script_from_value(vm, value))
-            } else {
-                None
-            }
         });
 
-        if let Some(view) = new_view {
+        if let Some(mut view) = new_view {
+            // The HOST owns this widget's slot in its tree: `Splash{width: Fill
+            // height: Fill}` is a promise about the space the Splash occupies,
+            // and rebuilding the body from script must not silently take it
+            // away. Without this the freshly-minted view arrives with the
+            // Splash type-default walk (Fill/Fit) and a host asking for a
+            // full-height Splash gets a zero-height one that draws nothing.
+            view.walk = self.view.walk;
+            // Cache the body index for host->script calls (call_script_fn etc).
+            self.body_id = cx.with_script_vm_id(vm_id, |vm| {
+                let bodies = vm.bx.code.bodies.borrow();
+                bodies.iter().position(|body| match &body.source {
+                    ScriptSource::Mod(m) => m.module_path == body_key,
+                    _ => false,
+                })
+            })
+            .map(|i| i as u16);
             self.view = view;
-            self.view.set_visible(cx, true);
-            crate::widget_async::inject_splash_ui_handle(cx, self.vm_id, self.view.widget_uid());
+            // Make `ui` a global in this splash's VM so helper `fn`s inside the block can use
+            // `ui.<id>.set_text(...)`, not just inline handlers. It points at the Splash widget
+            // itself (not the wrapper view, which never becomes a widget-tree node since
+            // `children()` forwards through it), so confined subtree lookups resolve.
+            crate::widget_async::inject_splash_ui_handle(cx, self.vm_id, self.uid);
             cx.widget_tree_mark_dirty(self.uid);
         }
 
-        // Start the 1s tick timer only if `tick` actually resolves as a
-        // callable function in the eval'd scope. The old string test
-        // body.contains("fn tick(") is NOT equivalent: it could start a timer
-        // for a `tick` that isn't callable at top level (e.g. nested in a
-        // View{}/widget block, or view-wrapped because is_full_script picked
-        // view mode), producing a misleading `variable tick not found` every
-        // second with no working timer.
-        let tick_found = self.resolves_fn(cx, id!(tick));
-        if tick_found {
+        // Fork: auto-run a top-level `fn tick()` once per second, if defined.
+        if self.script_defines_fn(cx, id!(tick)) {
             self.tick_timer = cx.start_interval(1.0);
         }
-        log!(
-            "[SPLASH] eval done: uid={}, gen={}, tick_found={}",
-            unique_id,
-            self.eval_generation,
-            tick_found
-        );
     }
 
-    /// Whether `name` resolves to a non-nil, non-error value (a callable
-    /// function) at the scope of the current (last-eval'd) body. Mirrors the
-    /// lookup `call_fn` performs, so the tick timer only runs when `tick` is
-    /// actually invokable.
-    fn resolves_fn(&mut self, cx: &mut Cx, name: LiveId) -> bool {
-        let unique_id = self.last_unique_id;
-        if unique_id == 0 {
-            return false;
+    /// Tears down this Splash's isolate (if any), returning it to the empty
+    /// state a freshly-created Splash has. The isolate-minted view holds refs
+    /// into the isolate heap, so it is REPLACED with a fresh empty view built
+    /// in the main VM BEFORE the isolate is reclaimed; the reclamation then
+    /// stops the isolate's timers and drops its storage-jail binding. A later
+    /// non-empty `set_text` allocates a fresh isolate as usual.
+    fn stop(&mut self, cx: &mut Cx) {
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            return; // nothing running
         }
-        cx.with_script_vm_id(self.vm_id, |vm| {
-            let scope_obj = {
-                let bodies = vm.bx.code.bodies.borrow();
-                let mut found = None;
-                for body in bodies.iter() {
-                    if let ScriptSource::Mod(m) = &body.source {
-                        if m.line == unique_id {
-                            found = Some(body.scope.as_object());
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-            if let Some(scope) = scope_obj {
-                let f = vm.bx.heap.scope_value(scope, name, vm.trap());
-                !f.is_nil() && !f.is_err()
-            } else {
-                false
-            }
-        })
+        cx.stop_timer(self.tick_timer);
+        self.view = cx.with_vm(|vm| View::script_from_value(vm, NIL.into()));
+        self.body_id = None;
+        crate::widget_async::mark_splash_isolate_dead(self.vm_id);
+        self.vm_id = MAIN_SPLASH_VM_ID;
+        // Reclaim now (Cx is in hand and nothing runs in the isolate) so the
+        // timers stop immediately rather than lingering to the next pump.
+        crate::widget_async::gc_dead_splash_isolates(cx);
+        cx.widget_tree_mark_dirty(self.uid);
     }
+}
 
-    /// Call a named function defined in the Splash code's scope.
-    pub fn call_fn(&mut self, cx: &mut Cx, name: LiveId) {
-        let unique_id = self.last_unique_id;
-        if unique_id == 0 {
-            return;
-        }
-
-        cx.with_script_vm_id(self.vm_id, |vm| {
-            // Find the body by matching the unique_id we used during eval
-            // (body lives in this Splash's isolated vm, same as eval_body).
-            let scope_obj = {
-                let bodies = vm.bx.code.bodies.borrow();
-                let mut found = None;
-                for body in bodies.iter() {
-                    if let ScriptSource::Mod(m) = &body.source {
-                        if m.line == unique_id {
-                            found = Some(body.scope.as_object());
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-
-            if let Some(scope) = scope_obj {
-                let tick_fn = vm.bx.heap.scope_value(scope, name, vm.trap());
-                if !tick_fn.is_nil() && !tick_fn.is_err() {
-                    vm.call(tick_fn, &[]);
-                }
-            }
+/// Evaluates a Splash body in a throwaway isolate — the same prelude prefix,
+/// instruction limit, and network gating the `Splash` widget itself uses — and
+/// returns the formatted script errors, freeing the isolate afterwards. An
+/// empty result means the body parses and its root expression evaluates to a
+/// widget tree; runtime errors inside handlers can of course still occur later.
+///
+/// This is the widget's `eval_body` as a checked dry run: hosts that install
+/// script source from outside (downloads, AI generation, user input) can
+/// validate it — with real errors to show or feed back — before committing it
+/// to a live `Splash`, whose own eval silently keeps the old view on failure.
+///
+/// Caveats (identical to installing the same source in a real `Splash`, so
+/// validation adds no NEW exposure): the instruction limit bounds compute but
+/// not heap growth, so a hostile script can still allocate aggressively within
+/// its budget; and top-level side effects (e.g. `start_interval`) run and live
+/// until the marked-dead isolate is reclaimed by `gc_dead_splash_isolates`.
+pub fn validate_splash_body(cx: &mut Cx, body: &str, allow_net: bool) -> Vec<String> {
+    let vm_id = cx.alloc_splash_vm_with_network(allow_net);
+    // Give the dry run a throwaway storage jail so top-level `fs.read` boot
+    // loads validate instead of erroring "storage not available". The path is
+    // unpredictable and created with an EXCLUSIVE mkdir (fails EEXIST on any
+    // pre-existing entry incl. a planted symlink, so it never follows one out
+    // of temp); on failure the jail is simply left unset (fs calls error, same
+    // as a preview). Reclaimed below; per-vm so concurrent validations differ.
+    let scratch = std::env::temp_dir().join(format!(
+        "splash_validate_{}_{}",
+        std::process::id(),
+        vm_id.0,
+    ));
+    let heap_key = cx.with_script_vm_id(vm_id, |vm| vm.bx.heap.heap_key());
+    // Clear a leftover from a crashed run (we own this exact name), then take
+    // it exclusively.
+    let _ = std::fs::remove_dir_all(&scratch);
+    if std::fs::create_dir(&scratch).is_ok() {
+        crate::splash_storage::set_root_for_heap(heap_key, Some(scratch.clone()));
+    }
+    let prefix = if allow_net {
+        SPLASH_NET_PREFIX
+    } else {
+        SPLASH_PREFIX
+    };
+    let code = format!("{}{}", prefix, body);
+    let script_mod = ScriptMod {
+        cargo_manifest_path: String::new(),
+        module_path: format!("splash-validate#{}", vm_id.0),
+        // Named, and NOT via `line` — the validator's errors are shown to the
+        // user (and fed back to the agent as repair input), so a location
+        // offset by a vm id would be actively misleading there.
+        file: "splash:validating".to_string(),
+        line: 0,
+        column: 0,
+        code: String::new(),
+        values: vec![],
+    };
+    let mut errors_out = vec!["the script crashed its isolate during validation".to_string()];
+    crate::widget_async::contain_isolate_panic("validation eval", || {
+    errors_out = cx.with_script_vm_id(vm_id, |vm| {
+        // Capture instead of logging: mid-eval errors otherwise go straight to
+        // the error log (see `ScriptVm::take_errors`) and can't be returned.
+        vm.bx.captured_errors = Some(Vec::new());
+        let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
+            vm.eval_with_append_source(script_mod, &code, NIL.into())
         });
-
-        cx.redraw_all();
-    }
-
-    /// Start a new streaming session. Resets the accumulated code and
-    /// increments the generation so the VM creates a fresh body.
-    pub fn stream_begin(&mut self, cx: &mut Cx) {
-        self.eval_generation += 1;
-        self.body.set("");
-        // Eval a minimal empty view to clear previous content
-        self.body.set("View{}");
-        self.eval_body(cx);
-        self.body.set("");
-        cx.redraw_all();
-    }
-
-    /// Append a chunk of Splash code and incrementally re-evaluate.
-    /// The VM reuses the same body (fixed line ID) so only new tokens
-    /// are tokenized and parsed via checkpoint-based streaming.
-    pub fn stream_append(&mut self, cx: &mut Cx, chunk: &str) {
-        // Append to body
-        let mut current = self.body.as_ref().to_string();
-        current.push_str(chunk);
-        self.body.set(&current);
-
-        let prefix = if is_full_script(&current) {
-            SPLASH_PREFIX_SCRIPT
-        } else {
-            SPLASH_PREFIX_VIEW
-        };
-        let code = format!("{}{}", prefix, current);
-
-        // Use a fixed line ID (based on self_id + current generation)
-        // so eval_with_append_source finds the existing body and
-        // only tokenizes/parses the new delta.
-        let unique_id = self.self_id().wrapping_add(self.eval_generation as usize);
-
-        let script_mod = ScriptMod {
-            cargo_manifest_path: String::new(),
-            module_path: String::new(),
-            file: String::new(),
-            line: unique_id,
-            column: 0,
-            code: String::new(),
-            values: vec![],
-        };
-
-        let vm_id = self.vm_id;
-        let self_uid = self.uid;
-        let new_view = cx.with_script_vm_id(vm_id, |vm| {
-            crate::widget_async::inject_scoped_ui_global(vm, self_uid);
-            let value = vm.with_instruction_limit(SPLASH_EVAL_INSTRUCTION_LIMIT, |vm| {
-                vm.eval_with_append_source(script_mod, &code, NIL.into())
-            });
-            if !value.is_err() && !value.is_nil() {
-                Some(View::script_from_value(vm, value))
-            } else {
-                None
+        let mut errors = vm.take_errors();
+        if errors.is_empty() {
+            if value.is_err() {
+                errors.push("script evaluated to an error".to_string());
+            } else if value.as_object().is_none() {
+                errors.push(
+                    "script has no root widget (e.g. View{...}) as its final expression"
+                        .to_string(),
+                );
             }
-        });
-
-        if let Some(view) = new_view {
-            self.view = view;
-            // Make `ui` a global in this splash's VM (pointing at the freshly-built view root) so
-            // helper `fn`s inside the block can use `ui.<id>.set_text(...)`, not just inline
-            // handlers. Without this, calculators/forms that route through a helper silently fail.
-            crate::widget_async::inject_splash_ui_handle(cx, self.vm_id, self.view.widget_uid());
-            cx.widget_tree_mark_dirty(self.uid);
         }
-    }
+        errors
+    });
+    });
+    crate::widget_async::mark_splash_isolate_dead(vm_id);
+    // Reclaim NOW (stops the isolate's top-level timers and drops its sandbox
+    // root binding) so nothing can re-create the scratch dir after we remove
+    // it; then delete last, and it stays deleted.
+    crate::widget_async::gc_dead_splash_isolates(cx);
+    let _ = std::fs::remove_dir_all(&scratch);
+    errors_out
 }
 
 impl WidgetNode for Splash {
@@ -386,11 +415,10 @@ impl Drop for Splash {
 
 impl Widget for Splash {
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
-        // Handle tick timer — call tick() in the Splash code's scope
+        // Fork: tick timer — call `tick()` in the script body's scope.
         if self.tick_timer.is_event(event).is_some() {
             self.call_fn(cx, id!(tick));
         }
-
         if self.allow_net {
             if let Event::NetworkResponses(responses) = event {
                 crate::widget_async::handle_splash_network_responses(cx, self.vm_id, responses);
@@ -400,6 +428,10 @@ impl Widget for Splash {
     }
 
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
+        //let tree = self.view.widget_tree();
+        //cx.with_vm(|vm| {
+        //    log!("{}", tree.display(vm.heap()));
+        //});
         self.view.draw_walk(cx, scope, walk)
     }
 
@@ -410,12 +442,231 @@ impl Widget for Splash {
     fn set_text(&mut self, cx: &mut Cx, v: &str) {
         if self.body.as_ref() != v {
             self.body.set(v);
-            self.eval_body(cx);
-            // eval_body replaces self.view with a new View whose area is not
-            // yet registered in the draw system, so self.redraw(cx) would be
-            // a no-op.  Force a full redraw so the parent re-layouts.
+            // Empty body = tear down the app: reclaim its isolate (stopping its
+            // timers and dropping its storage jail) rather than leaving it
+            // running behind a blank view. A reused Splash (e.g. a live-preview
+            // widget) that goes back to empty must not leak its old isolate.
+            if v.is_empty() {
+                self.stop(cx);
+            } else {
+                self.eval_body(cx);
+            }
+            self.redraw(cx);
+            // Fork: eval_body replaces self.view with a View whose area is
+            // not yet registered in the draw system, so self.redraw(cx) alone
+            // can be a no-op. Force a full redraw so the parent re-layouts.
             cx.redraw_all();
         }
+    }
+}
+
+impl Splash {
+    /// Calls a top-level `fn` defined in this Splash's script body, if the script
+    /// defines one by that name. Runs inside the isolate under the standard entry
+    /// budget and instruction limit. Returns whether the fn was found: hosts
+    /// broadcasting optional hooks (e.g. size changes) can ignore it, while
+    /// callers expecting the fn to exist can log a missing-hook diagnostic
+    /// (distinguishing "script has no hook" from a typo'd name).
+    pub fn call_script_fn(&mut self, cx: &mut Cx, name: LiveId, args: &[ScriptValue]) -> bool {
+        let Some(scope) = self.body_scope(cx) else {
+            return false;
+        };
+        let mut called = false;
+        crate::widget_async::contain_isolate_panic("script hook call", || {
+        called = cx.with_script_vm_id(self.vm_id, |vm| {
+            // NoTrap: this is an existence probe for an OPTIONAL hook. A
+            // trapping lookup queues a NotFound into the error log even though
+            // the miss is handled right here — every host broadcast (e.g.
+            // on_app_resize) then spams "variable <raw id> not found" for
+            // every script that simply doesn't define the hook.
+            let fnval = vm.bx.heap.scope_value(scope, name, NoTrap);
+            if fnval.is_nil() || fnval.is_err() {
+                return false;
+            }
+            vm.with_instruction_limit(WIDGET_SCRIPT_INSTRUCTION_LIMIT, |vm| {
+                vm.call(fnval, args);
+            });
+            true
+        });
+        });
+        called
+    }
+
+    /// Like [`Self::call_script_fn`], but with string arguments — those are
+    /// heap values, so they must be minted inside this isolate's own heap
+    /// right before the call (a cross-heap ScriptValue would resolve in the
+    /// wrong arena). Used for host->script deliveries like IPC messages.
+    pub fn call_script_fn_with_strings(&mut self, cx: &mut Cx, name: LiveId, args: &[&str]) -> bool {
+        let Some(scope) = self.body_scope(cx) else {
+            return false;
+        };
+        let mut called = false;
+        crate::widget_async::contain_isolate_panic("script hook call", || {
+        called = cx.with_script_vm_id(self.vm_id, |vm| {
+            let fnval = vm.bx.heap.scope_value(scope, name, NoTrap);
+            if fnval.is_nil() || fnval.is_err() {
+                return false;
+            }
+            let vals: Vec<ScriptValue> = args
+                .iter()
+                .map(|s| vm.new_string_with(|_vm, out| out.push_str(s)))
+                .collect();
+            vm.with_instruction_limit(WIDGET_SCRIPT_INSTRUCTION_LIMIT, |vm| {
+                vm.call(fnval, &vals);
+            });
+            true
+        });
+        });
+        called
+    }
+
+    /// Sets whether this Splash's isolate gets the networking runtime. Must be
+    /// called before the body is first evaluated (i.e. before `set_text`) — the
+    /// VM is allocated with or without network on that first eval and isn't
+    /// re-allocated afterwards.
+    pub fn set_allow_net(&mut self, allow: bool) {
+        self.allow_net = allow;
+    }
+
+    /// Assigns this app's private storage directory — the root its jailed
+    /// `fs` module resolves against. Takes effect immediately when the
+    /// isolate is live, and on the next eval otherwise; call BEFORE set_text
+    /// so top-level `fs.read` boot loads see it.
+    pub fn set_sandbox_dir(&mut self, cx: &mut Cx, dir: Option<std::path::PathBuf>) {
+        self.sandbox_dir = dir.clone();
+        if self.vm_id != MAIN_SPLASH_VM_ID {
+            let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+            crate::splash_storage::set_root_for_heap(heap_key, dir);
+        }
+    }
+
+    /// Assigns the host-trusted identity for this app's `host.request` calls.
+    /// Call BEFORE set_text so boot-time requests already carry it; takes
+    /// effect immediately when the isolate is live.
+    pub fn set_host_tag(&mut self, cx: &mut Cx, tag: Option<String>) {
+        self.host_tag = tag.clone();
+        if self.vm_id != MAIN_SPLASH_VM_ID {
+            let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+            crate::splash_host::set_tag_for_heap(heap_key, tag);
+        }
+    }
+
+    /// Replaces the capability list `host.capabilities()` reports to this
+    /// app. Informational (the host still decides every request); push it
+    /// again whenever grants change so the script's UI can adapt.
+    pub fn set_host_caps(&mut self, cx: &mut Cx, caps: Vec<String>) {
+        self.host_caps = caps.clone();
+        if self.vm_id != MAIN_SPLASH_VM_ID {
+            let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+            crate::splash_host::set_caps_for_heap(heap_key, caps);
+        }
+    }
+
+    /// Raises this app's whole-jail storage cap (None = the default). Takes
+    /// effect immediately; a lowered cap refuses further growth rather than
+    /// deleting anything the app already wrote.
+    pub fn set_storage_quota(&mut self, cx: &mut Cx, total_bytes: Option<u64>) {
+        self.storage_quota = total_bytes;
+        if self.vm_id != MAIN_SPLASH_VM_ID {
+            let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+            crate::splash_storage::set_quota_for_heap(heap_key, total_bytes);
+        }
+    }
+
+    /// Marks whether this isolate's surface may raise user prompts; see
+    /// `SplashHostRequest::may_prompt`. Defaults true.
+    pub fn set_host_prompts(&mut self, cx: &mut Cx, may_prompt: bool) {
+        self.host_prompts = may_prompt;
+        if self.vm_id != MAIN_SPLASH_VM_ID {
+            let heap_key = cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key());
+            crate::splash_host::set_prompts_for_heap(heap_key, may_prompt);
+        }
+    }
+
+    /// This Splash's live isolate heap identity (None while stopped) — the
+    /// same key `SplashHostRequest::heap_key` carries, so hosts can relate a
+    /// request to a specific widget (e.g. to skip an IPC sender's own isolate
+    /// when fanning a message out).
+    pub fn isolate_heap_key(&mut self, cx: &mut Cx) -> Option<usize> {
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            return None;
+        }
+        Some(cx.with_script_vm_id(self.vm_id, |vm| vm.bx.heap.heap_key()))
+    }
+
+    /// Sets (or replaces) a global visible to this Splash's script, like the
+    /// injected `ui` handle. Useful for handing scripts host-provided context
+    /// (configuration, sizes, capabilities) without re-evaluating the body.
+    pub fn set_script_global(&mut self, cx: &mut Cx, key: LiveId, value: ScriptValue) {
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            return;
+        }
+        cx.with_script_vm_id(self.vm_id, |vm| {
+            vm.set_injected_global(key, value);
+        });
+    }
+
+    /// Fork: whether the script body defines a top-level value under `name`
+    /// (used to decide whether to start the `tick` interval).
+    fn script_defines_fn(&mut self, cx: &mut Cx, name: LiveId) -> bool {
+        let Some(scope) = self.body_scope(cx) else {
+            return false;
+        };
+        cx.with_script_vm_id(self.vm_id, |vm| {
+            let f = vm.bx.heap.scope_value(scope, name, NoTrap);
+            !f.is_nil() && !f.is_err()
+        })
+    }
+
+    /// Fork: call a named zero-arg function defined in the script body's
+    /// scope (e.g. `tick`, `on_audio`) and redraw. Thin wrapper over
+    /// [`Self::call_script_fn`] kept for tools/canvas.
+    pub fn call_fn(&mut self, cx: &mut Cx, name: LiveId) {
+        if self.call_script_fn(cx, name, &[]) {
+            cx.redraw_all();
+        }
+    }
+
+    /// Fork: start a new streaming session — tear down the previous app and
+    /// reset the accumulated body so the next `stream_append` starts fresh.
+    pub fn stream_begin(&mut self, cx: &mut Cx) {
+        self.stop(cx);
+        self.body.set("");
+        cx.redraw_all();
+    }
+
+    /// Fork: append a chunk of Splash code and re-evaluate. The body identity
+    /// is stable (`body_key`), so `eval_with_append_source` only tokenizes and
+    /// parses the new delta via checkpoint-based streaming.
+    pub fn stream_append(&mut self, cx: &mut Cx, chunk: &str) {
+        let mut current = self.body.as_ref().to_string();
+        current.push_str(chunk);
+        self.body.set(&current);
+        self.eval_body(cx);
+        cx.redraw_all();
+    }
+
+    /// The scope object holding this Splash body's top-level definitions, via
+    /// the body id cached at eval time (with a pointer-identity fallback for
+    /// robustness).
+    fn body_scope(&mut self, cx: &mut Cx) -> Option<ScriptObject> {
+        if self.vm_id == MAIN_SPLASH_VM_ID {
+            return None;
+        }
+        let body_key = self.body_key();
+        let body_id = self.body_id;
+        cx.with_script_vm_id(self.vm_id, |vm| {
+            let bodies = vm.bx.code.bodies.borrow();
+            if let Some(body) = body_id.and_then(|i| bodies.get(i as usize)) {
+                return Some(body.scope.as_object());
+            }
+            bodies.iter().find_map(|body| match &body.source {
+                ScriptSource::Mod(m) if m.module_path == body_key => {
+                    Some(body.scope.as_object())
+                }
+                _ => None,
+            })
+        })
     }
 }
 
@@ -426,15 +677,93 @@ impl SplashRef {
         }
     }
 
+    /// See [`Splash::stream_begin`].
     pub fn stream_begin(&self, cx: &mut Cx) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.stream_begin(cx);
         }
     }
 
+    /// See [`Splash::stream_append`].
     pub fn stream_append(&self, cx: &mut Cx, chunk: &str) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.stream_append(cx, chunk);
+        }
+    }
+
+    /// See [`Splash::call_fn`].
+    pub fn call_fn(&self, cx: &mut Cx, name: LiveId) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.call_fn(cx, name);
+        }
+    }
+
+    /// See [`Splash::set_sandbox_dir`].
+    pub fn set_sandbox_dir(&self, cx: &mut Cx, dir: Option<std::path::PathBuf>) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_sandbox_dir(cx, dir);
+        }
+    }
+
+    /// See [`Splash::set_host_tag`].
+    pub fn set_host_tag(&self, cx: &mut Cx, tag: Option<String>) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_host_tag(cx, tag);
+        }
+    }
+
+    /// See [`Splash::set_host_caps`].
+    pub fn set_host_caps(&self, cx: &mut Cx, caps: Vec<String>) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_host_caps(cx, caps);
+        }
+    }
+
+    /// See [`Splash::set_storage_quota`].
+    pub fn set_storage_quota(&self, cx: &mut Cx, total_bytes: Option<u64>) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_storage_quota(cx, total_bytes);
+        }
+    }
+
+    /// See [`Splash::set_host_prompts`].
+    pub fn set_host_prompts(&self, cx: &mut Cx, may_prompt: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_host_prompts(cx, may_prompt);
+        }
+    }
+
+    /// See [`Splash::isolate_heap_key`].
+    pub fn isolate_heap_key(&self, cx: &mut Cx) -> Option<usize> {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.isolate_heap_key(cx)
+        } else {
+            None
+        }
+    }
+
+    /// See [`Splash::call_script_fn`].
+    pub fn call_script_fn(&self, cx: &mut Cx, name: LiveId, args: &[ScriptValue]) -> bool {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.call_script_fn(cx, name, args)
+        } else {
+            false
+        }
+    }
+
+    /// See [`Splash::call_script_fn_with_strings`].
+    pub fn call_script_fn_with_strings(&self, cx: &mut Cx, name: LiveId, args: &[&str]) -> bool {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.call_script_fn_with_strings(cx, name, args)
+        } else {
+            false
+        }
+    }
+
+    /// See [`Splash::set_script_global`].
+    pub fn set_script_global(&self, cx: &mut Cx, key: LiveId, value: ScriptValue) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_script_global(cx, key, value);
         }
     }
 }

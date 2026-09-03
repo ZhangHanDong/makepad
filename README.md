@@ -4,12 +4,47 @@
 
 - Discord: https://discord.gg/adqBRq7Ece
 - Rik Arends: https://twitter.com/rikarends
-- Eddy Bruel: -
-- Sebastian Michailidis: https://bsky.app/profile/okpokpokp.bsky.social
 
-Makepad is an AI-accelerated application development environment for Rust. It combines a high-performance UI runtime, a live-editable design language, and a fast iteration loop so you can build native and web apps with a tight feedback cycle.
+Makepad is an AI-accelerated application and game development environment for Rust. It combines a high-performance UI runtime, a live-editable design language, and a fast iteration loop so you can build native and web apps with a tight feedback cycle.
+
+It also has a large set of AI backends integrated for embedding llms or generative AI models inside applications or run them easily on local hardware
 
 This repository contains the core engine, widgets, tools, and examples.
+
+## Building the VJ example app
+
+Rust stable is the toolchain everywhere: https://rustup.rs
+
+**macOS** — install Rust and the Xcode command line tools, then:
+
+```bash
+cargo run -p makepad-vj --release
+```
+
+**Windows** — install Rust, Visual Studio 2022 (Desktop development with
+C++), and the NVIDIA CUDA toolkit (any recent version; the build finds it
+by itself). Then the same `cargo run -p makepad-vj --release`. Without a
+CUDA toolkit the build still links — the GPU-AI lanes just stub out.
+
+**Linux** — the VJ currently only compiles with CUDA present, and the
+lane is not regularly tested; expect to fix small things. The errors are
+shallow — point an AI coding assistant at them and it will get you
+building.
+
+**What CUDA is for**: the VJ uses the GPU-AI lane for audio source
+separation (BS-RoFormer splits a track into vocals/drums/bass/other,
+which drives the stem mutes and the karaoke word timing). The app runs
+fine without it — those features just stay off.
+
+**Model files install from inside the app.** The music decks use two
+MIT-licensed model files: the BS-RoFormer stem splitter (527 MB) and the
+Whisper large-v3-turbo transcriber (1.6 GB, karaoke word timing). On a
+machine that lacks them the music page shows an **INSTALL MODELS** row
+under the track explorer — accept the licenses and the app downloads both
+(resumable, sha256-verified) into `local/` in the checkout. Until then the
+VJ reports "stems: model not installed" and carries on. Existing copies
+are found via `VJ_STEMS_CKPT` / `MAKEPAD_VOICE_MODEL` or the standard
+`local/` paths.
 
 ## What Makepad Is
 
@@ -17,6 +52,7 @@ This repository contains the core engine, widgets, tools, and examples.
 - A Rust-first framework with a scriptable UI DSL.
 - A studio app for running, inspecting, and iterating on examples and projects.
 - An AI-accelerated workflow: structure and tooling aimed at making code generation, refactoring, and iteration faster and safer.
+- Simple forward 3D renderer for making games on Quest and all other supported platforms
 
 ## Features
 
@@ -52,7 +88,7 @@ Linux build/runtime dependencies are listed in `./tools/linux_deps.sh`:
 Use the apt-get command below, or run the script on Ubuntu/WSL2:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config clang ca-certificates libssl-dev libx11-dev libxcursor-dev libxkbcommon-dev libxrandr-dev libxi-dev libxinerama-dev libasound2-dev libpulse-dev libwayland-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglx-dev libdrm-dev libgbm-dev libgl1-mesa-dri mesa-vulkan-drivers mesa-utils mesa-utils-extra x11-apps
+sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config clang ca-certificates libssl-dev libx11-dev libxcursor-dev libxkbcommon-dev libxrandr-dev libxi-dev libxinerama-dev libasound2-dev libpulse-dev libwayland-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglx-dev libdrm-dev libgbm-dev libgl1-mesa-dri mesa-vulkan-drivers mesa-utils mesa-utils-extra x11-apps gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-gl gstreamer1.0-alsa gstreamer1.0-pipewire libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstreamer-gl1.0-0
 ```
 
 ## Build And Run Makepad Studio
@@ -89,8 +125,8 @@ cargo run -p makepad-example-map --release
 For built-in maps and voice support, download the assets first:
 
 ```bash
-./download_map.sh
-./download_voice.sh
+./tools/download_map.sh
+./tools/download_voice.sh
 ```
 
 ## Run A WASM App

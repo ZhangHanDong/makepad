@@ -1,6 +1,11 @@
 #[cfg(not(any(linux_direct, target_env = "ohos", target_os = "android")))]
 pub mod opengl_cx;
 #[cfg(not(any(linux_direct, target_env = "ohos", target_os = "android")))]
+pub mod file_dialog;
+// The wayland-* crates are dependencies of the linux-gnu targets only, so
+// this has to carry the same gate as its siblings: Android and OHOS are
+// `os::linux` too, and would otherwise fail to resolve `wayland_client`.
+#[cfg(not(any(linux_direct, target_env = "ohos", target_os = "android")))]
 pub mod wayland;
 #[cfg(not(any(linux_direct, target_env = "ohos", target_os = "android")))]
 pub mod windowing_backend;
@@ -28,6 +33,8 @@ pub mod egl_sys;
 #[macro_use]
 pub mod gl_sys;
 pub(crate) mod gl_video_upload;
+#[cfg(not(any(target_env = "ohos", target_os = "android")))]
+pub(crate) mod va_dmabuf_modifier;
 pub mod libc_sys;
 pub mod module_loader;
 pub mod opengl;
@@ -39,9 +46,13 @@ pub mod vulkan_naga;
 #[cfg(not(any(target_env = "ohos", target_os = "android")))]
 pub mod dma_buf;
 #[cfg(not(any(target_env = "ohos", target_os = "android")))]
+pub mod gst_gl_share;
+#[cfg(not(any(target_env = "ohos", target_os = "android")))]
 pub mod gstreamer_sys;
 #[cfg(not(any(target_env = "ohos", target_os = "android")))]
 pub mod ipc;
+#[cfg(not(any(target_env = "ohos", target_os = "android")))]
+pub mod linux_video_gpu;
 #[cfg(not(any(target_env = "ohos", target_os = "android")))]
 pub mod linux_video_playback;
 #[cfg(not(any(target_env = "ohos", target_os = "android")))]

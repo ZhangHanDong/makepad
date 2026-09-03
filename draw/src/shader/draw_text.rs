@@ -1292,6 +1292,26 @@ pub struct DrawText {
     #[live]
     pub temp_y_shift: f32,
 
+    /// Center the text's *ink* in the box a walk allocates for it, rather than
+    /// its line box.
+    ///
+    /// A widget that puts one line of text in a box it paints — a button face,
+    /// a tab, a dropdown — wants the cap-height band centered, because that
+    /// band is what the eye reads as "the text". Centering the line box
+    /// instead leaves the text sitting high by half the difference between the
+    /// font's over-cap ascender and its descender. Off by default: it moves
+    /// glyphs relative to their box, which text that has to line up with
+    /// something else (a code editor's rows, a text flow's baselines) must not
+    /// do. Only [`DrawText::draw_walk`] honors it; the resumable flow paths
+    /// stay baseline-exact.
+    #[live]
+    pub ink_centered: bool,
+
+    /// Centering height (in unscaled lpxs) for RowAlign::Center; TextFlow sets
+    /// this to the line style's height so mixed-font runs stay baseline-aligned.
+    #[rust]
+    pub align_row_height: Option<f32>,
+
     /// Per-row horizontal alignment applied by the text layouter when the
     /// text does not fill the full `max_width_in_lpxs`. `x: 0.0` = left,
     /// `0.5` = center, `1.0` = right. `y` is currently unused by the
@@ -2051,7 +2071,8 @@ impl DrawText {
         if glyphs.is_empty() {
             return;
         }
-        self.update_draw_vars(cx);
+        // An already-open batch ran update_draw_vars when it began; running it
+        // again per call dominates CPU when thousands of glyphs share a batch.
         if let Some(mut instances) = self.many_instances.take() {
             self.glyph_depth = self.draw_depth;
             self.color = color;
@@ -2068,6 +2089,7 @@ impl DrawText {
             return;
         }
 
+        self.update_draw_vars(cx);
         let Some(mut instances) = cx.begin_many_aligned_instances(&self.draw_vars) else {
             return;
         };
@@ -2112,7 +2134,10 @@ impl DrawText {
         let dpx_factor = cx.current_dpi_factor() as f32;
         let mut glyphs = Vec::with_capacity(row.glyphs.len());
         for glyph in &row.glyphs {
-            let dpx_per_em = glyph.font_size_in_lpxs * dpx_factor;
+            // font_scale must scale the drawn glyph size together with the pen
+            // advances below, or scaled runs render letter-spaced/overlapped;
+            // rasterize at the scaled size so scaled-up text stays crisp
+            let dpx_per_em = glyph.font_size_in_lpxs * dpx_factor * self.font_scale;
             let Some(rasterized) = glyph.rasterize(dpx_per_em) else {
                 continue;
             };
@@ -2121,7 +2146,7 @@ impl DrawText {
                 pen_x_in_lpxs: glyph.origin_in_lpxs.x * self.font_scale,
                 offset_x_in_lpxs: glyph.offset_in_lpxs() * self.font_scale,
                 advance_in_lpxs: glyph.advance_in_lpxs() * self.font_scale,
-                font_size_in_lpxs: glyph.font_size_in_lpxs,
+                font_size_in_lpxs: glyph.font_size_in_lpxs * self.font_scale,
                 rasterized,
             });
         }
@@ -2152,9 +2177,46 @@ impl DrawText {
             } = walk.width
             {
                 if let Some(resolved) = max_bound.eval_width(cx) {
-                    let padding = cx.turtle().padding();
-                    max_width_in_lpxs =
-                        Some((resolved - padding.left - padding.right).max(0.0) as f32);
+                    let turtle = cx.turtle();
+                    let padding = turtle.padding();
+                    // The bound limits this walk's margin box, so the text
+                    // itself gets the bound minus the walk's own horizontal
+                    // margins and the enclosing turtle's padding.
+                    let mut available =
+                        resolved - padding.left - padding.right - walk.margin.width();
+                    // When the enclosing turtle is itself an unresolved Fit
+                    // with a max bound (a Label sizing itself around this
+                    // text), its final width is clamped to the bound minus
+                    // its outer margins; the text must shrink by the same
+                    // amount, or the clamped clip slices off its tail.
+                    if turtle.width().is_nan()
+                        && matches!(
+                            turtle.walk().width,
+                            crate::turtle::Size::Fit { max: Some(_), .. }
+                        )
+                    {
+                        available -= turtle.walk().margin.width();
+                    }
+                    // The layouter works in unscaled units; rows are multiplied
+                    // by font_scale on output, so the bound must be divided by
+                    // it here, as max_layout_width_for_walk does.
+                    let available_in_lpxs =
+                        (available.max(0.0) as f32) / self.font_scale.max(0.0001);
+                    // A bound too narrow for even the truncation ellipsis is no
+                    // bound at all: the layouter appends the ellipsis glyph
+                    // unconditionally, so a narrower clip would slice it open.
+                    // Left unbounded, the text overflows honestly, which lets
+                    // an enclosing flow's inline-content clamp hide it and
+                    // draw the ellipsis itself.
+                    let below_ellipsis_width = self.text_overflow == TextOverflow::Ellipsis
+                        && available_in_lpxs
+                            < self
+                                .layout(cx, 0.0, 0.0, None, false, Align::default(), "…")
+                                .size_in_lpxs
+                                .width;
+                    if !below_ellipsis_width {
+                        max_width_in_lpxs = Some(available_in_lpxs);
+                    }
                 }
             }
         }
@@ -2210,8 +2272,21 @@ impl DrawText {
             cx.cx.debug.area(area, vec4(1.0, 1.0, 1.0, 1.0));
         }
 
+
+        // The ink shift moves the glyphs *inside* the box the walk just took,
+        // so the box — and every layout decision already made from it, this
+        // call's own return value included — stays exactly where it was.
+        let ink_shift_in_lpxs = if self.ink_centered {
+            laidout_text.ink_center_offset_in_lpxs() * self.font_scale
+        } else {
+            0.0
+        };
         let origin_in_lpxs = Point::new(turtle_rect.pos.x as f32, turtle_rect.pos.y as f32);
-        self.draw_text(cx, origin_in_lpxs, laidout_text);
+        self.draw_text(
+            cx,
+            Point::new(origin_in_lpxs.x, origin_in_lpxs.y + ink_shift_in_lpxs),
+            laidout_text,
+        );
 
         rect(
             origin_in_lpxs.x as f64,
@@ -2264,7 +2339,7 @@ impl DrawText {
         let turtle_rect = cx.turtle().inner_rect();
         let origin_in_lpxs = Point::new(turtle_rect.pos.x as f32, turtle_pos.y as f32);
         let first_row_indent_in_lpxs = turtle_pos.x as f32 - origin_in_lpxs.x;
-        let row_height = cx.turtle().next_row_offset();
+        let row_height = self.resumable_first_row_min_spacing(cx) as f64;
         let max_width_in_lpxs = if !turtle_rect.size.x.is_nan() {
             Some(turtle_rect.size.x as f32)
         } else {
@@ -2309,6 +2384,7 @@ impl DrawText {
         let per_row = self.many_instances.is_none() && text.rows.len() > 1;
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         let per_row = false;
+
 
         if per_row {
             // ── PER-ROW path ──
@@ -2399,12 +2475,15 @@ impl DrawText {
 
                 // Emit a per-row FinishedWalk covering this row's glyphs +
                 // callback rect-areas.
-                cx.emit_turtle_walk(
+                cx.emit_turtle_walk_with_align_height(
                     Rect {
                         pos: dvec2(row_origin.x as f64, row_top_y),
                         size: dvec2((row.width_in_lpxs * self.font_scale) as f64, row_h),
                     },
                     row_als,
+                    Metrics::default(),
+                    self.align_row_height
+                        .map(|h| (h * self.font_scale) as f64),
                 );
             }
 
@@ -2447,16 +2526,6 @@ impl DrawText {
 
             self.draw_text(cx, origin_in_lpxs, &text);
 
-            let turtle = cx.turtle_mut();
-            turtle.move_to(dvec2(origin_in_lpxs.x as f64, origin_in_lpxs.y as f64));
-            turtle.allocate_width(used_size_in_lpxs.width as f64);
-            turtle.allocate_height(used_size_in_lpxs.height as f64);
-            turtle.move_to(new_turtle_pos);
-            turtle.set_wrap_spacing(
-                (last_row.ascender_in_lpxs * last_row.line_spacing_scale
-                    - last_row.ascender_in_lpxs) as f64,
-            );
-
             if !callback_before_text {
                 for (row_index, row) in text.rows.iter().enumerate() {
                     let (sx, ex) = row_span_x_bounds_in_lpxs(
@@ -2482,19 +2551,167 @@ impl DrawText {
                 }
             }
 
-            cx.emit_turtle_walk(
-                Rect {
-                    pos: new_turtle_pos,
-                    size: dvec2(
-                        used_size_in_lpxs.width as f64,
-                        used_size_in_lpxs.height as f64,
-                    ),
-                },
-                align_list_start,
-            );
+            let wrap_spacing = (last_row.ascender_in_lpxs * last_row.line_spacing_scale
+                - last_row.ascender_in_lpxs) as f64;
+
+            if text.rows.len() == 1 {
+                let turtle = cx.turtle_mut();
+                turtle.move_to(dvec2(origin_in_lpxs.x as f64, origin_in_lpxs.y as f64));
+                turtle.allocate_width(used_size_in_lpxs.width as f64);
+                turtle.allocate_height(used_size_in_lpxs.height as f64);
+                turtle.move_to(new_turtle_pos);
+                turtle.set_wrap_spacing(wrap_spacing);
+
+                cx.emit_turtle_walk_with_align_height(
+                    Rect {
+                        pos: new_turtle_pos,
+                        size: dvec2(
+                            used_size_in_lpxs.width as f64,
+                            used_size_in_lpxs.height as f64,
+                        ),
+                    },
+                    align_list_start,
+                    Metrics::default(),
+                    self.align_row_height.map(|h| (h * self.font_scale) as f64),
+                );
+            } else {
+                // The turtle's row bookkeeping must see this run's internal
+                // row boundaries: RowAlign shifts and row heights are computed
+                // per turtle row when `finish_row` runs, and without a boundary
+                // here every walk since the previous one — including content
+                // that sits on an earlier visual row — is aligned against the
+                // final row's height. Only the finished-walk and row
+                // bookkeeping is per-row; the glyphs stay in one instance
+                // batch, so no per-row shifting of this run's own rows is
+                // possible and its walks carry ranges accordingly.
+                let fs = self.font_scale as f64;
+                let row_top = |row: &crate::text::layouter::LaidoutRow| {
+                    origin_in_lpxs.y as f64
+                        + (row.origin_in_lpxs.y - row.ascender_in_lpxs) as f64 * fs
+                };
+                let row_height = |row: &crate::text::layouter::LaidoutRow| {
+                    (row.ascender_in_lpxs - row.descender_in_lpxs) as f64 * fs
+                };
+
+
+                let first_row = &text.rows[0];
+                let turtle = cx.turtle_mut();
+                turtle.move_to(dvec2(origin_in_lpxs.x as f64, origin_in_lpxs.y as f64));
+                turtle.allocate_width(used_size_in_lpxs.width as f64);
+                turtle.allocate_height(row_height(first_row));
+
+                // The first row's walk owns every align entry this run emitted
+                // and is immovable — shifting it would displace the later
+                // rows' glyphs, which share its instance batch. When the first
+                // row holds visible text it anchors its row's center line, so
+                // a taller inline item beside it centers on the text; when it
+                // holds nothing visible — no glyphs, or only whitespace (a
+                // continuation that wrapped immediately, often with a single
+                // leading space fitting the line's slack) — the walk is inert,
+                // so the row of preceding content keeps its normal alignment
+                // instead of anchoring to an invisible line.
+                let first_row_role = if first_row.text.trim().is_empty() {
+                    crate::turtle::RowAlignRole::Fixed
+                } else {
+                    crate::turtle::RowAlignRole::Anchor
+                };
+                cx.emit_turtle_walk_with_role(
+                    Rect {
+                        pos: dvec2(origin_in_lpxs.x as f64, origin_in_lpxs.y as f64),
+                        size: dvec2(
+                            (first_row.width_in_lpxs * self.font_scale) as f64,
+                            row_height(first_row),
+                        ),
+                    },
+                    align_list_start,
+                    Metrics::default(),
+                    self.align_row_height.map(|h| (h * self.font_scale) as f64),
+                    first_row_role,
+                );
+
+                for row_index in 1..text.rows.len() {
+                    // A new turtle row starts at origin.y + used_height +
+                    // spacing. Anchoring the spacing to the turtle's real used
+                    // bottom — which includes any inline content on the
+                    // previous visual row that is taller than the text — lands
+                    // the turtle exactly on this laidout row's top, so turtle
+                    // geometry and glyph geometry agree at every internal row
+                    // boundary.
+                    let used_bottom = cx.turtle().origin().y + cx.turtle().used_height();
+                    let spacing = row_top(&text.rows[row_index]) - used_bottom;
+                    cx.turtle_new_line_with_spacing(spacing);
+                    cx.turtle_mut().allocate_height(row_height(&text.rows[row_index]));
+                }
+
+                let turtle = cx.turtle_mut();
+                turtle.move_to(new_turtle_pos);
+                turtle.set_wrap_spacing(wrap_spacing);
+
+                // The last row's walk carries an empty align range: this run's
+                // glyphs live in the first row's walk and must not be shifted
+                // again when the last row finishes. Because those glyphs can
+                // never move, the walk anchors the row's center line — a
+                // taller item that joins this row (an inline pill) centers on
+                // the text instead of dragging the row's center below it.
+                let empty_range = cx.align_list_len();
+                cx.emit_turtle_walk_with_role(
+                    Rect {
+                        pos: new_turtle_pos,
+                        size: dvec2(
+                            (last_row.width_in_lpxs * self.font_scale) as f64,
+                            row_height(last_row),
+                        ),
+                    },
+                    empty_range,
+                    Metrics::default(),
+                    Some(row_height(last_row)),
+                    crate::turtle::RowAlignRole::Anchor,
+                );
+            }
         }
 
         (text.rows.len(), text.is_truncated)
+    }
+
+    /// Returns the `first_row_min_line_spacing_below_in_lpxs` a resumable run
+    /// passes to the layouter for the current turtle. In a centering wrap flow
+    /// this is the offset to the next turtle row (converted into layout units
+    /// by dividing out `font_scale`), so a continuation run's second row
+    /// clears inline content on its first visual row that is taller than the
+    /// text. Other flows pass zero and keep pure font-metric row spacing.
+    /// Every layout of the same run (draw, selection capture, wrap probes)
+    /// must use this same value so they share one layout-cache entry.
+    pub fn resumable_first_row_min_spacing(&self, cx: &Cx2d) -> f32 {
+        if matches!(
+            cx.turtle().layout().flow,
+            Flow::Right {
+                wrap: true,
+                row_align: crate::turtle::RowAlign::Center,
+                ..
+            }
+        ) {
+            // When the current row holds inline content taller than the text
+            // line (pills), the following row is expected to hold the same
+            // kind of content beside this run's text, and RowAlign::Center
+            // will seat that content's center on the text's center — placing
+            // its top (row_height − text_height)/2 ABOVE the text's top. The
+            // floor therefore positions the second row's text one full
+            // current-row advance below, plus that overhang, so centered
+            // content on the next row starts exactly one wrap gap below the
+            // current row's content with zero residual shift. When the text
+            // is the tallest content, the floor equals `next_row_offset()`
+            // and pure font-metric spacing wins where it is larger.
+            let row_height = cx.turtle().row_height();
+            let text_row_height = self
+                .align_row_height
+                .map(|h| (h * self.font_scale) as f64)
+                .unwrap_or(row_height);
+            let overhang = ((row_height - text_row_height) * 0.5).max(0.0);
+            ((row_height + cx.turtle().wrap_spacing() + overhang)
+                / self.font_scale.max(0.0001) as f64) as f32
+        } else {
+            0.0
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2777,7 +2994,7 @@ impl DrawText {
         }
     }
 
-    fn update_draw_vars(&mut self, cx: &mut Cx2d) {
+    pub(crate) fn update_draw_vars(&mut self, cx: &mut Cx2d) {
         self.draw_vars.append_group_id = cx.draw_call_group_content().0;
         let fonts = cx.fonts.borrow();
         let rasterizer = fonts.rasterizer().borrow();

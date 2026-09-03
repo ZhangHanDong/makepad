@@ -23,6 +23,19 @@ pub struct ScriptIp {
 }
 
 impl ScriptIp {
+    /// Sentinel for "no source construction site" (Rust-built objects,
+    /// recycled-slot default). Never a valid ip: bodies are indexed far
+    /// below u16::MAX. Deliberately NOT u40-packable — this is a struct
+    /// field sentinel, not a tag value.
+    pub const UNKNOWN: Self = Self {
+        body: u16::MAX,
+        index: u32::MAX,
+    };
+
+    pub const fn is_unknown(&self) -> bool {
+        self.body == u16::MAX && self.index == u32::MAX
+    }
+
     pub const fn from_u40(value: u64) -> Self {
         Self {
             body: ((value >> 28) & 0xFFF) as u16,
@@ -689,6 +702,13 @@ impl ScriptValueType {
             } else {
                 Self::REDUX_STRING
             }
+        } else if self.0 >= Self::F32.0 && self.0 <= Self::U40.0 {
+            // Every numeric storage subtype (f32/f16/u32/i32/u40) IS a number:
+            // collapsing them here gives ints the number bucket's methods and
+            // makes int-vs-float type checks agree — an integer literal used
+            // to fail against a float default with the absurd diagnostic
+            // "expected number, got number" (NaN keeps its own bucket).
+            Self::REDUX_NUMBER
         } else {
             ScriptTypeRedux(self.0)
         }

@@ -8,8 +8,8 @@ use {
         draw_list::DrawListId,
         //midi::{Midi1InputData, MidiInputInfo},
         event::{
-            drag_drop::*, finger::*, game_input::*, keyboard::*, network::*, video_playback::*,
-            window::*, xr::*,
+            drag_drop::*, finger::*, game_input::*, keyboard::*, location::*, network::*,
+            video_playback::*, window::*, xr::*,
         },
         //makepad_live_compiler::LiveEditEvent,
         makepad_live_id::LiveId,
@@ -162,6 +162,9 @@ pub enum Event {
     WindowGeomChange(WindowGeomChangeEvent),
     VirtualKeyboard(VirtualKeyboardEvent),
     ClearAtlasses,
+    /// Clear all hover/pressed visual state, e.g. after an overlay that
+    /// swallowed the hover-outs (a context menu) has closed.
+    ClearHover,
 
     /// The raw event that occurs when the user presses a mouse button down.
     ///
@@ -243,6 +246,7 @@ pub enum Event {
     VideoYuvTexturesReady(VideoYuvTexturesReady),
     VideoSeekableRanges(VideoSeekableRangesEvent),
     VideoBufferedRanges(VideoBufferedRangesEvent),
+    VideoTracksChanged(VideoTracksChangedEvent),
 
     /// The "go back" navigational button or gesture was performed.
     ///
@@ -257,6 +261,12 @@ pub enum Event {
 
     /// Permission check or request result
     PermissionResult(PermissionResult),
+
+    /// A position fix from the platform location service
+    /// (see [`Cx::start_location_updates`]).
+    LocationUpdate(LocationUpdateEvent),
+    /// Location updates cannot be delivered (permission denied / no service).
+    LocationError(LocationErrorEvent),
 
     #[cfg(target_arch = "wasm32")]
     ToWasmMsg(ToWasmMsgEvent),
@@ -293,6 +303,7 @@ impl Event {
             17 => "WindowGeomChange",
             18 => "VirtualKeyboard",
             19 => "ClearAtlasses",
+            72 => "ClearHover",
 
             20 => "MouseDown",
             21 => "MouseMove",
@@ -335,6 +346,7 @@ impl Event {
             63 => "VideoSeekableRanges",
             64 => "VideoBufferedRanges",
             65 => "VideoYuvTexturesReady",
+            71 => "VideoTracksChanged",
             51 => "MouseLeave",
             52 => "Actions",
             53 => "BackPressed",
@@ -349,6 +361,8 @@ impl Event {
             61 => "PopupDismissed",
             62 => "SelectionHandleDrag",
             66 => "ScriptReapply",
+            69 => "LocationUpdate",
+            70 => "LocationError",
             _ => panic!(),
         }
     }
@@ -379,6 +393,7 @@ impl Event {
             Self::WindowGeomChange(_) => 17,
             Self::VirtualKeyboard(_) => 18,
             Self::ClearAtlasses => 19,
+            Self::ClearHover => 72,
             Self::PopupDismissed(_) => 61,
 
             Self::MouseDown(_) => 20,
@@ -424,10 +439,13 @@ impl Event {
             Self::VideoSeekableRanges(_) => 63,
             Self::VideoBufferedRanges(_) => 64,
             Self::VideoYuvTexturesReady(_) => 65,
+            Self::VideoTracksChanged(_) => 71,
             Self::MouseLeave(_) => 51,
             Self::Actions(_) => 52,
             Self::BackPressed { .. } => 53,
             Self::PermissionResult(_) => 54,
+            Self::LocationUpdate(_) => 69,
+            Self::LocationError(_) => 70,
 
             #[cfg(target_arch = "wasm32")]
             Self::ToWasmMsg(_) => 55,

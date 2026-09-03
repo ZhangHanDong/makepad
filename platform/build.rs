@@ -77,6 +77,10 @@ fn main() {
             <string>ExtendedGamepad</string>
         </dict>
     </array>
+    <key>NSLocationUsageDescription</key>
+    <string>Used to show your position on the map.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Used to show your position on the map.</string>
 </dict>
 </plist>
 "#
@@ -153,6 +157,8 @@ fn main() {
     match target_os.as_str() {
         "macos" => {
             println!("cargo:rustc-link-lib=framework=GameController");
+            println!("cargo:rustc-link-lib=framework=CoreLocation");
+            println!("cargo:rustc-link-lib=framework=AudioToolbox");
         }
         "ios" => {
             if target == "aarch64-apple-ios-sim" {
@@ -160,6 +166,8 @@ fn main() {
             }
             println!("cargo:rustc-link-lib=framework=MetalKit");
             println!("cargo:rustc-link-lib=framework=GameController");
+            println!("cargo:rustc-link-lib=framework=CoreLocation");
+            println!("cargo:rustc-link-lib=framework=AudioToolbox");
         }
         "tvos" => {
             if target == "aarch64-apple-tvos-sim" {

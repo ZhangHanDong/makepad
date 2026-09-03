@@ -20,6 +20,8 @@ impl Cx {
     ) {
         // tad ugly otherwise the borrow checker locks 'self' and we can't recur
         let draw_order_len = self.draw_lists[draw_list_id].draw_item_order_len();
+        // Exploded z-layer view: z is the call's nesting depth, not paint order.
+        let sploded = self.passes[draw_pass_id].sploded.is_some();
         self.draw_lists[draw_list_id]
             .draw_list_uniforms
             .view_transform = Mat4f::identity();
@@ -34,17 +36,16 @@ impl Cx {
                 self.draw_lists[draw_list_id].draw_items[draw_item_id].sub_list()
             {
                 let child_resets_zbias = self.draw_lists[sub_list_id].reset_zbias;
-                let mut child_zbias = 0.0f32;
-                self.render_view(
-                    draw_pass_id,
-                    sub_list_id,
-                    if child_resets_zbias {
-                        &mut child_zbias
-                    } else {
-                        zbias
-                    },
-                    zbias_step,
-                );
+                let mut own_zbias = 0.0f32;
+                let child_zbias = if child_resets_zbias {
+                    &mut own_zbias
+                } else {
+                    &mut *zbias
+                };
+                // An overlay list carries a depth floor: this is what makes it
+                // composite above body content that uses `draw_depth`.
+                self.draw_lists[sub_list_id].raise_zbias_to_floor(child_zbias);
+                self.render_view(draw_pass_id, sub_list_id, child_zbias, zbias_step);
             } else {
                 let draw_list = &mut self.draw_lists[draw_list_id];
                 //view.platform.uni_vw.update_with_f32_data(device, &view.uniforms);
@@ -78,7 +79,7 @@ impl Cx {
                     });
                     draw_call.instance_dirty = false;
                 }
-                draw_call.draw_call_uniforms.set_zbias(*zbias);
+                draw_call.resolve_zbias(*zbias, sploded);
                 *zbias += zbias_step;
 
                 // update/alloc textures?
@@ -107,6 +108,8 @@ impl Cx {
                                         data: WasmPtrU32::new((*data).as_ref().unwrap()),
                                     });
                                 }
+                                // VecMipBGRAu8_32: level 0 only for now (safe, no mip chain).
+                                // Real mips (gl.generateMipmap) are a TODO for the web backend.
                                 TextureFormat::VecMipBGRAu8_32 {
                                     width,
                                     height,
@@ -361,12 +364,19 @@ impl Cx {
             let size = pass_size * dpi_factor;
             self.textures[color_texture.texture.texture_id()]
                 .alloc_render(size.x as usize, size.y as usize);
+            // Attachment format for the JS side: R32F float targets need a
+            // different texImage2D (and EXT_color_buffer_float).
+            let format = match &self.textures[color_texture.texture.texture_id()].format {
+                TextureFormat::RenderRf32 { .. } => 1,
+                _ => 0,
+            };
             match color_texture.clear_color {
                 DrawPassClearColor::InitWith(clear_color) => {
                     color_targets[index] = WColorTarget {
                         texture_id: color_texture.texture.texture_id().0,
                         init_only: true,
                         clear_color: clear_color.into(),
+                        format,
                     };
                 }
                 DrawPassClearColor::ClearWith(clear_color) => {
@@ -374,6 +384,7 @@ impl Cx {
                         texture_id: color_texture.texture.texture_id().0,
                         init_only: false,
                         clear_color: clear_color.into(),
+                        format,
                     };
                 }
             }
@@ -492,7 +503,6 @@ precision highp int;
 vec4 sample2d(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, pos.y));}}
 vec4 sample2d_lod(sampler2D sampler, vec2 pos, float lod){{return textureLod(sampler, vec2(pos.x, pos.y), lod);}}
 vec4 sample2d_bgra(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, pos.y)).zyxw;}}
-vec4 sample2d_rt(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, 1.0 - pos.y));}}
 vec4 samplecube(samplerCube sampler, vec3 dir){{return texture(sampler, dir);}}
 vec4 samplecube_lod(samplerCube sampler, vec3 dir, float lod){{return textureLod(sampler, dir, lod);}}
 vec4 samplecube_bgra(samplerCube sampler, vec3 dir){{return texture(sampler, dir).zyxw;}}
@@ -509,7 +519,6 @@ precision highp int;
 vec4 sample2d(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, pos.y));}}
 vec4 sample2d_lod(sampler2D sampler, vec2 pos, float lod){{return textureLod(sampler, vec2(pos.x, pos.y), lod);}}
 vec4 sample2d_bgra(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, pos.y)).zyxw;}}
-vec4 sample2d_rt(sampler2D sampler, vec2 pos){{return texture(sampler, vec2(pos.x, 1.0 - pos.y));}}
 vec4 samplecube(samplerCube sampler, vec3 dir){{return texture(sampler, dir);}}
 vec4 samplecube_lod(samplerCube sampler, vec3 dir, float lod){{return textureLod(sampler, dir, lod);}}
 vec4 samplecube_bgra(samplerCube sampler, vec3 dir){{return texture(sampler, dir).zyxw;}}

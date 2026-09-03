@@ -213,7 +213,7 @@ impl Cx {
     ) {
         let draw_list_id = self.passes[draw_pass_id].main_draw_list_id.unwrap();
 
-        self.setup_render_pass(draw_pass_id);
+        self.setup_render_pass(draw_pass_id, false);
 
         // keep repainting in a loop
         //self.passes[draw_pass_id].paint_dirty = false;
@@ -285,7 +285,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self, direct_app: &mut DirectApp) -> EventFlow {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     let window = &mut self.windows[window_id];
@@ -394,6 +394,12 @@ impl Cx {
                         },
                     ));
                 }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on Linux direct");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 }

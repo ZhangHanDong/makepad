@@ -14,6 +14,7 @@ pub struct StackBases {
     pub stack: usize,
     pub scope: usize,
     pub mes: usize,
+    pub slots: usize,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,11 @@ pub struct LoopValues {
     pub index_id: Option<LiveId>,
     pub source: ScriptValue,
     pub index: f64,
+    /// (end, step) captured at loop entry for range sources the script can
+    /// no longer reach (un-REFFED range literals like `for i in 0..n`) —
+    /// skips two proto-chain lookups per iteration. REFFED ranges keep the
+    /// live per-iteration lookups since script code could mutate them.
+    pub range_cache: Option<(f64, f64)>,
 }
 
 #[derive(Debug)]
@@ -45,6 +51,10 @@ pub struct CallFrame {
     pub bases: StackBases,
     pub args: OpcodeArgs,
     pub return_ip: Option<ScriptIp>,
+    /// slot_base of the CALLER, restored when this frame is popped.
+    /// The callee's own frame is established by SLOTS_FRAME (slot-compiled
+    /// fns only); non-slotted fns never touch slot_base.
+    pub prev_slot_base: usize,
 }
 
 #[derive(Debug)]
@@ -94,6 +104,12 @@ pub struct ScriptThread {
     pub(crate) stack: Vec<ScriptValue>,
     pub(crate) calls: Vec<CallFrame>,
     pub(crate) mes: Vec<ScriptMe>,
+    /// Frame-local variable slots for slot-compiled fn bodies. Lexically
+    /// resolved locals live here as `slots[slot_base + i]` instead of in
+    /// scope-object maps; GC marks the whole slab as roots.
+    pub(crate) slots: Vec<ScriptValue>,
+    /// Base of the CURRENT slot frame (see CallFrame::prev_slot_base).
+    pub(crate) slot_base: usize,
     pub(crate) instruction_limit_remaining: Option<usize>,
     pub trap: ScriptTrapInner,
     //pub(crate) last_err: ScriptValue,
@@ -107,13 +123,17 @@ impl ScriptThread {
             thread_id,
             is_paused: false,
             //last_err: NIL,
-            scopes: vec![],
+            // pre-reserve the hot stacks so steady-state execution never
+            // pays Vec growth in the interpreter loop
+            scopes: Vec::with_capacity(64),
             tries: vec![],
             stack_limit: 1_000_000,
-            loops: vec![],
-            stack: vec![],
-            calls: vec![],
-            mes: vec![],
+            loops: Vec::with_capacity(16),
+            stack: Vec::with_capacity(1024),
+            calls: Vec::with_capacity(64),
+            mes: Vec::with_capacity(64),
+            slots: Vec::with_capacity(256),
+            slot_base: 0,
             instruction_limit_remaining: None,
             trap: ScriptTrapInner::default(),
             json_parser: Default::default(),
@@ -127,11 +147,12 @@ impl ScriptThread {
             stack: self.stack.len(),
             scope: self.scopes.len(),
             mes: self.mes.len(),
+            slots: self.slots.len(),
         }
     }
 
     pub fn pause(&mut self) -> ScriptThreadId {
-        self.trap.on.set(Some(ScriptTrapOn::Pause));
+        self.trap.set_on(Some(ScriptTrapOn::Pause));
         self.is_paused = true;
         self.thread_id
     }
@@ -150,12 +171,38 @@ impl ScriptThread {
         self.stack.truncate(bases.stack);
         self.free_unreffed_scopes(&bases, heap);
         self.mes.truncate(bases.mes);
+        self.slots.truncate(bases.slots);
+    }
+
+    /// Read a slot of the current frame. Bounds-checked: the parser only
+    /// emits in-frame indices, but stay safe and trap instead of panicking.
+    #[inline]
+    pub fn slot(&mut self, index: u32) -> ScriptValue {
+        if let Some(v) = self.slots.get(self.slot_base + index as usize) {
+            return *v;
+        }
+        script_err_stack!(self.trap, "slot {} out of frame", index)
+    }
+
+    #[inline]
+    pub fn set_slot(&mut self, index: u32, value: ScriptValue) {
+        let at = self.slot_base + index as usize;
+        if let Some(v) = self.slots.get_mut(at) {
+            *v = value;
+        } else {
+            script_err_stack!(self.trap, "slot {} out of frame", index);
+        }
     }
 
     pub fn free_unreffed_scopes(&mut self, bases: &StackBases, heap: &mut ScriptHeap) {
         while self.scopes.len() > bases.scope {
             let scope = self.scopes.pop().unwrap();
-            heap.free_object_if_unreffed(scope); // DISABLED: investigating RootObject already freed
+            // Eager scope reclamation at call/loop exit. Safe: a scope
+            // captured by a closure became that closure's proto (REFFED in
+            // new_with_proto), a host-held scope is REFFED via
+            // new_object_ref, and a scope stored as a value went through the
+            // escape barrier — all three make this a no-op and defer to GC.
+            heap.free_object_if_unreffed(scope);
         }
     }
 

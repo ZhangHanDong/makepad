@@ -24,8 +24,23 @@ use wayland_protocols::xdg::toplevel_icon::v1::client::{
 };
 
 use crate::opengl_cx::OpenglCx;
+use crate::screen::DEFAULT_WINDOW_SIZE;
 use crate::wayland::wayland_state::WaylandState;
 use crate::{egl_sys, event::WindowGeom, WindowId};
+
+/// Wraps a `wl_egl_window` in an `EGLSurface`, or returns null when the driver refuses it —
+/// which it does for an extent it cannot allocate a buffer for, however willingly
+/// `wl_egl_window_create` accepted the same numbers.
+fn create_egl_window_surface(opengl_cx: &OpenglCx, wl_egl_surface: &WlEglSurface) -> EGLSurface {
+    unsafe {
+        (opengl_cx.libegl.eglCreateWindowSurface.unwrap())(
+            opengl_cx.egl_display,
+            opengl_cx.egl_config,
+            wl_egl_surface.ptr() as NativeWindowType,
+            std::ptr::null(),
+        )
+    }
+}
 
 pub(crate) struct WaylandWindow {
     pub window_id: WindowId,
@@ -87,17 +102,40 @@ impl WaylandWindow {
         }
         base_surface.commit();
 
-        let wl_egl_surface =
-            WlEglSurface::new(base_surface.id(), inner_size.x as i32, inner_size.y as i32).unwrap();
-        let egl_surface = unsafe {
-            (opengl_cx.libegl.eglCreateWindowSurface.unwrap())(
-                opengl_cx.egl_display,
-                opengl_cx.egl_config,
-                wl_egl_surface.ptr() as NativeWindowType,
-                std::ptr::null(),
-            )
+        // `wl_egl_window_create` rejects a non-positive extent, and a float-to-int cast turns
+        // both a negative and a NaN into zero, so the requested size is floored before the
+        // call rather than allowed to panic an app at startup over a bad saved size.
+        let egl_w = (inner_size.x as i32).max(1);
+        let egl_h = (inner_size.y as i32).max(1);
+        let mut wl_egl_surface = match WlEglSurface::new(base_surface.id(), egl_w, egl_h) {
+            Ok(surface) => surface,
+            Err(e) => {
+                crate::error!("wl_egl_window_create failed at {egl_w}x{egl_h}: {e:?}");
+                WlEglSurface::new(base_surface.id(), 800, 600)
+                    .expect("wl_egl_window_create failed at the fallback size too")
+            }
         };
-        assert!(!egl_surface.is_null(), "eglCreateWindowSurface failed");
+        let mut egl_surface = create_egl_window_surface(opengl_cx, &wl_egl_surface);
+        // `wl_egl_window_create` accepts an extent it never allocates for, so a size too large to
+        // back is not refused until here. Falling back to a window that works beats taking the
+        // process down: the size came from a state file, and an app that panics on startup cannot
+        // rewrite the file that is panicking it, so every later launch would die the same way.
+        if egl_surface.is_null() {
+            crate::error!(
+                "eglCreateWindowSurface failed at {egl_w}x{egl_h}; retrying at the default size"
+            );
+            wl_egl_surface = WlEglSurface::new(
+                base_surface.id(),
+                DEFAULT_WINDOW_SIZE.x as i32,
+                DEFAULT_WINDOW_SIZE.y as i32,
+            )
+            .expect("wl_egl_window_create failed at the fallback size too");
+            egl_surface = create_egl_window_surface(opengl_cx, &wl_egl_surface);
+        }
+        assert!(
+            !egl_surface.is_null(),
+            "eglCreateWindowSurface failed at the fallback size too"
+        );
 
         // let positioner = wm_base.create_positioner(qhandle, ());
         let position = position.unwrap_or_default();
@@ -314,21 +352,28 @@ impl WaylandPopupWindow {
         base_surface.commit();
         positioner.destroy();
 
-        let wl_egl_surface = WlEglSurface::new(
-            base_surface.id(),
-            size.x.max(1.0) as i32,
-            size.y.max(1.0) as i32,
-        )
-        .unwrap();
-        let egl_surface = unsafe {
-            (opengl_cx.libegl.eglCreateWindowSurface.unwrap())(
-                opengl_cx.egl_display,
-                opengl_cx.egl_config,
-                wl_egl_surface.ptr() as NativeWindowType,
-                std::ptr::null(),
+        let popup_w = size.x.max(1.0) as i32;
+        let popup_h = size.y.max(1.0) as i32;
+        let mut wl_egl_surface = WlEglSurface::new(base_surface.id(), popup_w, popup_h).unwrap();
+        // Same fallback as `WaylandWindow::new`: a popup extent the driver cannot back should
+        // cost the popup its requested size, not the process.
+        let mut egl_surface = create_egl_window_surface(opengl_cx, &wl_egl_surface);
+        if egl_surface.is_null() {
+            crate::error!(
+                "eglCreateWindowSurface failed for a popup at {popup_w}x{popup_h}; retrying at the default size"
+            );
+            wl_egl_surface = WlEglSurface::new(
+                base_surface.id(),
+                DEFAULT_WINDOW_SIZE.x as i32,
+                DEFAULT_WINDOW_SIZE.y as i32,
             )
-        };
-        assert!(!egl_surface.is_null(), "eglCreateWindowSurface failed");
+            .expect("wl_egl_window_create failed at the fallback size too");
+            egl_surface = create_egl_window_surface(opengl_cx, &wl_egl_surface);
+        }
+        assert!(
+            !egl_surface.is_null(),
+            "eglCreateWindowSurface failed at the fallback size too"
+        );
 
         let geom = WindowGeom {
             xr_is_presenting: false,

@@ -12,8 +12,13 @@ use crate::makepad_live_id::*;
 use crate::makepad_math::{dvec2, Rect, Vec2d};
 use crate::opengl_cx::OpenglCx;
 use crate::os::linux::gstreamer_sys::LibGStreamer;
-use crate::os::linux::linux_video_playback::GStreamerVideoPlayer;
-use crate::os::linux::linux_video_player::{LinuxVideoPlayer, YuvTextureSet};
+use crate::os::linux::linux_video_playback::{
+    poll_pending_gstreamer_teardowns, GStreamerVideoPlayer,
+};
+use crate::os::linux::linux_video_player::{
+    collect_linux_video_player_events, prepare_desktop_linux_video, LinuxPrepareResult,
+    LinuxVideoPlayer,
+};
 use crate::os::linux::v4l2_camera_player::V4l2CameraPlayer;
 use crate::wayland::wayland_app::WaylandApp;
 use crate::wayland::xkb_sys;
@@ -24,9 +29,8 @@ use crate::{
     egl_sys,
     event::{
         video_playback::{
-            VideoBufferedRangesEvent, VideoDecodingErrorEvent, VideoPlaybackPreparedEvent,
-            VideoPlaybackResourcesReleasedEvent, VideoSeekableRangesEvent, VideoSource,
-            VideoTextureUpdatedEvent, VideoYuvTexturesReady,
+            VideoDecodingErrorEvent, VideoPlaybackResourcesReleasedEvent, VideoSource,
+            VideoYuvTexturesReady,
         },
         PopupDismissReason, PopupDismissedEvent,
     },
@@ -53,6 +57,13 @@ pub fn wayland_event_loop(cx: Rc<RefCell<Cx>>) {
 pub(crate) struct WaylandCx {
     cx: Rc<RefCell<Cx>>,
     qhandle: Option<wayland_client::QueueHandle<WaylandState>>,
+    /// Pace presents with `wl_surface::frame` callbacks: a window is only presented
+    /// once the callback for its previous frame has fired. The EGL swap interval is 0
+    /// on Wayland (see `OpenglCx::swap_interval`), so this is what caps the render
+    /// loop at the display rate, and it keeps redraws of occluded windows (whose
+    /// callbacks the compositor withholds) from wedging the event loop. Disabled by
+    /// `MAKEPAD_NO_VSYNC` for uncapped benchmarking.
+    frame_pacing: bool,
 }
 
 impl WaylandCx {
@@ -67,6 +78,7 @@ impl WaylandCx {
         let wayland_cx = Rc::new(RefCell::new(WaylandCx {
             cx: cx.clone(),
             qhandle: None,
+            frame_pacing: std::env::var_os("MAKEPAD_NO_VSYNC").is_none(),
         }));
         let conn = Connection::connect_to_env().unwrap();
         let display = conn.display();
@@ -205,19 +217,23 @@ impl WaylandCx {
                     .iter_mut()
                     .find(|w| w.window_id == re.window_id)
                 {
+                    // compare in native units, before new_geom is converted below
+                    let geom_changed = re.old_geom.inner_size != re.new_geom.inner_size
+                        || re.old_geom.dpi_factor != re.new_geom.dpi_factor;
+
+                    // Keep the wayland geom native (buffer/viewport size + the next resize's dpi come
+                    // from it). Store the zoomed geom here and the next resize reads its dpi back as
+                    // "native", so the zoom drifts/resets and the window flickers on maximize. Only
+                    // the Cx window gets the zoomed geom.
+                    window.window_geom = re.new_geom.clone();
                     {
                         let cx_window = &mut cx.windows[re.window_id];
                         cx_window.os_dpi_factor = Some(re.new_geom.dpi_factor);
                         re.new_geom = cx_window.native_window_geom_to_layout(re.new_geom);
                     }
-
-                    window.window_geom = re.new_geom.clone();
                     cx.windows[re.window_id].window_geom = re.new_geom.clone();
-                    // Redraw this window root draw list when logical size or
-                    // backing scale changes.
-                    if re.old_geom.inner_size != re.new_geom.inner_size
-                        || re.old_geom.dpi_factor != re.new_geom.dpi_factor
-                    {
+                    // redraw when the size or scale changed
+                    if geom_changed {
                         if let Some(main_pass_id) = cx.windows[re.window_id].main_pass_id {
                             cx.redraw_pass_and_child_passes(main_pass_id);
                         }
@@ -227,16 +243,17 @@ impl WaylandCx {
                     .iter_mut()
                     .find(|w| w.window_id == re.window_id)
                 {
+                    let geom_changed = re.old_geom.inner_size != re.new_geom.inner_size
+                        || re.old_geom.dpi_factor != re.new_geom.dpi_factor;
+                    // same deal — keep the wayland geom native
+                    window.window_geom = re.new_geom.clone();
                     {
                         let cx_window = &mut cx.windows[re.window_id];
                         cx_window.os_dpi_factor = Some(re.new_geom.dpi_factor);
                         re.new_geom = cx_window.native_window_geom_to_layout(re.new_geom);
                     }
-                    window.window_geom = re.new_geom.clone();
                     cx.windows[re.window_id].window_geom = re.new_geom.clone();
-                    if re.old_geom.inner_size != re.new_geom.inner_size
-                        || re.old_geom.dpi_factor != re.new_geom.dpi_factor
-                    {
+                    if geom_changed {
                         if let Some(main_pass_id) = cx.windows[re.window_id].main_pass_id {
                             cx.redraw_pass_and_child_passes(main_pass_id);
                         }
@@ -273,6 +290,20 @@ impl WaylandCx {
 
                 self.handle_repaint(state);
 
+                {
+                    let cx = self.cx.borrow();
+                    let has_platform_ops = !cx.platform_ops.is_empty();
+                    drop(cx);
+                    if has_platform_ops {
+                        if let EventFlow::Exit = self.handle_platform_ops(state) {
+                            let mut cx = self.cx.borrow_mut();
+                            cx.call_event_handler(&Event::Shutdown);
+                            state.event_loop_running = false;
+                            return EventFlow::Exit;
+                        }
+                    }
+                }
+
                 // Run script-VM garbage collection at a safe point after paint, matching
                 // the macOS backend. Without this the script object heap grows without
                 // bound: every `eval` / `script_apply_eval!` allocates script objects
@@ -285,6 +316,24 @@ impl WaylandCx {
                         }
                     });
                 }
+
+                // With the swap interval at 0 nothing in the paint path blocks, so after
+                // a paint keep polling only while presenting can make progress. Once a
+                // frame callback is in flight, further presents are gated on it and
+                // poll-spinning would just burn CPU re-running next-frame/draw events;
+                // wait instead. The callback (like any other socket event or timer)
+                // wakes the select loop, which dispatches it and paints again.
+                let cx = self.cx.borrow();
+                let has_work = cx.any_passes_dirty()
+                    || cx.need_redrawing()
+                    || cx.new_next_frames.len() != 0
+                    || cx.screenshot_requests.len() > 0
+                    || cx.demo_time_repaint;
+                return if has_work && !state.any_frame_callback_pending() {
+                    EventFlow::Poll
+                } else {
+                    EventFlow::Wait
+                };
             }
             XlibEvent::MouseMove(mut e) => {
                 let mut cx = self.cx.borrow_mut();
@@ -338,13 +387,15 @@ impl WaylandCx {
                 let mut cx = self.cx.borrow_mut();
                 cx.call_event_handler(&Event::TextInput(e))
             }
-            XlibEvent::Drag(e) => {
+            XlibEvent::Drag(window_id, mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, window_id);
                 cx.call_event_handler(&Event::Drag(e));
                 cx.drag_drop.cycle_drag();
             }
-            XlibEvent::Drop(e) => {
+            XlibEvent::Drop(window_id, mut e) => {
                 let mut cx = self.cx.borrow_mut();
+                cx.dpi_override_scale(&mut e.abs, window_id);
                 cx.call_event_handler(&Event::Drop(e));
                 cx.drag_drop.cycle_drag();
             }
@@ -398,83 +449,29 @@ impl WaylandCx {
                     cx.handle_networking_events();
 
                     // Poll video players on the timer tick (every ~8ms).
-                    if !cx.os.video_players.is_empty() {
+                    // Always sweep pending GStreamer teardowns so the last closed
+                    // player still finishes NULL without waiting for a new prepare.
+                    if cx.os.video_players.is_empty() {
+                        poll_pending_gstreamer_teardowns();
+                    } else {
                         cx.os.opengl_cx.as_ref().unwrap().make_current();
                         let gl: *const crate::os::linux::gl_sys::LibGl =
                             &cx.os.opengl_cx.as_ref().unwrap().libgl;
+                        let egl = cx
+                            .os
+                            .opengl_cx
+                            .as_ref()
+                            .map(|cx| cx as *const super::super::opengl_cx::OpenglCx);
                         let mut players = std::mem::take(&mut cx.os.video_players);
                         let mut video_events = Vec::new();
                         for (_video_id, player) in players.iter_mut() {
-                            match player.check_prepared() {
-                                Some(Ok(crate::media_plugin::PlaybackPrepared {
-                                    width,
-                                    height,
-                                    duration_ms: duration,
-                                    is_seekable,
-                                    video_tracks,
-                                    audio_tracks,
-                                })) => {
-                                    video_events.push(Event::VideoPlaybackPrepared(
-                                        VideoPlaybackPreparedEvent {
-                                            video_id: player.video_id(),
-                                            video_width: width,
-                                            video_height: height,
-                                            duration,
-                                            is_seekable,
-                                            video_tracks,
-                                            audio_tracks,
-                                        },
-                                    ));
-                                    let seekable = player.seekable_ranges();
-                                    if !seekable.is_empty() {
-                                        video_events.push(Event::VideoSeekableRanges(
-                                            VideoSeekableRangesEvent {
-                                                video_id: player.video_id(),
-                                                ranges: seekable,
-                                            },
-                                        ));
-                                    }
-                                    let buffered = player.buffered_ranges();
-                                    if !buffered.is_empty() {
-                                        video_events.push(Event::VideoBufferedRanges(
-                                            VideoBufferedRangesEvent {
-                                                video_id: player.video_id(),
-                                                ranges: buffered,
-                                            },
-                                        ));
-                                    }
-                                }
-                                Some(Err(err)) => {
-                                    video_events.push(Event::VideoDecodingError(
-                                        VideoDecodingErrorEvent {
-                                            video_id: player.video_id(),
-                                            error: err,
-                                        },
-                                    ));
-                                }
-                                None => {}
-                            }
-                            if player.poll_frame(unsafe { &*gl }, &mut cx.textures) {
-                                video_events.push(Event::VideoTextureUpdated(
-                                    VideoTextureUpdatedEvent {
-                                        video_id: player.video_id(),
-                                        current_position_ms: player.current_position_ms(),
-                                        yuv: crate::event::video_playback::VideoYuvMetadata {
-                                            enabled: player.is_yuv_mode(),
-                                            matrix: player.yuv_matrix(),
-                                            biplanar: false,
-                                            rotation_steps: 0.0,
-                                        },
-                                    },
-                                ));
-                            }
-                            if player.check_eos() {
-                                video_events.push(Event::VideoPlaybackCompleted(
-                                    crate::event::video_playback::VideoPlaybackCompletedEvent {
-                                        video_id: player.video_id(),
-                                    },
-                                ));
-                            }
+                            let opengl_cx = egl.map(|ptr| unsafe { &*ptr });
+                            video_events.extend(collect_linux_video_player_events(
+                                player,
+                                unsafe { &*gl },
+                                &mut cx.textures,
+                                opengl_cx,
+                            ));
                         }
                         cx.os.video_players = players;
                         for event in video_events {
@@ -498,6 +495,20 @@ impl WaylandCx {
                     }
                 }
                 return EventFlow::Wait;
+            }
+        }
+        // Drain ops queued during this event (e.g. pause/resume from MouseDown).
+        {
+            let cx = self.cx.borrow();
+            let has_platform_ops = !cx.platform_ops.is_empty();
+            drop(cx);
+            if has_platform_ops {
+                if let EventFlow::Exit = self.handle_platform_ops(state) {
+                    let mut cx = self.cx.borrow_mut();
+                    cx.call_event_handler(&Event::Shutdown);
+                    state.event_loop_running = false;
+                    return EventFlow::Exit;
+                }
             }
         }
         let cx = self.cx.borrow();
@@ -542,6 +553,8 @@ impl WaylandCx {
         if state.keyboard_window == Some(window_id) {
             state.keyboard_window = None;
         }
+        // A frame callback in flight for a destroyed surface never fires.
+        state.clear_frame_callback_pending(window_id);
         if let Some(index) = state.popups.iter().position(|w| w.window_id == window_id) {
             state.popups.remove(index);
         }
@@ -569,6 +582,8 @@ impl WaylandCx {
         if state.keyboard_window == Some(window_id) {
             state.keyboard_window = None;
         }
+        // A frame callback in flight for a destroyed surface never fires.
+        state.clear_frame_callback_pending(window_id);
         if let Some(index) = state.windows.iter().position(|w| w.window_id == window_id) {
             state.windows.remove(index);
             if state.windows.is_empty() {
@@ -606,7 +621,7 @@ impl WaylandCx {
         if cx.platform_ops.is_empty() {
             return EventFlow::Poll;
         }
-        while let Some(op) = cx.platform_ops.pop() {
+        while let Some(op) = cx.platform_ops.pop_front() {
             match op {
                 CxOsOp::SetCursor(_) | CxOsOp::StartTimer { .. } | CxOsOp::StopTimer(_) => {}
                 _ => {
@@ -619,6 +634,7 @@ impl WaylandCx {
                     let compositor = state.compositor.as_ref().unwrap();
                     let wm_base = state.wm_base.as_ref().unwrap();
                     let window = &cx.windows[window_id];
+                    let (create_position, create_inner_size) = window.create_geom();
                     let app_id = if window.create_app_id.is_empty() {
                         "Makepad"
                     } else {
@@ -635,8 +651,8 @@ impl WaylandCx {
                         state.shm.as_ref(),
                         self.qhandle.as_ref().unwrap(),
                         gl_cx,
-                        window.create_inner_size.unwrap_or(dvec2(800., 600.)),
-                        window.create_position,
+                        create_inner_size,
+                        create_position,
                         &window.create_title,
                         app_id,
                         window.is_fullscreen,
@@ -644,7 +660,20 @@ impl WaylandCx {
                     if cx.windows[window_id].backdrop != crate::window::WindowBackdrop::None {
                         log_linux_backdrop_unsupported_once();
                     }
+                    // Same as every other backend (x11/windows/macos/...): the Cx window
+                    // only becomes usable once its OS window exists. Without `is_created`,
+                    // `Cx::dpi_override_scale()` and `get_delegated_dpi_factor()` silently
+                    // no-op, so pointer `abs` keeps arriving in native surface points while
+                    // widget rects live in (zoomed) layout points and every click misses.
+                    // Seed the geom too: the default `dpi_factor` is 0.0, which would make
+                    // `get_pass_rect()` produce NaN once the flag is on.
+                    let native_geom = window.window_geom.clone();
                     state.windows.push(window);
+                    let cx_window = &mut cx.windows[window_id];
+                    cx_window.os_dpi_factor = Some(native_geom.dpi_factor);
+                    let layout_geom = cx_window.native_window_geom_to_layout(native_geom);
+                    cx_window.window_geom = layout_geom;
+                    cx_window.is_created = true;
                 }
                 CxOsOp::CreatePopupWindow {
                     window_id,
@@ -680,7 +709,14 @@ impl WaylandCx {
                         cx.windows[window_id].popup_position = Some(position);
                         cx.windows[window_id].popup_size = Some(size);
                         cx.windows[window_id].popup_grab_keyboard = grab_keyboard;
+                        // See CreateWindow above.
+                        let native_geom = popup.window_geom.clone();
                         state.popups.push(popup);
+                        let cx_window = &mut cx.windows[window_id];
+                        cx_window.os_dpi_factor = Some(native_geom.dpi_factor);
+                        let layout_geom = cx_window.native_window_geom_to_layout(native_geom);
+                        cx_window.window_geom = layout_geom;
+                        cx_window.is_created = true;
                     }
                 }
                 CxOsOp::CloseWindow(window_id) => {
@@ -729,8 +765,68 @@ impl WaylandCx {
                         window.toplevel.unset_fullscreen();
                     }
                 }
-                CxOsOp::ResizeWindow(window_id, size) => {}
-                CxOsOp::RepositionWindow(window_id, size) => {}
+                CxOsOp::ResizeWindow(window_id, size) => {
+                    // A Wayland client has no "set my size" request. Window geometry is by
+                    // default whatever the surface commits -- `xdg_surface.set_window_geometry`:
+                    // "If never set, the value is the full bounds of the surface ... This
+                    // updates dynamically on every commit" -- and this backend never sets it,
+                    // so a self-resize is just the next frame committed at a different extent.
+                    // The paint path derives the EGL extent and the viewport destination from
+                    // `window_geom.inner_size`, so writing it here is the whole operation.
+                    //
+                    // Only a floating toplevel may choose its own size. Under xdg_toplevel's
+                    // `maximized` state the configured window geometry must be obeyed "or the
+                    // xdg_wm_base.invalid_surface_state error is raised", which disconnects the
+                    // client; under `fullscreen` the configured geometry is a maximum. The
+                    // configure handler folds both states into `is_fullscreen`, so that one
+                    // flag gates the operation. Popups take their extent from their positioner
+                    // and are deliberately not matched here.
+                    if let Some(window) =
+                        state.windows.iter_mut().find(|w| w.window_id == window_id)
+                    {
+                        if window.window_geom.is_fullscreen {
+                            crate::error!(
+                                "ResizeWindow ignored: a maximized or fullscreen Wayland toplevel \
+                                 must keep the size the compositor configured."
+                            );
+                        } else if let Some(size) = crate::screen::sanitize_resize(size) {
+                            // Wayland surface coordinates are already logical points, so unlike
+                            // X11 and Win32 -- which scale the request into device pixels -- the
+                            // requested size is the surface extent as-is.
+                            window.window_geom.inner_size = size;
+                            window.window_geom.outer_size = size;
+                            let native_geom = window.window_geom.clone();
+                            let cx_window = &mut cx.windows[window_id];
+                            cx_window.os_dpi_factor = Some(native_geom.dpi_factor);
+                            let layout_geom =
+                                cx_window.native_window_geom_to_layout(native_geom);
+                            cx_window.window_geom = layout_geom;
+                            if let Some(main_pass_id) = cx_window.main_pass_id {
+                                cx.redraw_pass_and_child_passes(main_pass_id);
+                            }
+                        } else {
+                            crate::error!(
+                                "ResizeWindow ignored: {}x{} is not a usable surface extent.",
+                                size.x,
+                                size.y
+                            );
+                        }
+                    }
+                }
+                // A Wayland client is not told where its windows are and cannot move them;
+                // the compositor owns placement, so a window here is never left off-screen
+                // by a restored position the way it can be on Windows, macOS and X11.
+                // xdg_toplevel exposes no absolute-positioning request: `move` is
+                // interactive and serial-gated ("This request must be used in response to
+                // some sort of user action"), and `reposition` is an xdg_popup request
+                // requiring xdg_wm_base v3, which `wayland_state.rs` does not bind. This arm
+                // is correct as a permanent no-op.
+                CxOsOp::RepositionWindow(_window_id, _size) => {}
+                CxOsOp::SetWindowTitle(window_id, title) => {
+                    if let Some(window) = state.windows.iter().find(|w| w.window_id == window_id) {
+                        window.toplevel.set_title(title);
+                    }
+                }
                 CxOsOp::SetWindowVisuals(_window_id, visuals) => {
                     if visuals.backdrop != crate::window::WindowBackdrop::None {
                         log_linux_backdrop_unsupported_once();
@@ -764,6 +860,10 @@ impl WaylandCx {
                 CxOsOp::StartDragging(items) => {
                     state.start_internal_drag(items);
                 }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on Wayland");
+                    cx.call_event_handler(&Event::DragEnd);
+                }
                 CxOsOp::SetCursor(cursor) => {
                     if let Some(cursor_shape) = state.cursor_shape.as_ref() {
                         if let Some(serial) = state.pointer_serial.as_ref() {
@@ -780,6 +880,20 @@ impl WaylandCx {
                 }
                 CxOsOp::StopTimer(timer_id) => {
                     state.stop_timer(timer_id);
+                }
+                // The desktop's own dialog helper, on its own thread; the
+                // answer arrives as a FileDialogAction like every OS.
+                CxOsOp::SelectFileDialog(settings) => {
+                    crate::os::linux::file_dialog::open_select_file_dialog(settings);
+                }
+                CxOsOp::SaveFileDialog(settings) => {
+                    crate::os::linux::file_dialog::open_save_file_dialog(settings);
+                }
+                CxOsOp::SelectFolderDialog(settings) => {
+                    crate::os::linux::file_dialog::open_select_folder_dialog(settings);
+                }
+                CxOsOp::SaveFolderDialog(settings) => {
+                    crate::os::linux::file_dialog::open_save_folder_dialog(settings);
                 }
                 CxOsOp::HttpRequest {
                     request_id,
@@ -831,14 +945,13 @@ impl WaylandCx {
                     autoplay,
                     should_loop,
                 ) => {
-                    // Skip if an active player already exists for this video_id
-                    if cx
-                        .os
-                        .video_players
-                        .get(&video_id)
-                        .map_or(false, |p| p.is_active())
-                    {
-                        continue;
+                    // Replacing an existing player for the same id: tear down first so
+                    // prepare is never a silent no-op (source changes, replay, etc.).
+                    if let Some(mut player) = cx.os.video_players.remove(&video_id) {
+                        player.cleanup();
+                        cx.call_event_handler(&Event::VideoPlaybackResourcesReleased(
+                            VideoPlaybackResourcesReleasedEvent { video_id },
+                        ));
                     }
                     // Camera source: use V4L2 capture player with YUV plane textures
                     if let VideoSource::Camera(input_id, format_id) = source {
@@ -862,112 +975,39 @@ impl WaylandCx {
                             .video_players
                             .insert(video_id, LinuxVideoPlayer::Camera(player));
                         cx.call_event_handler(&Event::VideoYuvTexturesReady(
-                            VideoYuvTexturesReady {
-                                video_id,
-                                tex_y,
-                                tex_u,
-                                tex_v,
-                            },
+                            VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v),
                         ));
                         continue;
                     }
-                    // Try GStreamer first, fall back to software rav1d
-                    let force_software_env =
-                        std::env::var_os("MAKEPAD_FORCE_SOFTWARE_VIDEO").is_some();
-                    let mut use_software = force_software_env || source.is_session();
-                    if force_software_env {
-                        crate::log!(
-                            "VIDEO: MAKEPAD_FORCE_SOFTWARE_VIDEO set, using software video decoder"
-                        );
-                    } else if source.is_session() {
-                        crate::log!("VIDEO: session source uses software video decoder");
-                    }
-                    if cx.os.gstreamer.is_none() {
-                        match LibGStreamer::try_load() {
-                            Some(gst) => {
-                                gst.init();
-                                cx.os.gstreamer = Some(gst);
-                            }
-                            None => {
-                                crate::log!(
-                                    "VIDEO: GStreamer not available, using software video decoder"
-                                );
-                                use_software = true;
-                            }
-                        }
-                    }
-                    if !use_software {
-                        if cx.os.gstreamer.is_some() {
-                            let yuv = YuvTextureSet::new(
-                                cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                                cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                                cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                            );
-                            let gst = cx.os.gstreamer.as_ref().unwrap();
-
-                            let player = GStreamerVideoPlayer::new(
-                                gst,
-                                video_id,
-                                texture_id,
-                                Some(yuv.ids),
-                                source.clone(),
-                                autoplay,
-                                should_loop,
-                            );
-                            if player.is_active() {
-                                cx.os.video_players.insert(
-                                    video_id,
-                                    LinuxVideoPlayer::GStreamer {
-                                        player,
-                                        yuv: Some(yuv.clone()),
-                                    },
-                                );
-                                cx.call_event_handler(&Event::VideoYuvTexturesReady(
-                                    VideoYuvTexturesReady {
-                                        video_id,
-                                        tex_y: yuv.tex_y,
-                                        tex_u: yuv.tex_u,
-                                        tex_v: yuv.tex_v,
-                                    },
-                                ));
-                                continue;
-                            }
-                            crate::log!("VIDEO: GStreamer pipeline failed, falling back to software video decoder");
-                            use_software = true;
-                        }
-                    }
-                    if use_software {
-                        // Allocate YUV textures internally for software decode
-                        let yuv = YuvTextureSet::new(
-                            cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                            cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                            cx.textures.alloc(TextureFormat::VideoYuvPlane),
-                        );
-                        let player =
-                            crate::video_decode::software_video::PlaybackSessionHandle::new(
-                                video_id,
-                                texture_id,
-                                source,
-                                autoplay,
-                                should_loop,
-                            );
-                        cx.os.video_players.insert(
+                    // Shared prepare for file/network/session sources.
+                    let prep = {
+                        let cx_ref = &mut *cx;
+                        prepare_desktop_linux_video(
+                            &mut cx_ref.os.gstreamer,
+                            &mut cx_ref.textures,
                             video_id,
-                            LinuxVideoPlayer::Software {
-                                player,
-                                yuv: yuv.clone(),
-                                yuv_matrix: 0.0,
-                            },
-                        );
-                        // Notify widget so it can bind textures to shader slots
-                        cx.call_event_handler(&Event::VideoYuvTexturesReady(
-                            VideoYuvTexturesReady {
-                                video_id,
-                                tex_y: yuv.tex_y,
-                                tex_u: yuv.tex_u,
-                                tex_v: yuv.tex_v,
-                            },
-                        ));
+                            source,
+                            texture_id,
+                            autoplay,
+                            should_loop,
+                            cx_ref.os.opengl_cx.as_ref(),
+                        )
+                    };
+                    match prep {
+                        LinuxPrepareResult::Ready { player, yuv } => {
+                            cx.os.video_players.insert(video_id, player);
+                            if let Some(yuv) = yuv {
+                                cx.call_event_handler(&Event::VideoYuvTexturesReady(
+                                    VideoYuvTexturesReady::planes(video_id, yuv.tex_y, yuv.tex_u, yuv.tex_v)
+                                        .with_external_opt(yuv.tex_y_oes, yuv.tex_u_oes),
+                                ));
+                            }
+                        }
+                        LinuxPrepareResult::Failed(error) => {
+                            cx.call_event_handler(&Event::VideoDecodingError(
+                                VideoDecodingErrorEvent { video_id, error },
+                            ));
+                        }
                     }
                 }
                 CxOsOp::BeginVideoPlayback(video_id) => {
@@ -986,12 +1026,12 @@ impl WaylandCx {
                     }
                 }
                 CxOsOp::MuteVideoPlayback(video_id) => {
-                    if let Some(player) = cx.os.video_players.get(&video_id) {
+                    if let Some(player) = cx.os.video_players.get_mut(&video_id) {
                         player.mute();
                     }
                 }
                 CxOsOp::UnmuteVideoPlayback(video_id) => {
-                    if let Some(player) = cx.os.video_players.get(&video_id) {
+                    if let Some(player) = cx.os.video_players.get_mut(&video_id) {
                         player.unmute();
                     }
                 }
@@ -1009,7 +1049,7 @@ impl WaylandCx {
                     }
                 }
                 CxOsOp::SetVideoVolume(video_id, volume) => {
-                    if let Some(player) = cx.os.video_players.get(&video_id) {
+                    if let Some(player) = cx.os.video_players.get_mut(&video_id) {
                         player.set_volume(volume);
                     }
                 }
@@ -1018,19 +1058,27 @@ impl WaylandCx {
                         player.set_playback_rate(rate);
                     }
                 }
+                CxOsOp::SelectVideoTrack(video_id, index) => {
+                    if let Some(player) = cx.os.video_players.get_mut(&video_id) {
+                        let _ = player.select_video_track(index);
+                    }
+                }
+                CxOsOp::SelectAudioTrack(video_id, index) => {
+                    if let Some(player) = cx.os.video_players.get_mut(&video_id) {
+                        let _ = player.select_audio_track(index);
+                    }
+                }
                 CxOsOp::AttachCameraNativePreview { .. }
                 | CxOsOp::UpdateCameraNativePreview { .. }
                 | CxOsOp::DetachCameraNativePreview { .. } => {
                     // Native camera preview is emulated via composited texture path on Linux.
                 }
                 CxOsOp::PrepareAudioPlayback(video_id, source, autoplay, should_loop) => {
-                    if cx
-                        .os
-                        .video_players
-                        .get(&video_id)
-                        .map_or(false, |p| p.is_active())
-                    {
-                        continue;
+                    if let Some(mut player) = cx.os.video_players.remove(&video_id) {
+                        player.cleanup();
+                        cx.call_event_handler(&Event::VideoPlaybackResourcesReleased(
+                            VideoPlaybackResourcesReleasedEvent { video_id },
+                        ));
                     }
                     if cx.os.gstreamer.is_none() {
                         match LibGStreamer::try_load() {
@@ -1119,6 +1167,15 @@ impl WaylandCx {
             match parent {
                 CxDrawPassParent::Xr => {}
                 CxDrawPassParent::Window(window_id) => {
+                    // Frame-callback pacing: if this surface's previous frame callback
+                    // has not fired yet, the compositor is not ready for a new frame
+                    // (it withholds callbacks entirely while the window is occluded or
+                    // minimized). Skip the present and leave the pass dirty so the
+                    // window repaints when the callback arrives.
+                    if self.frame_pacing && state.is_frame_callback_pending(window_id) {
+                        continue;
+                    }
+                    let mut presented = false;
                     if let Some(window) =
                         state.windows.iter_mut().find(|w| w.window_id == window_id)
                     {
@@ -1139,9 +1196,14 @@ impl WaylandCx {
                         }
                         if let Some(viewport) = window.viewport.as_ref() {
                             viewport.set_source(-1., -1., -1., -1.);
+                            // `wp_viewport.set_destination` raises the `bad_value` protocol
+                            // error, which disconnects the client, on a zero or negative
+                            // extent, and a float-to-int cast turns both a negative and a NaN
+                            // into zero. Floor the destination the way `resize_buffers` floors
+                            // the EGL extent.
                             viewport.set_destination(
-                                window.window_geom.inner_size.x as i32,
-                                window.window_geom.inner_size.y as i32,
+                                window.window_geom.inner_size.x.max(1.0) as i32,
+                                window.window_geom.inner_size.y.max(1.0) as i32,
                             );
                         }
                         let pix_width =
@@ -1149,7 +1211,14 @@ impl WaylandCx {
                         let pix_height =
                             window.window_geom.inner_size.y * window.window_geom.dpi_factor;
 
-                        cx.draw_pass_to_window(
+                        // Request the next frame callback before the swap; the swap
+                        // performs the commit that carries the request.
+                        if self.frame_pacing {
+                            window
+                                .base_surface
+                                .frame(self.qhandle.as_ref().unwrap(), window_id);
+                        }
+                        presented = cx.draw_pass_to_window(
                             *draw_pass_id,
                             window.egl_surface,
                             pix_width,
@@ -1164,21 +1233,36 @@ impl WaylandCx {
                         window.resize_buffers();
                         if let Some(viewport) = window.viewport.as_ref() {
                             viewport.set_source(-1., -1., -1., -1.);
+                            // `wp_viewport.set_destination` raises the `bad_value` protocol
+                            // error, which disconnects the client, on a zero or negative
+                            // extent, and a float-to-int cast turns both a negative and a NaN
+                            // into zero. Floor the destination the way `resize_buffers` floors
+                            // the EGL extent.
                             viewport.set_destination(
-                                window.window_geom.inner_size.x as i32,
-                                window.window_geom.inner_size.y as i32,
+                                window.window_geom.inner_size.x.max(1.0) as i32,
+                                window.window_geom.inner_size.y.max(1.0) as i32,
                             );
                         }
                         let pix_width =
                             window.window_geom.inner_size.x * window.window_geom.dpi_factor;
                         let pix_height =
                             window.window_geom.inner_size.y * window.window_geom.dpi_factor;
-                        cx.draw_pass_to_window(
+                        if self.frame_pacing {
+                            window
+                                .base_surface
+                                .frame(self.qhandle.as_ref().unwrap(), window_id);
+                        }
+                        presented = cx.draw_pass_to_window(
                             *draw_pass_id,
                             window.egl_surface,
                             pix_width,
                             pix_height,
                         );
+                    }
+                    // Only gate on the callback when a commit actually happened; a
+                    // failed swap sends no commit, so its callback would never fire.
+                    if self.frame_pacing && presented {
+                        state.set_frame_callback_pending(window_id);
                     }
                 }
                 CxDrawPassParent::DrawPass(_) => {

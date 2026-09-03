@@ -11,7 +11,6 @@ use crate::{
     makepad_network::WebSocketMessage,
     media_api::CxMediaApi,
     midi::{MidiData, MidiInput, MidiOutput, MidiPortId},
-    thread::MessageThreadPool,
     video::{VideoFormatId, VideoInputFn, VideoInputId},
     Cx,
 };
@@ -67,8 +66,21 @@ pub struct CxOs {
     pub(crate) no_draw: bool,
     pub(crate) no_draw_initialized: bool,
     pub(crate) draw_cycles: Option<usize>,
-    pub(crate) render_pool: Option<MessageThreadPool<()>>,
-    pub(crate) render_pool_threads: usize,
+    /// BGRA -> RGBAf32 conversions of sampled textures, kept ACROSS frames.
+    /// Rebuilding this per frame re-converted the whole glyph atlas on every
+    /// draw, which cost more than rasterising the window did. Entries carry a
+    /// signature and are redone when the texture reports pending updates.
+    pub(crate) texture_conversions: crate::os::headless::raster::TextureConversionCache,
+    /// Offscreen (render-to-texture) pass framebuffers, kept ACROSS frames:
+    /// a parent pass that repaints while its child stayed clean must still
+    /// sample the child's last contents, and reusing the buffers keeps a
+    /// window-sized 3D pass to one allocation instead of one per frame.
+    pub(crate) render_targets: crate::os::headless::raster::HeadlessRenderTargets,
+    /// One framebuffer per window, kept across frames. Re-mapping tens of
+    /// megabytes of colour and depth every frame costs more in first-touch page
+    /// faults than the clear that follows it.
+    pub(crate) window_framebuffers:
+        std::collections::HashMap<usize, crate::os::headless::virtual_gpu::Framebuffer>,
 }
 
 impl Default for CxOs {
@@ -81,8 +93,9 @@ impl Default for CxOs {
             no_draw: false,
             no_draw_initialized: false,
             draw_cycles: None,
-            render_pool: None,
-            render_pool_threads: 0,
+            texture_conversions: Default::default(),
+            render_targets: Default::default(),
+            window_framebuffers: Default::default(),
         }
     }
 }
@@ -141,7 +154,7 @@ impl CxMediaApi for Cx {
 
     fn use_audio_outputs(&mut self, _devices: &[AudioDeviceId]) {}
 
-    fn audio_output_box(&mut self, _index: usize, _f: AudioOutputFn) {}
+    fn audio_output_box_os(&mut self, _index: usize, _f: AudioOutputFn) {}
 
     fn audio_input_box(&mut self, _index: usize, _f: AudioInputFn) {}
 
@@ -151,6 +164,35 @@ impl CxMediaApi for Cx {
 }
 
 impl Cx {
+    /// No-op in headless mode; the real macOS backend raises the app's windows.
+    #[cfg(target_os = "macos")]
+    pub fn macos_activate_app(&mut self) {}
+
+    /// Render-target readback off the software raster's framebuffer store:
+    /// the raster is synchronous on this thread, so by the time a caller
+    /// asks, every pass that fed the target has fully rendered — no queue
+    /// to race. Returns packed BGRA8 (Metal's byte layout); `None` for a
+    /// target never rendered or already evicted.
+    pub fn debug_read_render_texture(
+        &mut self,
+        texture: &crate::texture::Texture,
+    ) -> Option<(usize, usize, Vec<u8>)> {
+        self.os.render_targets.read_color_bgra8(texture.texture_id())
+    }
+
+    /// Renderer-owned texture capture (see the metal backend): not
+    /// implemented here — callers fall back to `debug_read_render_texture`.
+    pub fn request_render_texture_capture(&mut self, _texture: &crate::texture::Texture) -> bool {
+        false
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn take_render_texture_captures(
+        &mut self,
+    ) -> Vec<(crate::texture::TextureId, usize, usize, Vec<u8>)> {
+        Vec::new()
+    }
+
     #[cfg(target_os = "macos")]
     pub fn share_texture_for_presentable_image(&mut self, _texture: &crate::Texture) -> u32 {
         0

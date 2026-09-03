@@ -1,7 +1,7 @@
 use {
     crate::{
         animator::*, makepad_derive_widget::*, makepad_draw::*, scroll_bars::ScrollBars,
-        scroll_shadow::DrawScrollShadow, widget::*,
+        scroll_shadow::DrawScrollShadow, widget::*, widget_tree::CxWidgetExt,
     },
     std::collections::HashSet,
 };
@@ -77,8 +77,9 @@ script_mod! {
         }
     }
 
-    // Register FileTreeNode component
-    mod.widgets.FileTreeNodeBase = #(FileTreeNode::script_component(vm))
+    // Register FileTreeNode as a widget: every row is a real widget with a
+    // uid, so the design tweaker can pick it and style its template.
+    mod.widgets.FileTreeNodeBase = #(FileTreeNode::register_widget(vm))
     mod.widgets.FileTreeBase = #(FileTree::register_widget(vm))
 
     mod.widgets.FileTreeNode = set_type_default() do mod.widgets.FileTreeNodeBase{
@@ -377,10 +378,34 @@ pub enum GitStatusDotKind {
     Mixed = 4,
 }
 
-#[derive(Script, ScriptHook, Animator)]
+/// Everything the tree hands a node right before it draws. `draw_folder` and
+/// `draw_file` used to be called directly with these as arguments; the node is
+/// a widget now, so the tree parks them here and `draw_walk` consumes them.
+pub struct FileTreeNodeDraw {
+    pub name: String,
+    pub status_kind: GitStatusDotKind,
+    pub is_even: f32,
+    pub node_height: f64,
+    pub depth: usize,
+    pub scale: f64,
+    pub is_folder: bool,
+}
+
+/// A file-tree row is a real widget: it has a uid and sits in the widget tree
+/// under its `FileTree`, so the design tweaker can pick it (in 2D and on its
+/// own plane in the exploded view) and style its template. The tree still
+/// drives it directly — `handle_event_with` for actions, `draw_folder` /
+/// `draw_file` for the row — the widget seams only add identity.
+#[derive(Script, ScriptHook, Animator, Widget)]
 pub struct FileTreeNode {
+    #[uid]
+    uid: WidgetUid,
     #[source]
     source: ScriptObjectRef,
+    /// What the tree parked for the next draw (see `FileTreeNodeDraw`).
+    #[rust]
+    pub pending_draw: Option<FileTreeNodeDraw>,
+    #[redraw]
     #[live]
     draw_bg: DrawBgQuad,
     #[live]
@@ -452,11 +477,21 @@ pub struct FileTree {
     dragging_node_id: Option<LiveId>,
     #[rust]
     selected_node_id: Option<LiveId>,
+    /// A programmatic selection wants this node scrolled into view on its
+    /// next draw (the tweaker's pin → tree sync).
+    #[rust]
+    scroll_to_pending: Option<LiveId>,
+    #[rust]
+    reveal_node: Option<LiveId>,
+    #[rust]
+    reveal_y: Option<f64>,
     #[rust]
     open_nodes: HashSet<LiveId>,
 
+    /// Each row is a widget of its own, registered in the widget tree as this
+    /// tree's child under its node id (the design tweaker picks them).
     #[rust]
-    tree_nodes: ComponentMap<LiveId, FileTreeNode>,
+    tree_nodes: ComponentMap<LiveId, WidgetRef>,
 
     #[rust]
     count: usize,
@@ -475,6 +510,9 @@ impl ScriptHook for FileTree {
         // Apply updates to existing nodes
         if apply.is_reload() {
             for tree_node in self.tree_nodes.values_mut() {
+                let Some(mut tree_node) = tree_node.borrow_mut::<FileTreeNode>() else {
+                    continue;
+                };
                 let template = if tree_node.is_folder {
                     self.folder_node.clone()
                 } else {
@@ -496,11 +534,19 @@ pub enum FileTreeAction {
     None,
     FileClicked(LiveId),
     FolderClicked(LiveId),
+    /// A node's row is under the pointer (files and folders alike).
+    NodeHovered(LiveId),
+    /// The pointer left a node's row.
+    NodeHoverEnded(LiveId),
     ShouldFileStartDrag(LiveId),
 }
 
 pub enum FileTreeNodeAction {
     WasClicked,
+    /// Pointer entered the node's row (inspector-style hover linkage).
+    WasHovered,
+    /// Pointer left the node's row.
+    HoverEnded,
     Opening,
     Closing,
     ShouldStartDrag,
@@ -621,7 +667,7 @@ impl FileTreeNode {
         self.animator_toggle(cx, is, animate, ids!(open.on), ids!(open.off));
     }
 
-    pub fn handle_event(
+    pub fn handle_event_with(
         &mut self,
         cx: &mut Cx,
         event: &Event,
@@ -635,9 +681,11 @@ impl FileTreeNode {
         match event.hits(cx, self.draw_bg.area()) {
             Hit::FingerHoverIn(_) => {
                 self.animator_play(cx, ids!(hover.on));
+                actions.push((node_id, FileTreeNodeAction::WasHovered));
             }
             Hit::FingerHoverOut(_) => {
                 self.animator_play(cx, ids!(hover.off));
+                actions.push((node_id, FileTreeNodeAction::HoverEnded));
             }
             Hit::FingerMove(f) => {
                 if f.abs.distance(&f.abs_start) >= self.min_drag_distance {
@@ -659,6 +707,41 @@ impl FileTreeNode {
             }
             _ => {}
         }
+    }
+}
+
+impl Widget for FileTreeNode {
+    fn handle_event(&mut self, _cx: &mut Cx, _event: &Event, _scope: &mut Scope) {
+        // Driven by `FileTree::handle_event` through `handle_event_with`, which
+        // needs the tree's node id and action sink; nothing to do on the plain
+        // seam.
+    }
+
+    fn draw_walk(&mut self, cx: &mut Cx2d, _scope: &mut Scope, _walk: Walk) -> DrawStep {
+        if let Some(d) = self.pending_draw.take() {
+            if d.is_folder {
+                self.draw_folder(
+                    cx,
+                    &d.name,
+                    d.status_kind,
+                    d.is_even,
+                    d.node_height,
+                    d.depth,
+                    d.scale,
+                );
+            } else {
+                self.draw_file(
+                    cx,
+                    &d.name,
+                    d.status_kind,
+                    d.is_even,
+                    d.node_height,
+                    d.depth,
+                    d.scale,
+                );
+            }
+        }
+        DrawStep::done()
     }
 }
 
@@ -716,6 +799,10 @@ impl FileTree {
         name: &str,
         status_kind: GitStatusDotKind,
     ) -> Result<(), ()> {
+        if self.reveal_node == Some(node_id) {
+            self.reveal_node = None;
+            self.reveal_y = Some(cx.turtle().pos().y);
+        }
         let scale = self.stack.last().cloned().unwrap_or(1.0);
 
         if scale > 0.2 {
@@ -725,26 +812,27 @@ impl FileTree {
         let is_open = self.open_nodes.contains(&node_id);
 
         if self.should_node_draw(cx) {
-            let folder_node = self.folder_node.clone();
-            let tree_node = self.tree_nodes.get_or_insert(cx, node_id, |cx| {
-                let mut tree_node =
-                    cx.with_vm(|vm| FileTreeNode::script_from_value(vm, folder_node.into()));
-                if is_open {
-                    tree_node.set_folder_is_open(cx, true, Animate::No);
-                }
-                tree_node
-            });
-            tree_node.draw_folder(
-                cx,
-                name,
-                status_kind,
-                Self::is_even(self.count),
-                self.node_height,
-                self.stack.len(),
-                scale,
-            );
-            self.stack.push(tree_node.opened as f64 * scale);
-            if tree_node.opened <= 0.001 {
+            let tree_node = self.get_or_create_node(cx, node_id, true, is_open);
+            if let Some(mut node) = tree_node.borrow_mut::<FileTreeNode>() {
+                node.pending_draw = Some(FileTreeNodeDraw {
+                    name: name.to_string(),
+                    status_kind,
+                    is_even: Self::is_even(self.count),
+                    node_height: self.node_height,
+                    depth: self.stack.len(),
+                    scale,
+                    is_folder: true,
+                });
+            }
+            // Through the widget seam, so the row counts as its own nesting
+            // level and the design tweaker's plane pick lands on it.
+            tree_node.draw_all(cx, &mut Scope::empty());
+            let opened = tree_node
+                .borrow::<FileTreeNode>()
+                .map(|node| node.opened)
+                .unwrap_or(0.0);
+            self.stack.push(opened as f64 * scale);
+            if opened <= 0.001 {
                 self.end_folder();
                 return Err(());
             }
@@ -773,26 +861,148 @@ impl FileTree {
         name: &str,
         status_kind: GitStatusDotKind,
     ) {
+        if self.reveal_node == Some(node_id) {
+            self.reveal_node = None;
+            self.reveal_y = Some(cx.turtle().pos().y);
+        }
         let scale = self.stack.last().cloned().unwrap_or(1.0);
 
         if scale > 0.2 {
             self.count += 1;
         }
         if self.should_node_draw(cx) {
-            let file_node = self.file_node.clone();
-            let tree_node = self.tree_nodes.get_or_insert(cx, node_id, |cx| {
-                cx.with_vm(|vm| FileTreeNode::script_from_value(vm, file_node.into()))
-            });
-            tree_node.draw_file(
-                cx,
-                name,
-                status_kind,
-                Self::is_even(self.count),
-                self.node_height,
-                self.stack.len(),
-                scale,
-            );
+            let tree_node = self.get_or_create_node(cx, node_id, false, false);
+            if let Some(mut node) = tree_node.borrow_mut::<FileTreeNode>() {
+                node.pending_draw = Some(FileTreeNodeDraw {
+                    name: name.to_string(),
+                    status_kind,
+                    is_even: Self::is_even(self.count),
+                    node_height: self.node_height,
+                    depth: self.stack.len(),
+                    scale,
+                    is_folder: false,
+                });
+            }
+            tree_node.draw_all(cx, &mut Scope::empty());
+            if self.scroll_to_pending == Some(node_id) {
+                self.scroll_to_pending = None;
+                let rect = tree_node.area().rect(cx);
+                if rect.size.y > 0.0 {
+                    self.scroll_bars.scroll_into_view(cx, rect);
+                }
+            }
         }
+    }
+
+    /// The row widget for `node_id`, created from the folder/file template on
+    /// first sight and registered in the widget tree under this tree's uid.
+    fn get_or_create_node(
+        &mut self,
+        cx: &mut Cx2d,
+        node_id: LiveId,
+        is_folder: bool,
+        is_open: bool,
+    ) -> WidgetRef {
+        let template = if is_folder {
+            self.folder_node.clone()
+        } else {
+            self.file_node.clone()
+        };
+        let tree_uid = self.uid;
+        let selected = self.selected_node_id == Some(node_id);
+        self.tree_nodes
+            .get_or_insert(cx, node_id, |cx| {
+                let tree_node =
+                    cx.with_vm(|vm| WidgetRef::script_from_value(vm, template.into()));
+                if is_folder && is_open {
+                    if let Some(mut node) = tree_node.borrow_mut::<FileTreeNode>() {
+                        node.set_folder_is_open(cx, true, Animate::No);
+                    }
+                }
+                if selected {
+                    // A programmatic selection can land before the node has
+                    // ever drawn: the widget is created selected (and
+                    // focussed — the selected bg is gated by the focus mix).
+                    if let Some(mut node) = tree_node.borrow_mut::<FileTreeNode>() {
+                        node.set_is_selected(cx, true, Animate::No);
+                        node.set_is_focussed(cx, true, Animate::No);
+                    }
+                }
+                cx.widget_tree_insert_child(tree_uid, node_id, tree_node.clone());
+                tree_node
+            })
+            .clone()
+    }
+
+    /// The current scroll offset (the tweaker's retrying scroll-to needs it).
+    pub fn scroll_pos(&self) -> Vec2d {
+        self.scroll_bars.get_scroll_pos()
+    }
+
+    /// Ask the next draw to report where `node_id`'s row lands on screen
+    /// (culled rows report too — their space is walked). The caller reads
+    /// `take_reveal_y` after driving the draw and corrects the scroll by
+    /// the measured error; a couple of frames converge exactly, whatever
+    /// the content height or clamping did.
+    pub fn begin_reveal(&mut self, node_id: LiveId) {
+        self.reveal_node = Some(node_id);
+        self.reveal_y = None;
+    }
+
+    pub fn take_reveal_y(&mut self) -> Option<f64> {
+        self.reveal_y.take()
+    }
+
+    pub fn scroll_by(&mut self, cx: &mut Cx, dy: f64) {
+        let now = self.scroll_bars.get_scroll_pos();
+        self.scroll_bars.set_scroll_pos_no_clip(cx, dvec2(now.x, (now.y + dy).max(0.0)));
+    }
+
+    /// Whether a folder node is currently open (the fold state lives here;
+    /// the tweaker's scroll-to-selection math needs it).
+    pub fn is_folder_open(&self, node_id: LiveId) -> bool {
+        self.open_nodes.contains(&node_id)
+    }
+
+    /// One row's height in the tree's layout.
+    pub fn row_height(&self) -> f64 {
+        self.node_height
+    }
+
+    /// Scroll the viewport so content at `y` (content coords) is on
+    /// screen — the tree virtualises rows, so a draw-driven scroll never
+    /// fires for a node that has not drawn.
+    pub fn scroll_to_y(&mut self, cx: &mut Cx, y: f64) {
+        // no_clip: on the tree's FIRST draw the content height is not yet
+        // measured and a clipped set would clamp the target back to zero.
+        self.scroll_bars.set_scroll_pos_no_clip(cx, dvec2(0.0, y.max(0.0)));
+    }
+
+    /// Select a node programmatically and reveal it (the click path stays
+    /// the authority for user selection).
+    pub fn select_node(&mut self, cx: &mut Cx, node_id: LiveId) {
+        if self.selected_node_id == Some(node_id) {
+            return;
+        }
+        if let Some(last) = self.selected_node_id {
+            if let Some(node) = self.tree_nodes.get_mut(&last) {
+                if let Some(mut node) = node.borrow_mut::<FileTreeNode>() {
+                    node.set_is_selected(cx, false, Animate::No);
+                    node.set_is_focussed(cx, false, Animate::No);
+                }
+            }
+        }
+        self.selected_node_id = Some(node_id);
+        if let Some(node) = self.tree_nodes.get_mut(&node_id) {
+            if let Some(mut node) = node.borrow_mut::<FileTreeNode>() {
+                node.set_is_selected(cx, true, Animate::No);
+                // Present as focussed: the selected bg is gated by the
+                // focus mix and reads near-invisible without it.
+                node.set_is_focussed(cx, true, Animate::No);
+            }
+        }
+        self.scroll_to_pending = Some(node_id);
+        self.scroll_bars.redraw(cx);
     }
 
     pub fn file(&mut self, cx: &mut Cx2d, node_id: LiveId, name: &str) {
@@ -809,7 +1019,9 @@ impl FileTree {
 
     pub fn is_folder(&mut self, file_node_id: LiveId) -> bool {
         if let Some(node) = self.tree_nodes.get(&file_node_id) {
-            node.is_folder
+            node.borrow::<FileTreeNode>()
+                .map(|node| node.is_folder)
+                .unwrap_or(false)
         } else {
             false
         }
@@ -828,7 +1040,21 @@ impl FileTree {
             self.open_nodes.remove(&node_id);
         }
         if let Some(tree_node) = self.tree_nodes.get_mut(&node_id) {
-            tree_node.set_folder_is_open(cx, is_open, animate);
+            if let Some(mut tree_node) = tree_node.borrow_mut::<FileTreeNode>() {
+                tree_node.set_folder_is_open(cx, is_open, animate);
+            }
+        }
+    }
+
+    fn set_selected_is_focussed(&mut self, cx: &mut Cx, is: bool) {
+        let Some(node_id) = self.selected_node_id else {
+            return;
+        };
+        let Some(node) = self.tree_nodes.get_mut(&node_id) else {
+            return;
+        };
+        if let Some(mut node) = node.borrow_mut::<FileTreeNode>() {
+            node.set_is_focussed(cx, is, Animate::Yes);
         }
     }
 
@@ -851,6 +1077,14 @@ impl WidgetNode for FileTree {
         self.scroll_bars.area()
     }
 
+    fn children(&self, visit: &mut dyn FnMut(LiveId, WidgetRef)) {
+        // The rows are widgets too — surface them so the design tweaker's
+        // pick walk reaches them.
+        for (node_id, node) in self.tree_nodes.iter() {
+            visit(*node_id, node.clone());
+        }
+    }
+
     fn redraw(&mut self, cx: &mut Cx) {
         self.scroll_bars.redraw(cx);
     }
@@ -870,7 +1104,10 @@ impl Widget for FileTree {
         let mut node_actions = Vec::new();
 
         for (node_id, node) in self.tree_nodes.iter_mut() {
-            node.handle_event(cx, event, *node_id, scope, &mut node_actions);
+            let Some(mut node) = node.borrow_mut::<FileTreeNode>() else {
+                continue;
+            };
+            node.handle_event_with(cx, event, *node_id, scope, &mut node_actions);
         }
 
         for (node_id, node_action) in node_actions {
@@ -881,14 +1118,21 @@ impl Widget for FileTree {
                 FileTreeNodeAction::Closing => {
                     self.open_nodes.remove(&node_id);
                 }
+                FileTreeNodeAction::WasHovered => {
+                    cx.widget_action(uid, FileTreeAction::NodeHovered(node_id));
+                }
+                FileTreeNodeAction::HoverEnded => {
+                    cx.widget_action(uid, FileTreeAction::NodeHoverEnded(node_id));
+                }
                 FileTreeNodeAction::WasClicked => {
                     cx.set_key_focus(self.scroll_bars.area());
                     if let Some(last_selected) = self.selected_node_id {
                         if last_selected != node_id {
-                            self.tree_nodes
-                                .get_mut(&last_selected)
-                                .unwrap()
-                                .set_is_selected(cx, false, Animate::Yes);
+                            if let Some(node) = self.tree_nodes.get_mut(&last_selected) {
+                                if let Some(mut node) = node.borrow_mut::<FileTreeNode>() {
+                                    node.set_is_selected(cx, false, Animate::Yes);
+                                }
+                            }
                         }
                     }
                     self.selected_node_id = Some(node_id);
@@ -908,22 +1152,10 @@ impl Widget for FileTree {
 
         match event.hits(cx, self.scroll_bars.area()) {
             Hit::KeyFocus(_) => {
-                if let Some(node_id) = self.selected_node_id {
-                    self.tree_nodes.get_mut(&node_id).unwrap().set_is_focussed(
-                        cx,
-                        true,
-                        Animate::Yes,
-                    );
-                }
+                self.set_selected_is_focussed(cx, true);
             }
             Hit::KeyFocusLost(_) => {
-                if let Some(node_id) = self.selected_node_id {
-                    self.tree_nodes.get_mut(&node_id).unwrap().set_is_focussed(
-                        cx,
-                        false,
-                        Animate::Yes,
-                    );
-                }
+                self.set_selected_is_focussed(cx, false);
             }
             _ => (),
         }

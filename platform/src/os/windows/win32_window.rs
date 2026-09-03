@@ -10,7 +10,9 @@ use {
             droptarget::*,
             win32_app::{encode_wide, with_win32_app, Win32App},
             win32_event::*,
+            win32_screen::{win32_screens, workspace_rect_to_screen},
         },
+        screen::{clamp_point_to_screens, fit_window_rect_to_screens},
         window::{WindowBackdrop, WindowId, WindowVisuals},
         windows::{
             core::PCWSTR,
@@ -23,9 +25,11 @@ use {
                 },
                 Graphics::{
                     Dwm::{
-                        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_MAINWINDOW,
-                        DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
-                        DWMWA_SYSTEMBACKDROP_TYPE,
+                        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMNCRP_ENABLED,
+                        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW,
+                        DWMSBT_TRANSIENTWINDOW, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+                        DWMWA_NCRENDERING_POLICY, DWMWA_SYSTEMBACKDROP_TYPE,
+                        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DWMWCP_ROUNDSMALL,
                     },
                     Gdi::ScreenToClient,
                 },
@@ -51,7 +55,7 @@ use {
                         Ime::{
                             ImmAssociateContext, ImmGetCompositionStringW, ImmGetContext,
                             ImmReleaseContext, ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM,
-                            GCS_COMPSTR, GCS_RESULTSTR, HIMC,
+                            GCS_COMPSTR, GCS_RESULTSTR, HIMC, IME_COMPOSITION_STRING,
                         },
                         KeyboardAndMouse::{
                             GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
@@ -73,22 +77,25 @@ use {
                     },
                     WindowsAndMessaging::{
                         CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                        GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, MoveWindow,
-                        PostMessageW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
-                        ShowWindow, CW_USEDEFAULT, GWLP_USERDATA, GWL_EXSTYLE, HTBOTTOM,
+                        GetWindowLongPtrW, GetWindowRect, MoveWindow, PostMessageW,
+                        SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
+                        ShowWindow,
+                        CW_USEDEFAULT, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, HTBOTTOM,
                         HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT,
                         HTSYSMENU, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOPMOST,
-                        LWA_ALPHA, SWP_NOMOVE, SWP_NOSIZE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-                        SW_SHOW, WA_ACTIVE, WINDOWPLACEMENT, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
-                        WM_DESTROY, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_ERASEBKGND,
-                        WM_EXITSIZEMOVE, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
-                        WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
+                        LWA_ALPHA, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                        SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                        WA_ACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
+                        WM_ENTERSIZEMOVE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_IME_COMPOSITION,
+                        WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP,
                         WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
                         WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP,
                         WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
-                        WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW,
-                        WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE,
-                        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SIZEBOX, WS_SYSMENU,
+                        GetWindowPlacement, WINDOWPLACEMENT,
+                        WS_BORDER, WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES,
+                        WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+                        WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+                        WINDOW_EX_STYLE, WINDOW_STYLE,
                     },
                 },
             },
@@ -104,6 +111,13 @@ use {
         sync::Mutex,
     },
 };
+
+/// Whether a screen coordinate survives the conversion `CreateWindowExW` and `MoveWindow`
+/// take: a real number inside `i32`, and not the `CW_USEDEFAULT` sentinel that `i32::MIN`
+/// would be read as.
+fn is_placeable(v: f64) -> bool {
+    v.is_finite() && v > i32::MIN as f64 && v < i32::MAX as f64
+}
 
 #[repr(C)]
 struct AccentPolicy {
@@ -150,6 +164,14 @@ unsafe fn ImmSetCandidateWindow(himc: HIMC, lpcandidate: *const CANDIDATEFORM) -
     unsafe { ImmSetCandidateWindow(himc, lpcandidate) }
 }
 
+// `SetWindowTextW` is not present in the vendored (pruned) `windows` crate's
+// `WindowsAndMessaging` module; bind it the same way as the shims above.
+#[inline]
+unsafe fn SetWindowTextW(hwnd: HWND, lpstring: PCWSTR) -> windows_core::BOOL {
+    windows_core::link!("user32.dll" "system" fn SetWindowTextW(hwnd : HWND, lpstring : PCWSTR) -> windows_core::BOOL);
+    unsafe { SetWindowTextW(hwnd, lpstring) }
+}
+
 /*
 // Copied from Microsoft so it refers to the right IDropTarget
 #[allow(non_snake_case)]
@@ -174,15 +196,342 @@ pub struct Win32Window {
     pub ime_rect: Rect,
     pub current_cursor: MouseCursor,
     pub last_mouse_pos: Vec2d,
+    /// Cached window DPI scale. `get_dpi_factor()` is hot — it is called several times per
+    /// WM_NCHITTEST and per WM_MOUSEMOVE (via `get_mouse_pos_from_lparam`), and otherwise syscalls
+    /// `GetDeviceCaps` every time. WM_NCHITTEST is OS-sent on every mouse move (uncoalesced), so at
+    /// a high mouse report rate these syscalls flood the message pump and cause scroll jitter. The
+    /// DPI only changes on WM_DPICHANGED, where we invalidate this (set to 0.0 -> re-query once).
+    pub cached_dpi: Cell<f64>,
+    /// Cached WM_NCHITTEST `WindowDragQuery` result, keyed by the raw lparam (cursor screen pos).
+    /// The OS sends several WM_NCHITTEST for the SAME cursor position per frame (move + setcursor
+    /// + ...), and each otherwise runs a full WindowDragQuery event dispatch through the widget
+    /// tree. We dedupe per position; invalidated on resize and move (window/caption geometry
+    /// changes). One residual staleness window remains: if the caption is re-laid-out WITHOUT any
+    /// window geometry change (e.g. a responsive layout toggling the caption bar) while the cursor
+    /// is perfectly stationary, the cached answer persists until the next geometry change or cursor
+    /// move; the widget-side `drag_query_cache` in `window.rs` is kept fresh independently.
+    pub nc_dq_cache: Cell<Option<(isize, WindowDragQueryResponse)>>,
+    /// Generation counter, bumped on every `nc_dq_cache` invalidation. The WM_NCHITTEST miss path
+    /// snapshots it before dispatching `WindowDragQuery` and only writes the result back if it is
+    /// unchanged, so a reentrant invalidation during that dispatch is not clobbered by a stale write.
+    pub nc_dq_gen: Cell<u32>,
+    /// Generation counter bumped by every `send_change_event()`; snapshotted around calls
+    /// that may re-enter the wndproc to detect whether a nested re-entry already published
+    /// the geometry. A `Cell` because the re-entry mutates this window through a second `&mut`.
+    pub geom_event_gen: Cell<u32>,
+    /// Set by `close_window()`; suppresses the WM_ACTIVATE-derived
+    /// `PopupDismissed(FocusLost)`, which would duplicate the closer's dismissal.
+    pub is_closing: Cell<bool>,
+    /// Whether the window is inside the system's modal move/size loop, i.e. the user is
+    /// dragging it. `WM_MOVE` arrives per mouse step there, so the position is published once
+    /// on the way out rather than on every step; a programmatic move, which sets no such
+    /// state, publishes immediately.
+    pub in_size_move: Cell<bool>,
     pub ignore_wmsize: usize,
     pub hwnd: HWND,
     pub track_mouse_event: bool,
     pub is_fullscreen: bool,
     pub is_popup: bool,
+    /// See `CxOsOp::SetChromelessWhenMaximized`: drop the maximized-state
+    /// border/thickframe strip `extended_client_border_thickness` would
+    /// otherwise keep, so a maximized window is a clean fullscreen client
+    /// area rather than a decorated window pinned to the work area.
+    pub chromeless_when_maximized: bool,
     ime_saved_himc: HIMC,
 }
 
 impl Win32Window {
+    pub fn set_title(&self, title: &str) {
+        let title = encode_wide(title);
+        unsafe {
+            let _ = SetWindowTextW(self.hwnd, PCWSTR(title.as_ptr()));
+        }
+    }
+
+    /// Opt into Win11 rounded corners for overlapped custom-chrome windows.
+    /// No-ops on older Windows (DwmSetWindowAttribute returns an error).
+    fn apply_win11_window_shape(hwnd: HWND, small_radius: bool) {
+        let preference = if small_radius {
+            DWMWCP_ROUNDSMALL
+        } else {
+            DWMWCP_ROUND
+        };
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &preference as *const _ as *const c_void,
+                std::mem::size_of_val(&preference) as u32,
+            );
+            let border = DWMWA_COLOR_NONE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &border as *const _ as *const c_void,
+                std::mem::size_of_val(&border) as u32,
+            );
+        }
+    }
+
+    fn set_nc_rendering_enabled(hwnd: HWND) {
+        let policy = DWMNCRP_ENABLED;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                &policy as *const _ as *const c_void,
+                std::mem::size_of_val(&policy) as u32,
+            );
+        }
+    }
+
+    fn get_style(&self) -> WINDOW_STYLE {
+        unsafe { WINDOW_STYLE(GetWindowLongPtrW(self.hwnd, GWL_STYLE) as u32) }
+    }
+
+    fn get_ex_style(&self) -> WINDOW_EX_STYLE {
+        unsafe { WINDOW_EX_STYLE(GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32) }
+    }
+
+    /// Frame insets via DPI-aware `AdjustWindowRectEx*` on a zero client rect.
+    /// `left`/`top` are negative; `right`/`bottom` are positive.
+    fn frame_border_thickness(&self, style: WINDOW_STYLE, ex_style: WINDOW_EX_STYLE) -> RECT {
+        let mut thickness = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        with_win32_app(|app| {
+            app.dpi_functions.adjust_window_rect_ex(
+                self.hwnd,
+                style.0,
+                ex_style.0,
+                &mut thickness,
+            );
+        });
+        thickness
+    }
+
+    /// Non-client insets for custom chrome.
+    ///
+    /// Restored (non-maximized) mains use a **fully client-sized** frame: no
+    /// thickframe strip outside the swap chain. That strip was showing as a
+    /// light/white edge while resizing because D3D only paints the client.
+    /// Resize is emulated via `WM_NCHITTEST` `HT*` returns instead.
+    ///
+    /// Maximized windows still keep border+thickframe insets so the client
+    /// matches the monitor work area — unless `chromeless_when_maximized`
+    /// is set, in which case maximized stays fully client-sized too, same
+    /// as restored: a projector output has nowhere for a work-area strip
+    /// to make sense.
+    fn extended_client_border_thickness(&self) -> RECT {
+        let style = self.get_style();
+        let ex_style = self.get_ex_style();
+        if (style.0 & WS_CAPTION.0) == WS_CAPTION.0
+            && self.get_is_maximized()
+            && !self.chromeless_when_maximized
+        {
+            // Caption is drawn into the client; keep only border+thickframe for work-area.
+            self.frame_border_thickness(
+                WINDOW_STYLE((style.0 & !WS_CAPTION.0) | WS_BORDER.0 | WS_THICKFRAME.0),
+                ex_style,
+            )
+        } else {
+            RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            }
+        }
+    }
+
+    /// Expand the client for custom chrome. Mutates `NCCALCSIZE_PARAMS.rgrc[0]`.
+    unsafe fn apply_extended_client_nccalcsize(&self, lparam: LPARAM) {
+        let params = &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS);
+        let rect = &mut params.rgrc[0];
+        let border = self.extended_client_border_thickness();
+
+        // `rgrc[0]` arrives as the proposed *window* rect. Subtracting
+        // `AdjustWindowRectEx` insets converts window → client.
+        rect.left -= border.left;
+        rect.top -= border.top;
+        rect.right -= border.right;
+        rect.bottom -= border.bottom;
+    }
+
+    fn extend_frame_for_custom_chrome(&self) {
+        // Opaque custom chrome: zero margins (no 1px glass hairline). DWM still
+        // paints NC shadows/corners because NCRP is ENABLED.
+        let margins = MARGINS {
+            cxLeftWidth: 0,
+            cxRightWidth: 0,
+            cyTopHeight: 0,
+            cyBottomHeight: 0,
+        };
+        unsafe {
+            let _ = DwmExtendFrameIntoClientArea(self.hwnd, &margins);
+        }
+        Self::set_nc_rendering_enabled(self.hwnd);
+        Self::apply_win11_window_shape(self.hwnd, self.is_popup);
+    }
+
+    /// Physical-pixel frame insets (left, top, right, bottom) for converting
+    /// window rect <-> client size under custom chrome.
+    fn client_frame_insets_px(&self) -> (i32, i32, i32, i32) {
+        let border = self.extended_client_border_thickness();
+        (-border.left, -border.top, border.right, border.bottom)
+    }
+
+    /// Force a `WM_NCCALCSIZE` pass now that `GWLP_USERDATA` is set so our
+    /// extended-client handler runs (CreateWindow still used DefWindowProc).
+    fn force_frame_change(&self) {
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | SWP_FRAMECHANGED,
+            );
+        }
+    }
+
+    /// Logical-pixel resize hit band for fully-client custom chrome / popups.
+    fn resize_edge_logical(&self) -> f64 {
+        // Thick enough to grab reliably; not so thick it steals caption clicks.
+        const EDGE: f64 = 8.0;
+        EDGE
+    }
+
+    /// Same geometry as `WindowGeom.window_chrome_buttons` (logical, client-relative).
+    fn chrome_buttons_rect_logical(&self) -> Rect {
+        const BUTTON_W: f64 = 46.0;
+        const BUTTON_H: f64 = 29.0;
+        const BUTTON_COUNT: f64 = 3.0;
+        let inner = self.get_inner_size();
+        Rect {
+            pos: dvec2(inner.x - BUTTON_W * BUTTON_COUNT, 0.0),
+            size: dvec2(BUTTON_W * BUTTON_COUNT, BUTTON_H),
+        }
+    }
+
+    /// `HTTOP` / `HTLEFT` / … for a fully client-sized window. Returns `None`
+    /// when the cursor is outside the resize band, over caption buttons, or
+    /// when maximized.
+    fn hit_test_client_resize_edge(&self, lparam: LPARAM) -> Option<LRESULT> {
+        if self.get_is_maximized() {
+            return None;
+        }
+        let dpi = self.get_dpi_factor();
+        let edge = self.resize_edge_logical();
+        let abs = self.get_mouse_pos_from_lparam(lparam);
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            bottom: 0,
+            right: 0,
+        };
+        unsafe {
+            GetWindowRect(self.hwnd, &mut window_rect).unwrap();
+        }
+        let origin = dvec2(window_rect.left as f64 / dpi, window_rect.top as f64 / dpi);
+        let size = dvec2(
+            (window_rect.right - window_rect.left) as f64 / dpi,
+            (window_rect.bottom - window_rect.top) as f64 / dpi,
+        );
+        let local = abs - origin;
+
+        // Don't steal hits from the system-style caption buttons (close/max/min).
+        if !self.is_popup && self.chrome_buttons_rect_logical().contains(local) {
+            return None;
+        }
+
+        let on_left = abs.x < origin.x + edge;
+        let on_right = abs.x > origin.x + size.x - edge;
+        let on_top = abs.y < origin.y + edge;
+        let on_bottom = abs.y > origin.y + size.y - edge;
+
+        let hit = match (on_left, on_right, on_top, on_bottom) {
+            (true, _, true, _) => HTTOPLEFT,
+            (true, _, _, true) => HTBOTTOMLEFT,
+            (_, true, true, _) => HTTOPRIGHT,
+            (_, true, _, true) => HTBOTTOMRIGHT,
+            (true, _, _, _) => HTLEFT,
+            (_, true, _, _) => HTRIGHT,
+            (_, _, true, _) => HTTOP,
+            (_, _, _, true) => HTBOTTOM,
+            _ => return None,
+        };
+        Some(LRESULT(hit as isize))
+    }
+
+    /// Caption / client hit-test for the custom-chrome client area.
+    fn hit_test_extended_client(&mut self, lparam: LPARAM) -> LRESULT {
+        let dpi = self.get_dpi_factor();
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            bottom: 0,
+            right: 0,
+        };
+        unsafe {
+            GetWindowRect(self.hwnd, &mut window_rect).unwrap();
+        }
+        let origin = dvec2(window_rect.left as f64 / dpi, window_rect.top as f64 / dpi);
+
+        // Dedupe: return the cached WindowDragQuery result for a repeated cursor
+        // position (the loop is vsync-paced, so the OS sends several same-position
+        // hit-tests/frame).
+        let response_val = match self.nc_dq_cache.get() {
+            Some((lp, rv)) if lp == lparam.0 => rv,
+            _ => {
+                // Snapshot the cache generation: dispatching WindowDragQuery can
+                // reenter the window proc (nested SendMessage) and invalidate the
+                // cache mid-flight; if it does, we must NOT write our now-stale
+                // result back over that invalidation.
+                let gen = self.nc_dq_gen.get();
+                let response = Rc::new(Cell::new(WindowDragQueryResponse::NoAnswer));
+                self.do_callback(Win32Event::WindowDragQuery(WindowDragQueryEvent {
+                    window_id: self.window_id,
+                    abs: self.get_mouse_pos_from_lparam(lparam) - origin,
+                    response: response.clone(),
+                }));
+                let rv = response.get();
+                if self.nc_dq_gen.get() == gen {
+                    self.nc_dq_cache.set(Some((lparam.0, rv)));
+                }
+                rv
+            }
+        };
+        match response_val {
+            WindowDragQueryResponse::Caption => {
+                with_win32_app(|app| app.set_mouse_cursor(MouseCursor::Default));
+                LRESULT(HTCAPTION as isize)
+            }
+            WindowDragQueryResponse::SysMenu => {
+                with_win32_app(|app| app.set_mouse_cursor(MouseCursor::Default));
+                LRESULT(HTSYSMENU as isize)
+            }
+            WindowDragQueryResponse::Client | WindowDragQueryResponse::NoAnswer => {
+                // Caption already restores Default above. Client must too: after
+                // HTLEFT/HTRIGHT the system size cursor sticks otherwise, and the
+                // window class cursor alone is not enough once we cleared
+                // `current_cursor` on the resize edge. Widgets re-apply Text/etc.
+                // on the following WM_MOUSEMOVE.
+                with_win32_app(|app| app.set_mouse_cursor(MouseCursor::Default));
+                LRESULT(HTCLIENT as isize)
+            }
+        }
+    }
+
     // 2-stage initialization (new and init) to connect GWLP_USERDATA
 
     // create window structure and register drag/drop
@@ -194,20 +543,28 @@ impl Win32Window {
     ) -> Win32Window {
         let title = encode_wide(title);
 
-        let style = WS_SIZEBOX
-            | WS_MAXIMIZEBOX
-            | WS_MINIMIZEBOX
-            | WS_POPUP
-            | WS_CLIPSIBLINGS
-            | WS_CLIPCHILDREN
-            | WS_SYSMENU;
+        // Overlapped top-level window with app-drawn chrome. Restored size is
+        // fully client-sized (WM_NCCALCSIZE); maximize keeps work-area insets.
+        let style = WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
 
         let style_ex = WS_EX_WINDOWEDGE | WS_EX_APPWINDOW | WS_EX_ACCEPTFILES;
 
-        let (x, y) = if let Some(position) = position {
-            (position.x as i32, position.y as i32)
-        } else {
-            (CW_USEDEFAULT, CW_USEDEFAULT)
+        let (x, y) = match position {
+            // A restored position can name a display that is gone, or hold values no display
+            // ever had. Pinning it now keeps `CreateWindowExW` and the sizing that follows
+            // working on real coordinates; `init` fits the finished rectangle once the size is
+            // known. A coordinate still out of range after pinning means no display could be
+            // enumerated, so the system's own placement is used instead of a value that would
+            // saturate on the way to the API.
+            Some(position) => {
+                let pinned = clamp_point_to_screens(&win32_screens(), position);
+                if is_placeable(pinned.x) && is_placeable(pinned.y) {
+                    (pinned.x as i32, pinned.y as i32)
+                } else {
+                    (CW_USEDEFAULT, CW_USEDEFAULT)
+                }
+            }
+            None => (CW_USEDEFAULT, CW_USEDEFAULT),
         };
 
         let hwnd = unsafe {
@@ -227,10 +584,14 @@ impl Win32Window {
             )
             .unwrap()
         };
+        // DWM chrome is applied in `init` after USERDATA is set (so NCCALCSIZE
+        // can use our handler). Shape/NCRP here only covers the CreateWindow gap.
+        Self::apply_win11_window_shape(hwnd, false);
+        Self::set_nc_rendering_enabled(hwnd);
 
         // create DropTarget object that accesses the same data object, convert to COM and give to Microsoft
         let drop_target: IDropTarget = DropTarget {
-            drag_item: RefCell::new(None),
+            drag_items: RefCell::new(None),
             hwnd,
         }
         .into();
@@ -244,11 +605,18 @@ impl Win32Window {
             ime_rect: Rect::default(),
             current_cursor: MouseCursor::Default,
             last_mouse_pos: Vec2d::default(),
+            cached_dpi: Cell::new(0.0),
+            nc_dq_cache: Cell::new(None),
+            nc_dq_gen: Cell::new(0),
+            geom_event_gen: Cell::new(0),
+            is_closing: Cell::new(false),
+            in_size_move: Cell::new(false),
             ignore_wmsize: 0,
             hwnd,
             track_mouse_event: false,
             is_fullscreen,
             is_popup: false,
+            chromeless_when_maximized: false,
             ime_saved_himc: HIMC::default(),
         }
     }
@@ -259,11 +627,20 @@ impl Win32Window {
         let style = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
         let style_ex = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
 
-        let dpi = with_win32_app(|app| app.dpi_functions.system_dpi_factor() as f64);
-        let x = (position.x * dpi) as i32;
-        let y = (position.y * dpi) as i32;
-        let w = (size.x * dpi) as i32;
-        let h = (size.y * dpi) as i32;
+        // `position` is already in physical screen pixels: the caller builds it by adding the
+        // parent window's physical origin to an offset it has itself scaled by the parent's
+        // per-monitor DPI. Scaling it again here placed the popup at `dpi` times its intended
+        // screen coordinates — exact at 100%, and progressively further away above it.
+        //
+        // The size is deliberately passed through unscaled. It is provisional: `init` runs
+        // `set_inner_size` immediately afterwards, which scales by the window's own
+        // per-monitor DPI now that the HWND exists on its target display. The system DPI used
+        // here before was the primary display's, so on a second display of a different scale
+        // it was the wrong number twice over.
+        let x = position.x as i32;
+        let y = position.y as i32;
+        let w = size.x as i32;
+        let h = size.y as i32;
 
         let hwnd = unsafe {
             CreateWindowExW(
@@ -282,6 +659,7 @@ impl Win32Window {
             )
             .unwrap()
         };
+        Self::apply_win11_window_shape(hwnd, true);
 
         Win32Window {
             window_id,
@@ -291,24 +669,84 @@ impl Win32Window {
             ime_rect: Rect::default(),
             current_cursor: MouseCursor::Default,
             last_mouse_pos: Vec2d::default(),
+            cached_dpi: Cell::new(0.0),
+            nc_dq_cache: Cell::new(None),
+            nc_dq_gen: Cell::new(0),
+            geom_event_gen: Cell::new(0),
+            is_closing: Cell::new(false),
+            in_size_move: Cell::new(false),
             ignore_wmsize: 0,
             hwnd,
             track_mouse_event: false,
             is_fullscreen: false,
             is_popup: true,
+            chromeless_when_maximized: false,
             ime_saved_himc: HIMC::default(),
         }
     }
 
-    // initialize GWLP_USERDATA and registration of global stuff, and set outer size
+    // initialize GWLP_USERDATA and registration of global stuff, then set inner size
     pub fn init(&mut self, size: Vec2d) {
         unsafe { SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, self as *const _ as isize) };
 
         with_win32_app(|app| app.dpi_functions.enable_non_client_dpi_scaling(self.hwnd));
         with_win32_app(|app| app.all_windows.push(self.hwnd));
-        self.set_outer_size(size);
+
+        if !self.is_popup {
+            // CreateWindow ran NCCALCSIZE via DefWindowProc (no USERDATA yet).
+            // Apply DWM chrome, then force our extended-client frame before sizing.
+            self.extend_frame_for_custom_chrome();
+            self.force_frame_change();
+        }
+
+        // `size` is the app's desired client (inner) size (`create_inner_size`).
+        self.set_inner_size(size);
         if self.is_fullscreen {
             self.maximize();
+        } else if !self.is_popup {
+            // A restored size and position are only as good as the display layout they were
+            // saved on. Popups are placed against their parent and left alone; a maximized
+            // window is the system's to place.
+            self.fit_to_screens();
+        }
+    }
+
+    /// Moves and resizes the window so it sits entirely within one display's work area.
+    ///
+    /// See `crate::screen::fit_window_rect_to_screens` for what counts as a fit and why it
+    /// is unconditional. A window rectangle that already fits is left untouched, so this
+    /// costs one `GetWindowRect` and a display enumeration in the common case.
+    pub fn fit_to_screens(&mut self) {
+        let screens = win32_screens();
+        if screens.is_empty() {
+            return;
+        }
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(self.hwnd, &mut rect) }.is_err() {
+            return;
+        }
+        let current = Rect {
+            pos: dvec2(rect.left as f64, rect.top as f64),
+            size: dvec2(
+                (rect.right - rect.left) as f64,
+                (rect.bottom - rect.top) as f64,
+            ),
+        };
+        let fitted = fit_window_rect_to_screens(&screens, current);
+        if fitted == current {
+            return;
+        }
+        if let Err(e) = unsafe {
+            MoveWindow(
+                self.hwnd,
+                fitted.pos.x as i32,
+                fitted.pos.y as i32,
+                fitted.size.x as i32,
+                fitted.size.y as i32,
+                true,
+            )
+        } {
+            crate::error!("Fitting the window into the visible screen area failed: {}", e);
         }
     }
 
@@ -316,10 +754,13 @@ impl Win32Window {
     /// preedit, or `GCS_RESULTSTR` for the committed text) from the input
     /// context as a Rust `String`. Returns `Some("")` for an empty string and
     /// `None` only on error.
-    unsafe fn imm_get_composition_string(himc: HIMC, index: u32) -> Option<String> {
+    unsafe fn imm_get_composition_string(
+        himc: HIMC,
+        index: IME_COMPOSITION_STRING,
+    ) -> Option<String> {
         // A null buffer makes ImmGetCompositionStringW return the required byte
         // length (the W variant returns UTF-16 code units, i.e. 2 bytes each).
-        let byte_len = ImmGetCompositionStringW(himc, index, std::ptr::null_mut(), 0);
+        let byte_len = ImmGetCompositionStringW(himc, index, None, 0);
         if byte_len < 0 {
             return None;
         }
@@ -330,7 +771,7 @@ impl Win32Window {
         let written = ImmGetCompositionStringW(
             himc,
             index,
-            buf.as_mut_ptr() as *mut c_void,
+            Some(buf.as_mut_ptr() as *mut c_void),
             byte_len as u32,
         );
         if written <= 0 {
@@ -358,104 +799,43 @@ impl Win32Window {
                     window.do_callback(Win32Event::WindowGotFocus(window.window_id));
                 } else {
                     if window.is_popup {
-                        window.do_callback(Win32Event::PopupDismissed(PopupDismissedEvent {
-                            window_id: window.window_id,
-                            reason: PopupDismissReason::FocusLost,
-                        }));
+                        // While close_window() tears this popup down, a focus-loss dismissal
+                        // would duplicate the one the closer already reported.
+                        if !window.is_closing.get() {
+                            window.do_callback(Win32Event::PopupDismissed(PopupDismissedEvent {
+                                window_id: window.window_id,
+                                reason: PopupDismissReason::FocusLost,
+                            }));
+                        }
                     } else {
                         window.do_callback(Win32Event::WindowLostFocus(window.window_id));
                     }
                 }
             }
             WM_NCCALCSIZE => {
-                // check if we are maximised
-                if window.get_is_maximized() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
                 if wparam == WPARAM(1) {
-                    let margins = MARGINS {
-                        cxLeftWidth: 0,
-                        cxRightWidth: 0,
-                        cyTopHeight: 0,
-                        cyBottomHeight: 1,
-                    };
-                    DwmExtendFrameIntoClientArea(hwnd, &margins).unwrap();
+                    if window.is_popup {
+                        // Popups stay fully client-sized.
+                        return LRESULT(0);
+                    }
+                    // Custom chrome: restored = fully client-sized; maximized keeps
+                    // work-area insets. DWM extend/shape is done in init / visuals.
+                    unsafe {
+                        window.apply_extended_client_nccalcsize(lparam);
+                    }
                     return LRESULT(0);
                 }
             }
             WM_NCHITTEST => {
-                //let ycoord = (lparam.0 >> 16) as u16 as i16 as i32;
-                //let xcoord = (lparam.0 & 0xffff) as u16 as i16 as i32;
-                let abs = window.get_mouse_pos_from_lparam(lparam);
-                let mut rect = RECT {
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    right: 0,
-                };
-                const EDGE: f64 = 4.0;
-                let dpi = window.get_dpi_factor();
-                GetWindowRect(hwnd, &mut rect).unwrap();
-                let rect = Rect {
-                    pos: dvec2(rect.left as f64 / dpi, rect.top as f64 / dpi),
-                    size: dvec2(
-                        (rect.right - rect.left) as f64 / dpi,
-                        (rect.bottom - rect.top) as f64 / dpi,
-                    ),
-                };
-                if abs.x < rect.pos.x + EDGE {
-                    if abs.y < rect.pos.y + EDGE {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NwseResize));
-                        return LRESULT(HTTOPLEFT as isize);
-                    }
-                    if abs.y > rect.pos.y + rect.size.y - EDGE {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NeswResize));
-                        return LRESULT(HTBOTTOMLEFT as isize);
-                    }
-                    with_win32_app(|app| app.set_mouse_cursor(MouseCursor::EwResize));
-                    return LRESULT(HTLEFT as isize);
+                // Fully-client custom chrome (restored mains + popups): emulate
+                // resize borders with HT* hits. Returning system sizing codes
+                // still starts a resize drag; WM_SETCURSOR owns the cursor so we
+                // only clear our cached cursor (avoids stuck resize arrows).
+                if let Some(resize_hit) = window.hit_test_client_resize_edge(lparam) {
+                    with_win32_app(|app| app.current_cursor = None);
+                    return resize_hit;
                 }
-                if abs.x > rect.pos.x + rect.size.x - EDGE {
-                    if abs.y < rect.pos.y + EDGE {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NeswResize));
-                        return LRESULT(HTTOPRIGHT as isize);
-                    }
-                    if abs.y > rect.pos.y + rect.size.y - EDGE {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NwseResize));
-                        return LRESULT(HTBOTTOMRIGHT as isize);
-                    }
-                    with_win32_app(|app| app.set_mouse_cursor(MouseCursor::EwResize));
-                    return LRESULT(HTRIGHT as isize);
-                }
-                if abs.y < rect.pos.y + EDGE {
-                    with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NsResize));
-                    return LRESULT(HTTOP as isize);
-                }
-                if abs.y > rect.pos.y + rect.size.y - EDGE {
-                    with_win32_app(|app| app.set_mouse_cursor(MouseCursor::NsResize));
-                    return LRESULT(HTBOTTOM as isize);
-                }
-                let response = Rc::new(Cell::new(WindowDragQueryResponse::NoAnswer));
-                window.do_callback(Win32Event::WindowDragQuery(WindowDragQueryEvent {
-                    window_id: window.window_id,
-                    abs: window.get_mouse_pos_from_lparam(lparam) - rect.pos,
-                    response: response.clone(),
-                }));
-                match response.get() {
-                    WindowDragQueryResponse::Client => {
-                        return LRESULT(HTCLIENT as isize);
-                    }
-                    WindowDragQueryResponse::Caption => {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::Default));
-                        return LRESULT(HTCAPTION as isize);
-                    }
-                    WindowDragQueryResponse::SysMenu => {
-                        with_win32_app(|app| app.set_mouse_cursor(MouseCursor::Default));
-                        return LRESULT(HTSYSMENU as isize);
-                    }
-                    _ => (),
-                }
-                return LRESULT(HTCLIENT as isize);
+                return window.hit_test_extended_client(lparam);
             }
             WM_ERASEBKGND => return LRESULT(1),
             WM_MOUSEMOVE => {
@@ -542,40 +922,43 @@ impl Win32Window {
                         KeyCode::KeyV => {
                             // paste
                             if let Ok(()) = OpenClipboard(None) {
-                                let mut data: Vec<u16> = Vec::new();
-                                let h_clipboard_data =
-                                    GetClipboardData(CF_UNICODETEXT.0 as u32).unwrap();
-                                let h_clipboard_ptr =
-                                    GlobalLock(std::mem::transmute::<_, HGLOBAL>(h_clipboard_data))
-                                        as *mut u16;
-                                let clipboard_size =
-                                    GlobalSize(std::mem::transmute::<_, HGLOBAL>(h_clipboard_data));
-                                if clipboard_size > 2 {
-                                    data.resize((clipboard_size >> 1) - 1, 0);
-                                    std::ptr::copy_nonoverlapping(
-                                        h_clipboard_ptr,
-                                        data.as_mut_ptr(),
-                                        data.len(),
-                                    );
-                                    GlobalUnlock(std::mem::transmute::<_, HGLOBAL>(
-                                        h_clipboard_data,
-                                    ))
-                                    .unwrap();
-                                    CloseClipboard().unwrap();
-                                    if let Ok(utf8) = String::from_utf16(&data) {
-                                        window.do_callback(Win32Event::TextInput(TextInputEvent {
-                                            input: utf8,
-                                            was_paste: true,
-                                            replace_last: false,
-                                            ..Default::default()
-                                        }));
+                                let mut paste_text = None;
+                                // GetClipboardData fails when the clipboard holds
+                                // non-text content (e.g. an image or files); skip the
+                                // paste in that case but still close the clipboard.
+                                if let Ok(h_clipboard_data) =
+                                    GetClipboardData(CF_UNICODETEXT.0 as u32)
+                                {
+                                    let h_global =
+                                        std::mem::transmute::<_, HGLOBAL>(h_clipboard_data);
+                                    let h_clipboard_ptr = GlobalLock(h_global) as *mut u16;
+                                    if !h_clipboard_ptr.is_null() {
+                                        let clipboard_size = GlobalSize(h_global);
+                                        if clipboard_size > 2 {
+                                            let mut data: Vec<u16> = Vec::new();
+                                            data.resize((clipboard_size >> 1) - 1, 0);
+                                            std::ptr::copy_nonoverlapping(
+                                                h_clipboard_ptr,
+                                                data.as_mut_ptr(),
+                                                data.len(),
+                                            );
+                                            paste_text = String::from_utf16(&data).ok();
+                                        }
+                                        // GlobalUnlock reports failure when the lock
+                                        // count reaches zero with GetLastError() ==
+                                        // NO_ERROR, which is the normal outcome of the
+                                        // last unlock, so its result is ignored.
+                                        let _ = GlobalUnlock(h_global);
                                     }
-                                } else {
-                                    GlobalUnlock(std::mem::transmute::<_, HGLOBAL>(
-                                        h_clipboard_data,
-                                    ))
-                                    .unwrap();
-                                    CloseClipboard().unwrap();
+                                }
+                                let _ = CloseClipboard();
+                                if let Some(input) = paste_text {
+                                    window.do_callback(Win32Event::TextInput(TextInputEvent {
+                                        input,
+                                        was_paste: true,
+                                        replace_last: false,
+                                        ..Default::default()
+                                    }));
                                 }
                             }
                         }
@@ -684,7 +1067,7 @@ impl Win32Window {
                     // preview and then clears the composition. We commit here (and
                     // consume the message below) so DefWindowProc does NOT also
                     // synthesize WM_CHAR for the same result and double-insert.
-                    if flags & GCS_RESULTSTR != 0 {
+                    if flags & GCS_RESULTSTR.0 != 0 {
                         if let Some(result) =
                             Self::imm_get_composition_string(himc, GCS_RESULTSTR)
                         {
@@ -700,7 +1083,7 @@ impl Win32Window {
                     }
                     // GCS_COMPSTR: the in-progress preedit. Show it inline with
                     // `replace_last = true`; an empty string clears the preview.
-                    if flags & GCS_COMPSTR != 0 {
+                    if flags & GCS_COMPSTR.0 != 0 {
                         let comp = Self::imm_get_composition_string(himc, GCS_COMPSTR)
                             .unwrap_or_default();
                         window.do_callback(Win32Event::TextInput(TextInputEvent {
@@ -729,12 +1112,33 @@ impl Win32Window {
                 }));
             }
             WM_ENTERSIZEMOVE => {
+                window.in_size_move.set(true);
                 with_win32_app(|app| app.start_resize());
                 window.do_callback(Win32Event::WindowResizeLoopStart(window.window_id));
             }
+            // WM_CANCELMODE (0x001F): the system is telling the window to abandon any internal
+            // mode it is in. DefWindowProc normally still leaves the move/size loop through
+            // WM_EXITSIZEMOVE, so this is a failsafe for the state that loop arms and only that
+            // loop disarms. A stuck `in_size_move` silently stops publishing the window's
+            // position for its lifetime; a stuck resize is worse still, because the 8 ms resize
+            // timer keeps forcing repaints and `is_in_resize` keeps presenting unpaced, so the
+            // window never returns to vsync. `replace` is what keeps this precise: WM_CANCELMODE
+            // also arrives for menus and capture changes, and unwinding a resize that was not
+            // running would cost a needless `ResizeBuffers` every time one opened.
+            0x001F => {
+                if window.in_size_move.replace(false) {
+                    with_win32_app(|app| app.stop_resize());
+                    window.do_callback(Win32Event::WindowResizeLoopStop(window.window_id));
+                    window.send_move_event();
+                }
+            }
             WM_EXITSIZEMOVE => {
+                window.in_size_move.set(false);
                 with_win32_app(|app| app.stop_resize());
                 window.do_callback(Win32Event::WindowResizeLoopStop(window.window_id));
+                // A drag that only moved the window produced no WM_SIZE, so this is the one
+                // chance to publish where it ended up.
+                window.send_move_event();
             }
             // WM_SIZING (0x0214) fires BEFORE the window is resized with
             // the proposed new rect. By pre-rendering at this size, the
@@ -744,8 +1148,63 @@ impl Win32Window {
                 let proposed_rect = &*(lparam.0 as *const RECT);
                 window.send_sizing_event(proposed_rect);
             }
-            WM_SIZE | WM_DPICHANGED => {
+            WM_SIZE => {
+                // The window may have moved to a monitor with a different scale; drop the cached
+                // DPI so send_change_event() (and subsequent hit-tests) re-read the new value.
+                window.invalidate_cached_dpi();
+                // Minimizing does not change the window's geometry, it parks it. Publishing the
+                // iconic rect would relayout the whole UI at zero size and poison whatever the
+                // app persists; `outer_rect` already answers from the restored placement, so
+                // there is nothing here worth reporting either.
+                const SIZE_MINIMIZED: usize = 1;
+                if wparam.0 == SIZE_MINIMIZED {
+                    return LRESULT(0);
+                }
                 window.send_change_event();
+            }
+            WM_DPICHANGED => {
+                // Drop the cached DPI so send_change_event() re-reads the new value.
+                window.invalidate_cached_dpi();
+                // Adopt the OS-suggested rect, which keeps the window's logical size at the
+                // new DPI; the SetWindowPos delivers a nested WM_SIZE whose
+                // send_change_event() publishes the new dpi_factor and size to the app.
+                let suggested_rect = &*(lparam.0 as *const RECT);
+                // Snapshot the generation, not the geometry: the nested WM_SIZE mutates this
+                // window through a second `&mut` (see `geom_event_gen`).
+                let geom_gen = window.geom_event_gen.get();
+                if let Err(e) = SetWindowPos(
+                    hwnd,
+                    None,
+                    suggested_rect.left,
+                    suggested_rect.top,
+                    suggested_rect.right - suggested_rect.left,
+                    suggested_rect.bottom - suggested_rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                ) {
+                    crate::error!("WM_DPICHANGED: SetWindowPos failed: {}", e);
+                }
+                // An unchanged generation means no nested WM_SIZE fired (rect already
+                // matched), so publish the new DPI to the app ourselves.
+                if window.geom_event_gen.get() == geom_gen {
+                    window.send_change_event();
+                }
+                // The WM_DPICHANGED contract requires returning zero (the shared tail returns 1).
+                return LRESULT(0);
+            }
+            // WM_MOVE (0x0003): the window changed position without necessarily changing size, so
+            // WM_SIZE / send_change_event do not fire. nc_dq_cache is keyed by screen-space cursor
+            // position, which goes stale when the window moves under a stationary cursor, so drop
+            // it here. Falls through to DefWindowProc for default processing.
+            0x0003 => {
+                window.nc_dq_cache.set(None);
+                window.nc_dq_gen.set(window.nc_dq_gen.get().wrapping_add(1));
+                // Publish the new position, or the window keeps reporting — and the app keeps
+                // persisting — where it used to be. A user drag is left to WM_EXITSIZEMOVE:
+                // this message arrives per mouse step, and each published geometry costs a
+                // full redraw on the Cx side.
+                if !window.in_size_move.get() {
+                    window.send_move_event();
+                }
             }
             WM_CLOSE => {
                 // close requested
@@ -774,14 +1233,32 @@ impl Win32Window {
                 let message = unsafe { Box::from_raw(lparam.0 as *mut DropTargetMessage) };
 
                 match *message {
-                    DropTargetMessage::Leave => {
-                        if with_win32_app(|app| app.is_dragging_internal.get()) {
+                    DropTargetMessage::Leave(was_delivered) => {
+                        // An internal drag and an external one both end
+                        // here. The old guard let only internal ones
+                        // through, so a file dragged into the window and
+                        // out again never told the app the pointer had
+                        // gone — and every hover highlight a widget lit on
+                        // the way in stayed lit for the rest of the run.
+                        //
+                        // But DragEnd means "the drag you were told about
+                        // has ended", not "something left the window": OLE
+                        // calls DragLeave even when DragEnter's conversion
+                        // failed (unsupported format, a DROPFILES
+                        // parse_dropfiles rejected), and the app was never
+                        // told about that drag in the first place. Firing
+                        // unconditionally would send it a DragEnd — with
+                        // its synthesized MouseUp and hover cycle — for a
+                        // drag it never saw start. was_delivered is that
+                        // guard now, sourced from whether DropTarget's
+                        // drag_items was actually Some.
+                        if was_delivered || with_win32_app(|app| app.is_dragging_internal.get()) {
                             // TODO: cancel DoDragDrop somehow
                             window.do_callback(Win32Event::DragEnd);
                         }
                     }
-                    DropTargetMessage::Enter(flags, mut point, effect, drag_item)
-                    | DropTargetMessage::Over(flags, mut point, effect, drag_item) => {
+                    DropTargetMessage::Enter(flags, mut point, effect, drag_items)
+                    | DropTargetMessage::Over(flags, mut point, effect, drag_items) => {
                         // decode message
                         let _ = unsafe {
                             ScreenToClient(window.hwnd, &mut point as *mut POINTL as *mut POINT)
@@ -799,7 +1276,7 @@ impl Win32Window {
                         let dpi_factor = window.get_dpi_factor();
 
                         // send to makepad
-                        window.do_callback(Win32Event::Drag(DragEvent {
+                        window.do_callback(Win32Event::Drag(window.window_id, DragEvent {
                             modifiers: KeyModifiers {
                                 shift: (flags & MK_SHIFT) != MODIFIERKEYS_FLAGS(0),
                                 control: (flags & MK_CONTROL) != MODIFIERKEYS_FLAGS(0),
@@ -811,22 +1288,22 @@ impl Win32Window {
                                 x: point.x as f64 / dpi_factor,
                                 y: point.y as f64 / dpi_factor,
                             },
-                            items: Arc::new(vec![drag_item]),
+                            items: Arc::new(drag_items),
                             response: Arc::new(Mutex::new(response)),
                         }));
                     }
 
-                    DropTargetMessage::Drop(flags, mut point, _effect, drag_item) => {
+                    DropTargetMessage::Drop(flags, mut point, _effect, drag_items) => {
                         // decode message
                         let _ = unsafe {
                             ScreenToClient(window.hwnd, &mut point as *mut POINTL as *mut POINT)
                         };
 
-                        //log!("dropping at ({},{}), flags: {:04X}, response: {:?}, drag_item: {:?}",point.x,point.y,flags.0,response,drag_item);
+                        //log!("dropping at ({},{}), flags: {:04X}, response: {:?}, drag_items: {:?}",point.x,point.y,flags.0,response,drag_items);
                         let dpi_factor = window.get_dpi_factor();
 
                         // send to makepad
-                        window.do_callback(Win32Event::Drop(DropEvent {
+                        window.do_callback(Win32Event::Drop(window.window_id, DropEvent {
                             modifiers: KeyModifiers {
                                 shift: (flags & MK_SHIFT) != MODIFIERKEYS_FLAGS(0),
                                 control: (flags & MK_CONTROL) != MODIFIERKEYS_FLAGS(0),
@@ -838,7 +1315,7 @@ impl Win32Window {
                                 x: point.x as f64 / dpi_factor,
                                 y: point.y as f64 / dpi_factor,
                             },
-                            items: Arc::new(vec![drag_item]),
+                            items: Arc::new(drag_items),
                         }));
 
                         window.do_callback(Win32Event::DragEnd);
@@ -909,23 +1386,26 @@ impl Win32Window {
 
     pub fn set_mouse_cursor(&mut self, _cursor: MouseCursor) {}
 
+    // ShowWindow's synchronous WM_SIZE is queued and drained by do_callback, so it
+    // already reaches the app; posting a compensating WM_SIZE would duplicate it.
     pub fn restore(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_RESTORE);
-            PostMessageW(Some(self.hwnd), WM_SIZE, WPARAM(0), LPARAM(0)).unwrap();
         }
     }
 
     pub fn maximize(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
-            PostMessageW(Some(self.hwnd), WM_SIZE, WPARAM(0), LPARAM(0)).unwrap();
         }
     }
 
     pub fn close_window(&self) {
+        // Lets the WM_ACTIVATE arm suppress a redundant popup dismissal.
+        self.is_closing.set(true);
+        // A second close of an already-destroyed window must be a no-op, not a panic.
         unsafe {
-            DestroyWindow(self.hwnd).unwrap();
+            let _ = DestroyWindow(self.hwnd);
         }
     }
 
@@ -939,6 +1419,15 @@ impl Win32Window {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
         }
+    }
+
+    /// Whether the window is minimized. A minimized window gets no compositor
+    /// vsync, so painting it is pure waste and its frame-latency waitable never
+    /// signals; the paint loop skips it (keeping the pass dirty) and re-probes.
+    /// `IsIconic` is not in the vendored bindings, so it is linked here.
+    pub fn is_iconic(&self) -> bool {
+        windows_core::link!("user32.dll" "system" fn IsIconic(hwnd: HWND) -> crate::windows::core::BOOL);
+        unsafe { IsIconic(self.hwnd).as_bool() }
     }
 
     pub fn set_topmost(&self, topmost: bool) {
@@ -969,6 +1458,14 @@ impl Win32Window {
         }
     }
 
+    /// See `CxOsOp::SetChromelessWhenMaximized`. Forces a `WM_NCCALCSIZE`
+    /// pass so a currently-maximized window picks up the new insets right
+    /// away instead of waiting for its next resize/move.
+    pub fn set_chromeless_when_maximized(&mut self, chromeless: bool) {
+        self.chromeless_when_maximized = chromeless;
+        self.force_frame_change();
+    }
+
     pub fn get_is_topmost(&self) -> bool {
         unsafe {
             let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
@@ -986,11 +1483,7 @@ impl Win32Window {
         const BUTTON_H: f64 = 29.0;
         const BUTTON_COUNT: f64 = 3.0;
         const BUTTONS_W: f64 = BUTTON_W * BUTTON_COUNT;
-        let inner_size = if self.get_is_maximized() {
-            self.get_outer_size()
-        } else {
-            self.get_inner_size()
-        };
+        let inner_size = self.get_inner_size();
         WindowGeom {
             xr_is_presenting: false,
             can_fullscreen: false,
@@ -1015,16 +1508,10 @@ impl Win32Window {
     }
 
     pub fn get_is_maximized(&self) -> bool {
-        unsafe {
-            let wp: mem::MaybeUninit<WINDOWPLACEMENT> = mem::MaybeUninit::uninit();
-            let mut wp = wp.assume_init();
-            wp.length = mem::size_of::<WINDOWPLACEMENT>() as u32;
-            GetWindowPlacement(self.hwnd, &mut wp).unwrap();
-            if wp.showCmd == SW_MAXIMIZE.0 as u32 {
-                return true;
-            }
-            return false;
-        }
+        // Prefer the live WS_MAXIMIZE style bit — more accurate during
+        // WM_NCCALCSIZE than WINDOWPLACEMENT while maximize/restore is in flight.
+        const WS_MAXIMIZE: u32 = 0x0100_0000;
+        (self.get_style().0 & WS_MAXIMIZE) != 0
     }
 
     pub fn time_now(&self) -> f64 {
@@ -1035,31 +1522,51 @@ impl Win32Window {
         self.ime_rect = rect;
     }
 
-    pub fn get_position(&self) -> Vec2d {
+    /// The window's outer rectangle in screen pixels, answered from the restored placement
+    /// while the window is minimized.
+    ///
+    /// A minimized window has no on-screen rectangle: `GetWindowRect` reports the off-screen
+    /// parking position `(-32000, -32000)` and `GetClientRect` a zero size. An app that
+    /// persists its geometry on shutdown would save those and restore, next launch, a window
+    /// it can neither see nor grab — so the restored placement the system keeps for exactly
+    /// this purpose is reported instead.
+    fn outer_rect(&self) -> RECT {
         unsafe {
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                bottom: 0,
-                right: 0,
-            };
-            GetWindowRect(self.hwnd, &mut rect).unwrap();
-            Vec2d {
-                x: rect.left as f64,
-                y: rect.top as f64,
+            if self.is_iconic() {
+                let mut placement = WINDOWPLACEMENT {
+                    length: mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    ..Default::default()
+                };
+                if GetWindowPlacement(self.hwnd, &mut placement).is_ok() {
+                    return workspace_rect_to_screen(placement.rcNormalPosition);
+                }
             }
+            let mut rect = RECT::default();
+            GetWindowRect(self.hwnd, &mut rect).unwrap();
+            rect
+        }
+    }
+
+    /// The window's top-left corner in physical screen pixels; see [`Self::set_position`]
+    /// for why positions are not scaled the way sizes are.
+    pub fn get_position(&self) -> Vec2d {
+        let rect = self.outer_rect();
+        Vec2d {
+            x: rect.left as f64,
+            y: rect.top as f64,
         }
     }
 
     pub fn get_inner_size(&self) -> Vec2d {
         unsafe {
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                bottom: 0,
-                right: 0,
-            };
-            GetClientRect(self.hwnd, &mut rect).unwrap();
+            let mut rect = RECT::default();
+            if self.is_iconic() {
+                // A restored window of this backend is fully client-sized (see the
+                // `WM_NCCALCSIZE` handler), so its outer rectangle is also its client size.
+                rect = self.outer_rect();
+            } else {
+                GetClientRect(self.hwnd, &mut rect).unwrap();
+            }
             let dpi = self.get_dpi_factor();
             Vec2d {
                 x: (rect.right - rect.left) as f64 / dpi,
@@ -1069,22 +1576,19 @@ impl Win32Window {
     }
 
     pub fn get_outer_size(&self) -> Vec2d {
-        unsafe {
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                bottom: 0,
-                right: 0,
-            };
-            GetWindowRect(self.hwnd, &mut rect).unwrap();
-            let dpi = self.get_dpi_factor();
-            Vec2d {
-                x: (rect.right - rect.left) as f64 / dpi,
-                y: (rect.bottom - rect.top) as f64 / dpi,
-            }
+        let rect = self.outer_rect();
+        let dpi = self.get_dpi_factor();
+        Vec2d {
+            x: (rect.right - rect.left) as f64 / dpi,
+            y: (rect.bottom - rect.top) as f64 / dpi,
         }
     }
 
+    /// Moves the window's top-left corner to `pos`, in physical screen pixels — the same
+    /// space [`Self::get_position`] reports and `CreateWindowExW` takes, so
+    /// `set_position(get_position())` leaves the window where it is. Sizes are logical and
+    /// scale with the DPI; positions are not, because a screen coordinate on a multi-monitor
+    /// desktop has no single scale factor to be logical in.
     pub fn set_position(&mut self, pos: Vec2d) {
         unsafe {
             let mut window_rect = RECT {
@@ -1094,13 +1598,23 @@ impl Win32Window {
                 right: 0,
             };
             GetWindowRect(self.hwnd, &mut window_rect).unwrap();
-            let dpi = self.get_dpi_factor();
+            // A caller placing the window — restoring a saved position, cascading a new
+            // window — cannot know the display layout it is placing into, so the request is
+            // fitted to the displays that are actually attached.
+            let want = Rect {
+                pos,
+                size: dvec2(
+                    (window_rect.right - window_rect.left) as f64,
+                    (window_rect.bottom - window_rect.top) as f64,
+                ),
+            };
+            let fitted = fit_window_rect_to_screens(&win32_screens(), want);
             MoveWindow(
                 self.hwnd,
-                (pos.x * dpi) as i32,
-                (pos.y * dpi) as i32,
-                window_rect.right - window_rect.left,
-                window_rect.bottom - window_rect.top,
+                fitted.pos.x as i32,
+                fitted.pos.y as i32,
+                fitted.size.x as i32,
+                fitted.size.y as i32,
                 false,
             )
             .unwrap();
@@ -1173,6 +1687,13 @@ impl Win32Window {
             DwmExtendFrameIntoClientArea(self.hwnd, &margins).unwrap();
         }
 
+        if !self.is_popup {
+            Self::set_nc_rendering_enabled(self.hwnd);
+            Self::apply_win11_window_shape(self.hwnd, false);
+        } else {
+            Self::apply_win11_window_shape(self.hwnd, true);
+        }
+
         let hr = unsafe {
             DwmSetWindowAttribute(
                 self.hwnd,
@@ -1217,24 +1738,17 @@ impl Win32Window {
                 right: 0,
             };
             GetWindowRect(self.hwnd, &mut window_rect).unwrap();
-            let mut client_rect = RECT {
-                left: 0,
-                top: 0,
-                bottom: 0,
-                right: 0,
-            };
-            GetClientRect(self.hwnd, &mut client_rect).unwrap();
             let dpi = self.get_dpi_factor();
+            // Use the same inset model as WM_NCCALCSIZE / send_sizing_event so
+            // we do not depend on the current client rect (which may still be
+            // DefWindowProc-sized before the first FRAMECHANGED).
+            let (l, t, r, b) = self.client_frame_insets_px();
             MoveWindow(
                 self.hwnd,
                 window_rect.left,
                 window_rect.top,
-                (size.x * dpi) as i32
-                    + ((window_rect.right - window_rect.left)
-                        - (client_rect.right - client_rect.left)),
-                (size.y * dpi) as i32
-                    + ((window_rect.bottom - window_rect.top)
-                        - (client_rect.bottom - client_rect.top)),
+                (size.x * dpi) as i32 + l + r,
+                (size.y * dpi) as i32 + t + b,
                 false,
             )
             .unwrap();
@@ -1242,14 +1756,52 @@ impl Win32Window {
     }
 
     pub fn get_dpi_factor(&self) -> f64 {
-        with_win32_app(|app| app.dpi_functions.hwnd_dpi_factor(self.hwnd) as f64)
+        let cached = self.cached_dpi.get();
+        if cached > 0.0 {
+            return cached;
+        }
+        let dpi = with_win32_app(|app| app.dpi_functions.hwnd_dpi_factor(self.hwnd) as f64);
+        self.cached_dpi.set(dpi);
+        dpi
+    }
+
+    /// Drop the cached DPI so the next `get_dpi_factor()` re-queries it. Call on WM_DPICHANGED.
+    pub fn invalidate_cached_dpi(&self) {
+        self.cached_dpi.set(0.0);
     }
 
     pub fn do_callback(&mut self, event: Win32Event) {
         Win32App::do_callback(event);
     }
 
+    /// Publishes a position-only geometry change.
+    ///
+    /// Moving a window does not change what it draws, so unlike [`Self::send_change_event`]
+    /// this asks for no repaint; it only keeps the published geometry — which is what an app
+    /// persists — in step with where the window actually is. Nothing is dispatched when the
+    /// geometry is unchanged, which is also what makes this safe to call for a minimize,
+    /// where `outer_rect` keeps answering from the restored placement.
+    pub fn send_move_event(&mut self) {
+        let new_geom = self.get_window_geom();
+        if new_geom == self.last_window_geom {
+            return;
+        }
+        let old_geom = std::mem::replace(&mut self.last_window_geom, new_geom.clone());
+        self.geom_event_gen.set(self.geom_event_gen.get().wrapping_add(1));
+        self.do_callback(Win32Event::WindowGeomChange(WindowGeomChangeEvent {
+            window_id: self.window_id,
+            old_geom,
+            new_geom,
+        }));
+    }
+
     pub fn send_change_event(&mut self) {
+        // Record that a geometry event is published (see `geom_event_gen`).
+        self.geom_event_gen.set(self.geom_event_gen.get().wrapping_add(1));
+        // The window/caption geometry changed; drop the WM_NCHITTEST hit-test cache and bump its
+        // generation so an in-flight WindowDragQuery dispatch does not write a stale result back.
+        self.nc_dq_cache.set(None);
+        self.nc_dq_gen.set(self.nc_dq_gen.get().wrapping_add(1));
         let new_geom = self.get_window_geom();
         let old_geom = self.last_window_geom.clone();
         self.last_window_geom = new_geom.clone();
@@ -1268,15 +1820,19 @@ impl Win32Window {
     /// the empty-edge gap that appears when growing the window.
     pub fn send_sizing_event(&mut self, proposed_rect: &RECT) {
         let dpi = self.get_dpi_factor();
-        let proposed_size = Vec2d {
+        let outer_size = Vec2d {
             x: (proposed_rect.right - proposed_rect.left) as f64 / dpi,
             y: (proposed_rect.bottom - proposed_rect.top) as f64 / dpi,
         };
+        let (l, t, r, b) = self.client_frame_insets_px();
+        let inner_size = Vec2d {
+            x: ((proposed_rect.right - proposed_rect.left) - l - r).max(0) as f64 / dpi,
+            y: ((proposed_rect.bottom - proposed_rect.top) - t - b).max(0) as f64 / dpi,
+        };
 
         let mut new_geom = self.last_window_geom.clone();
-        // For custom chrome, inner size == outer size.
-        new_geom.inner_size = proposed_size;
-        new_geom.outer_size = proposed_size;
+        new_geom.inner_size = inner_size;
+        new_geom.outer_size = outer_size;
         new_geom.position = Vec2d {
             x: proposed_rect.left as f64,
             y: proposed_rect.top as f64,
@@ -1287,7 +1843,7 @@ impl Win32Window {
             return; // Size didn't change (e.g. just a move), nothing to pre-render.
         }
         // Skip degenerate sizes — ResizeBuffers rejects zero dimensions.
-        if proposed_size.x < 1.0 || proposed_size.y < 1.0 {
+        if inner_size.x < 1.0 || inner_size.y < 1.0 {
             return;
         }
         self.last_window_geom = new_geom.clone();
@@ -1346,6 +1902,7 @@ impl Win32Window {
     pub fn send_mouse_move(&mut self, pos: Vec2d, modifiers: KeyModifiers) {
         self.last_mouse_pos = pos;
         self.do_callback(Win32Event::MouseMove(MouseMoveEvent {
+                lock_delta: Default::default(),
             window_id: self.window_id,
             abs: pos,
             modifiers: modifiers,
@@ -1375,6 +1932,9 @@ impl Win32Window {
             is_mouse,
             handled_x: Cell::new(false),
             handled_y: Cell::new(false),
+            // WM_MOUSEWHEEL carries no gesture phase; precision-touchpad momentum is
+            // synthesized by the driver as plain wheel messages we cannot distinguish.
+            phase: ScrollPhase::None,
         }));
     }
 

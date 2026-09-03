@@ -47,7 +47,8 @@ pub struct Font {
     ascender_in_ems: f32,
     descender_in_ems: f32,
     line_gap_in_ems: f32,
-    cached_glyph_outlines: RefCell<FxHashMap<GlyphId, Option<GlyphOutline>>>,
+    cap_height_in_ems: f32,
+    cached_glyph_outlines: RefCell<FxHashMap<GlyphId, Option<Rc<GlyphOutline>>>>,
 }
 
 impl Font {
@@ -58,14 +59,15 @@ impl Font {
         ascender_fudge_in_ems: f32,
         descender_fudge_in_ems: f32,
     ) -> Self {
-        let (units_per_em, ascender_in_ems, descender_in_ems, line_gap_in_ems) = face
-            .with_ttf_parser_face(|face| {
+        let (units_per_em, ascender_in_ems, descender_in_ems, line_gap_in_ems, cap_height_in_ems) =
+            face.with_ttf_parser_face(|face| {
                 let units_per_em = face.units_per_em() as f32;
                 (
                     units_per_em,
                     face.ascender() as f32 / units_per_em + ascender_fudge_in_ems,
                     face.descender() as f32 / units_per_em + descender_fudge_in_ems,
                     face.line_gap() as f32 / units_per_em,
+                    cap_height_in_units(face) / units_per_em,
                 )
             });
         Self {
@@ -76,6 +78,7 @@ impl Font {
             ascender_in_ems,
             descender_in_ems,
             line_gap_in_ems,
+            cap_height_in_ems,
             cached_glyph_outlines: RefCell::new(FxHashMap::default()),
         }
     }
@@ -112,7 +115,24 @@ impl Font {
         self.line_gap_in_ems
     }
 
+    /// Height of a flat-topped capital above the baseline.
+    ///
+    /// This is the ink metric — where the eye puts the top of a line of text —
+    /// as opposed to the ascender, which is a line-box metric and reaches
+    /// further up. `0.0` when the face has no usable capital (icon fonts, some
+    /// CJK faces); callers must treat that as "don't know".
+    pub fn cap_height_in_ems(&self) -> f32 {
+        self.cap_height_in_ems
+    }
+
     pub fn glyph_outline(&self, glyph_id: GlyphId) -> Option<GlyphOutline> {
+        self.glyph_outline_rc(glyph_id)
+            .map(|outline| (*outline).clone())
+    }
+
+    /// Like [`Self::glyph_outline`], but returns the cache's shared `Rc` so callers
+    /// on hot per-frame paths avoid deep-copying the outline's command list.
+    pub fn glyph_outline_rc(&self, glyph_id: GlyphId) -> Option<Rc<GlyphOutline>> {
         if let Some(outline) = self.cached_glyph_outlines.borrow().get(&glyph_id) {
             return outline.clone();
         }
@@ -124,7 +144,7 @@ impl Font {
             let bounds = face.outline_glyph(glyph_id, &mut builder)?;
             let min = Point::new(bounds.x_min as f32, bounds.y_min as f32);
             let max = Point::new(bounds.x_max as f32, bounds.y_max as f32);
-            Some(builder.finish(Rect::new(min, max - min), units_per_em))
+            Some(Rc::new(builder.finish(Rect::new(min, max - min), units_per_em)))
         });
 
         {
@@ -143,7 +163,7 @@ impl Font {
     pub fn glyph_outline_bounds_in_ems(
         &self,
         glyph_id: GlyphId,
-        out_outline: &mut Option<GlyphOutline>,
+        out_outline: &mut Option<Rc<GlyphOutline>>,
     ) -> Option<Rect<f32>> {
         // Check the outline cache first — it stores the full outline,
         // from which we can derive bounds.
@@ -152,8 +172,8 @@ impl Font {
             return cached.as_ref().map(|o| o.bounds_in_ems());
         }
 
-        // Not cached yet — compute via glyph_outline() which will populate the cache.
-        if let Some(outline) = self.glyph_outline(glyph_id) {
+        // Not cached yet — compute via glyph_outline_rc() which will populate the cache.
+        if let Some(outline) = self.glyph_outline_rc(glyph_id) {
             let bounds_in_ems = outline.bounds_in_ems();
             *out_outline = Some(outline);
             Some(bounds_in_ems)
@@ -217,6 +237,23 @@ impl PartialEq for Font {
 
 pub type GlyphId = u16;
 
+/// Cap height in font units, or `0.0` when the face has none to give.
+///
+/// `OS/2` carries `sCapHeight` from version 2 on, and that is the metric the
+/// designer intended. Older or sloppier faces leave it out or zero it, so fall
+/// back to the ink of a capital `H` — flat-topped in every Latin design, which
+/// is exactly what the metric means. Anything without either (icon fonts,
+/// symbol fonts, some CJK faces) reports `0.0`, and callers keep their hands
+/// off the layout rather than guessing.
+fn cap_height_in_units(face: &ttf_parser::Face<'_>) -> f32 {
+    if let Some(cap_height) = face.capital_height().filter(|value| *value > 0) {
+        return cap_height as f32;
+    }
+    face.glyph_index('H')
+        .and_then(|glyph_id| face.glyph_bounding_box(glyph_id))
+        .map_or(0.0, |bbox| bbox.y_max.max(0) as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Font, FontId};
@@ -235,6 +272,12 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../widgets/resources/NotoColorEmoji.ttf")
     }
 
+    fn bundled_font_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../widgets/resources")
+            .join(name)
+    }
+
     fn load_font_data(path: PathBuf) -> FontData {
         SharedBytes::from_file_mmap_or_read(path).expect("font bytes should load")
     }
@@ -249,6 +292,44 @@ mod tests {
             0.0,
             0.0,
         )
+    }
+
+    /// The theme's text faces have to hand out a cap height, or every boxed
+    /// label falls back to line-box centering and sits high again.
+    #[test]
+    fn text_faces_report_a_cap_height() {
+        for name in [
+            "IBMPlexSans-Text.ttf",
+            "IBMPlexSans-SemiBold.ttf",
+            "LiberationMono-Regular.ttf",
+            "NotoSans-Regular.ttf",
+        ] {
+            let cap = make_font(bundled_font_path(name)).cap_height_in_ems();
+            assert!(
+                (0.5..0.85).contains(&cap),
+                "{name}: cap height {cap} ems is not a plausible capital"
+            );
+        }
+    }
+
+    /// The fudge the themes apply to the ascender is a line-box tweak; the ink
+    /// metric must not move with it, or the centering it feeds would chase its
+    /// own tail.
+    #[test]
+    fn cap_height_ignores_the_ascender_fudge() {
+        let path = bundled_font_path("IBMPlexSans-Text.ttf");
+        let plain = make_font(path.clone());
+        let fudged = Font::new(
+            FontId::from(0xE0E2_u64),
+            Rc::new(RefCell::new(Rasterizer::new(
+                layouter::Settings::default().loader.rasterizer,
+            ))),
+            FontFace::from_data_and_index(load_font_data(path), 0).expect("font face should load"),
+            -0.1,
+            0.0,
+        );
+        assert_eq!(plain.cap_height_in_ems(), fudged.cap_height_in_ems());
+        assert!((plain.ascender_in_ems() - fudged.ascender_in_ems() - 0.1).abs() < 1e-6);
     }
 
     #[test]

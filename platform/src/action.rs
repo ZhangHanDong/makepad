@@ -115,12 +115,12 @@ impl Cx {
     fn handle_received_action(&mut self, action: ActionSend) {
         let action_ref = action.as_ref() as &dyn ActionTrait;
         if let Some(close) = action_ref.downcast_ref::<NativeTextInputCloseRequested>() {
-            self.platform_ops.push(CxOsOp::CloseNativeView {
+            self.platform_ops.push_back(CxOsOp::CloseNativeView {
                 id: close.text_input_id,
             });
         } else if let Some(close) = action_ref.downcast_ref::<NativeLabelCloseRequested>() {
             self.platform_ops
-                .push(CxOsOp::CloseNativeView { id: close.label_id });
+                .push_back(CxOsOp::CloseNativeView { id: close.label_id });
         } else {
             self.new_actions.push(action);
         }
@@ -250,7 +250,7 @@ mod tests {
 
         assert_eq!(cx.new_actions.len(), 0);
         assert!(matches!(
-            cx.platform_ops.as_slice(),
+            cx.platform_ops.make_contiguous(),
             [CxOsOp::CloseNativeView { id }] if *id == text_input_id
         ));
     }
@@ -264,7 +264,7 @@ mod tests {
 
         assert_eq!(cx.new_actions.len(), 0);
         assert!(matches!(
-            cx.platform_ops.as_slice(),
+            cx.platform_ops.make_contiguous(),
             [CxOsOp::CloseNativeView { id }] if *id == label_id
         ));
     }

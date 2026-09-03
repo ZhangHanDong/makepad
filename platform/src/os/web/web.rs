@@ -24,6 +24,28 @@ use {
 };
 
 impl Cx {
+    /// WebGL cannot blit a private render target to CPU without an extra
+    /// readPixels path that this backend does not expose yet.
+    pub fn debug_read_render_texture(
+        &mut self,
+        _texture: &crate::texture::Texture,
+    ) -> Option<(usize, usize, Vec<u8>)> {
+        None
+    }
+
+    /// Renderer-owned texture capture (see the metal backend): not
+    /// implemented here — callers fall back to `debug_read_render_texture`.
+    pub fn request_render_texture_capture(&mut self, _texture: &crate::texture::Texture) -> bool {
+        false
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn take_render_texture_captures(
+        &mut self,
+    ) -> Vec<(crate::texture::TextureId, usize, usize, Vec<u8>)> {
+        Vec::new()
+    }
+
     fn normalize_web_pathname(pathname: &str) -> String {
         let trimmed = pathname.trim();
         if trimmed.is_empty() {
@@ -353,6 +375,7 @@ impl Cx {
                     let permission = match tw.permission.as_str() {
                         "microphone" => Permission::AudioInput,
                         "camera" => Permission::Camera,
+                        "geolocation" => Permission::Location,
                         _ => {
                             crate::log!("Unknown web permission: {}", tw.permission);
                             continue;
@@ -370,6 +393,29 @@ impl Cx {
                         request_id: tw.request_id as i32,
                         status,
                     }));
+                }
+                live_id!(ToWasmLocationUpdate) => {
+                    let tw = ToWasmLocationUpdate::read_to_wasm(&mut to_wasm);
+                    self.call_event_handler(&Event::LocationUpdate(
+                        crate::event::LocationUpdateEvent {
+                            lon: tw.lon,
+                            lat: tw.lat,
+                            accuracy_m: tw.accuracy_m,
+                            altitude_m: tw.altitude_m,
+                            speed_mps: tw.speed_mps,
+                            heading_deg: tw.heading_deg,
+                            time: tw.time,
+                        },
+                    ));
+                }
+                live_id!(ToWasmLocationError) => {
+                    let tw = ToWasmLocationError::read_to_wasm(&mut to_wasm);
+                    let error = if tw.code == 1 {
+                        crate::event::LocationErrorEvent::PermissionDenied
+                    } else {
+                        crate::event::LocationErrorEvent::Unavailable(tw.message)
+                    };
+                    self.call_event_handler(&Event::LocationError(error));
                 }
                 /*
                 live_id!(ToWasmWebSocketClose) => {
@@ -443,8 +489,12 @@ impl Cx {
                                 enabled: false,
                                 matrix: 0.0,
                                 biplanar: false,
+                                full_range: false,
                                 rotation_steps: 0.0,
+                            external: false,
+                            array: false,
                             },
+                        rgba_gl_2d: false,
                         },
                     ));
                     self.redraw_all();
@@ -575,7 +625,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self) {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     let title = {
@@ -633,6 +683,9 @@ impl Cx {
                 CxOsOp::NormalizeWindow(_window_id) => {
                     self.os.from_wasm(FromWasmNormalScreen {});
                 }
+                CxOsOp::SetWindowTitle(_window_id, title) => {
+                    self.os.from_wasm(FromWasmSetDocumentTitle { title });
+                }
                 CxOsOp::SetWindowVisuals(_, _) => {}
                 CxOsOp::XrStartPresenting => {
                     self.os.from_wasm(FromWasmXrStartPresenting {});
@@ -661,6 +714,10 @@ impl Cx {
                 CxOsOp::UpdateSelectionHandles { .. } => {}
                 CxOsOp::HideSelectionHandles => {}
                 CxOsOp::AccessibilityUpdate(_) => {}
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on Web");
+                    self.call_event_handler(&Event::DragEnd);
+                }
                 CxOsOp::SetCursor(cursor) => {
                     self.os.from_wasm(FromWasmSetMouseCursor::new(cursor));
                 }
@@ -679,6 +736,12 @@ impl Cx {
                     self.os.from_wasm(FromWasmStopTimer {
                         timer_id: timer_id as f64,
                     });
+                }
+                CxOsOp::StartLocationUpdates => {
+                    self.os.from_wasm(FromWasmStartLocationUpdates {});
+                }
+                CxOsOp::StopLocationUpdates => {
+                    self.os.from_wasm(FromWasmStopLocationUpdates {});
                 }
                 CxOsOp::HttpRequest {
                     request_id,
@@ -706,10 +769,11 @@ impl Cx {
                     permission,
                     request_id,
                 } => match permission {
-                    Permission::AudioInput | Permission::Camera => {
+                    Permission::AudioInput | Permission::Camera | Permission::Location => {
                         let permission_str = match permission {
                             Permission::AudioInput => "microphone",
                             Permission::Camera => "camera",
+                            Permission::Location => "geolocation",
                             Permission::HeadsetCamera | Permission::SceneAccess => unreachable!(),
                         };
                         self.os.from_wasm(FromWasmCheckPermission {
@@ -729,10 +793,11 @@ impl Cx {
                     permission,
                     request_id,
                 } => match permission {
-                    Permission::AudioInput | Permission::Camera => {
+                    Permission::AudioInput | Permission::Camera | Permission::Location => {
                         let permission_str = match permission {
                             Permission::AudioInput => "microphone",
                             Permission::Camera => "camera",
+                            Permission::Location => "geolocation",
                             Permission::HeadsetCamera | Permission::SceneAccess => unreachable!(),
                         };
                         self.os.from_wasm(FromWasmRequestPermission {
@@ -850,6 +915,8 @@ impl Cx {
                 CxOsOp::SetVideoVolume(_, _) => {}
                 CxOsOp::SetVideoPlaybackRate(_, _) => {}
                 CxOsOp::PrepareAudioPlayback(_, _, _, _) => {}
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 } /*
@@ -913,6 +980,8 @@ impl CxOsApi for Cx {
             ToWasmHttpResponseProgress::to_js_code(),
             ToWasmHttpUploadProgress::to_js_code(),
             ToWasmPermissionResult::to_js_code(),
+            ToWasmLocationUpdate::to_js_code(),
+            ToWasmLocationError::to_js_code(),
             /*ToWasmWebSocketOpen::to_js_code(),
             ToWasmWebSocketClose::to_js_code(),
             ToWasmWebSocketError::to_js_code(),
@@ -944,6 +1013,8 @@ impl CxOsApi for Cx {
             FromWasmCancelHTTPRequest::to_js_code(),
             FromWasmCheckPermission::to_js_code(),
             FromWasmRequestPermission::to_js_code(),
+            FromWasmStartLocationUpdates::to_js_code(),
+            FromWasmStopLocationUpdates::to_js_code(),
             /*FromWasmWebSocketOpen::to_js_code(),
             FromWasmWebSocketSendString::to_js_code(),
             FromWasmWebSocketSendBinary::to_js_code(),*/

@@ -10,7 +10,7 @@ use makepad_live_id::*;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub enum ShaderBackend {
     #[default]
     Metal,
@@ -25,6 +25,34 @@ pub enum ShaderIoPrefix {
     Prefix(&'static str),
     Full(&'static str),
     FullOwned(String),
+}
+
+/// Why a shader IO declaration could not be lowered.
+///
+/// Previously eight bare `panic!()`s. A shader that trips one is usually not
+/// exotic — the commonest by far is reading a geometry attribute from the
+/// fragment stage, which every GPU forbids and which the message now says
+/// outright instead of aborting with no text at all.
+#[cold]
+fn unsupported_shader_io(backend: &ShaderBackend, mode: ShaderMode, io_type: ShaderIoType) -> ! {
+    if io_type == SHADER_IO_VERTEX_BUFFER && matches!(mode, ShaderMode::Fragment) {
+        panic!(
+            "shader: a geometry attribute (self.geom.*) was read in `pixel:`, but vertex \
+             attributes only exist in the vertex stage.\n\
+             Pass it through a varying instead:\n\
+             \n\
+             \x20   v_uv: varying(vec2f)\n\
+             \x20   vertex: fn() {{ self.v_uv = self.geom.geom_uv  ... }}\n\
+             \x20   pixel:  fn() {{ ... self.v_uv ... }}\n\
+             \n\
+             (backend {backend:?})"
+        )
+    }
+    panic!(
+        "shader backend {backend:?}: no lowering for io type {io_type:?} in {mode:?} stage.\n\
+         This is a gap in the shader compiler, not in the shader that hit it — a declaration the \
+         language accepts must lower on every backend, or fail with a message that names it."
+    )
 }
 
 impl ShaderBackend {
@@ -118,7 +146,7 @@ impl ShaderBackend {
                             ShaderIoPrefix::Prefix("_io.su->"),
                         ),
 
-                        _ => panic!(),
+                        _ => unsupported_shader_io(self, mode, io_type),
                     },
                     ShaderMode::Fragment => {
                         // Check for fragment output range first
@@ -205,10 +233,10 @@ impl ShaderBackend {
                                 ShaderIoKind::ScopeUniform,
                                 ShaderIoPrefix::Prefix("_io.su->"),
                             ),
-                            _ => panic!(),
+                            _ => unsupported_shader_io(self, mode, io_type),
                         }
                     }
-                    _ => panic!(),
+                    _ => unsupported_shader_io(self, mode, io_type),
                 }
             }
             Self::Hlsl => {
@@ -301,7 +329,7 @@ impl ShaderBackend {
                             SHADER_IO_SCOPE_UNIFORM => {
                                 (ShaderIoKind::ScopeUniform, ShaderIoPrefix::Prefix("su_"))
                             }
-                            _ => panic!(),
+                            _ => unsupported_shader_io(self, mode, io_type),
                         }
                     }
                     ShaderMode::Fragment => {
@@ -388,10 +416,10 @@ impl ShaderBackend {
                             SHADER_IO_SCOPE_UNIFORM => {
                                 (ShaderIoKind::ScopeUniform, ShaderIoPrefix::Prefix("su_"))
                             }
-                            _ => panic!(),
+                            _ => unsupported_shader_io(self, mode, io_type),
                         }
                     }
-                    _ => panic!(),
+                    _ => unsupported_shader_io(self, mode, io_type),
                 }
             }
             Self::Rust => {
@@ -484,7 +512,7 @@ impl ShaderBackend {
                         ShaderIoKind::ScopeUniform,
                         ShaderIoPrefix::Prefix("rcx.su_"),
                     ),
-                    _ => panic!(),
+                    _ => unsupported_shader_io(self, mode, io_type),
                 }
             }
             Self::Glsl | Self::Wgsl => {
@@ -573,7 +601,7 @@ impl ShaderBackend {
                     SHADER_IO_SCOPE_UNIFORM => {
                         (ShaderIoKind::ScopeUniform, ShaderIoPrefix::Prefix("su_"))
                     }
-                    _ => panic!(),
+                    _ => unsupported_shader_io(self, mode, io_type),
                 }
             }
         }
@@ -699,7 +727,11 @@ impl ShaderBackend {
                 } else if id == id!(self) {
                     "_self".to_string()
                 } else {
-                    format!("{}", id)
+                    // Prefix like Hlsl/Glsl above: a user-declared local emitted verbatim can
+                    // collide with a reserved word in the target language (e.g. `half`, `kernel`,
+                    // `constant`, `thread` in MSL; WGSL reserves even more), which fails shader
+                    // compilation at runtime.
+                    format!("l_{}", id)
                 }
             }
         }
@@ -1074,6 +1106,8 @@ impl ShaderBackend {
                 id_lut!(ddx);
                 id_lut!(ddy);
                 id_lut!(_mp_inverse);
+                id_lut!(_mp_unpack2f16);
+                id_lut!(_mp_unpack4u8);
                 id_lut!(rsqrt);
                 id_lut!(fmod);
                 id_lut!(frac);
@@ -1105,8 +1139,15 @@ impl ShaderBackend {
                 id_lut!(inverse);
                 id_lut!(inversesqrt);
                 id_lut!(mod);
+                // Packed-attribute unpack wrappers (emitted in the GLSL
+                // preamble). Without lut registration the ids print as
+                // hex hashes — invalid identifiers starting with digits.
+                id_lut!(_mp_unpack2f16);
+                id_lut!(_mp_unpack4u8);
             }
             Self::Wgsl => {
+                id_lut!(_mp_unpack2f16);
+                id_lut!(_mp_unpack4u8);
                 // Builtin function names
                 id_lut!(dpdx);
                 id_lut!(dpdy);
@@ -1128,6 +1169,8 @@ impl ShaderBackend {
                 id!(dFdx) => id!(dfdx),
                 id!(dFdy) => id!(dfdy),
                 id!(inverse) => id!(_mp_inverse),
+                id!(unpack2f16) => id!(_mp_unpack2f16),
+                id!(unpack4u8) => id!(_mp_unpack4u8),
                 id!(inverseSqrt) => id!(rsqrt),
                 id!(modf) => id!(fmod),
                 id!(discard) => id!(discard_fragment),
@@ -1140,6 +1183,8 @@ impl ShaderBackend {
                 id!(modf) => id!(fmod),
                 id!(fract) => id!(frac),
                 id!(mix) => id!(lerp),
+                id!(unpack2f16) => id!(_mp_unpack2f16),
+                id!(unpack4u8) => id!(_mp_unpack4u8),
                 x => x,
             },
             Self::Glsl => {
@@ -1148,6 +1193,8 @@ impl ShaderBackend {
                     id!(inverseSqrt) => id!(inversesqrt),
                     id!(modf) => id!(mod),
                     id!(atan2) => id!(atan),
+                    id!(unpack2f16) => id!(_mp_unpack2f16),
+                    id!(unpack4u8) => id!(_mp_unpack4u8),
                     x => x,
                 }
             }
@@ -1157,6 +1204,11 @@ impl ShaderBackend {
                     id!(dFdx) => id!(dpdx),
                     id!(dFdy) => id!(dpdy),
                     id!(inverseSqrt) => id!(inverseSqrt),
+                    // WGSL helpers to be emitted when the backend lands:
+                    // fn _mp_unpack2f16(x: f32) -> vec2<f32> {
+                    //     return unpack2x16float(bitcast<u32>(x)); }
+                    id!(unpack2f16) => id!(_mp_unpack2f16),
+                    id!(unpack4u8) => id!(_mp_unpack4u8),
                     x => x,
                 }
             }
@@ -1168,6 +1220,8 @@ impl ShaderBackend {
                     id!(dFdx) => id!(dFdx),               // no-op in CPU (returns 0)
                     id!(dFdy) => id!(dFdy),               // no-op in CPU (returns 0)
                     id!(discard) => id!(discard),         // no-op in CPU
+                    id!(unpack2f16) => id!(unpack2f16),   // shader_runtime impl
+                    id!(unpack4u8) => id!(unpack4u8),     // shader_runtime impl
                     x => x,
                 }
             }

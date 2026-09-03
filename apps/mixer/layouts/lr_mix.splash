@@ -1,0 +1,523 @@
+// LR MIX surface layout (splash).
+//
+// This file is DATA: it describes how the mixing surface looks — which
+// widgets each strip shows and how they are arranged. Anyone (or any
+// model) can write a different surface by editing/replacing this file and
+// starting the app with --layout=<name>; the Rust host rebinds by widget name.
+//
+// == The palette ==
+// A Splash body runs in its own isolate VM, which registers a FRESH stock
+// `mod.theme` and never sees the app's retint — so the host PREPENDS one line
+// binding `mp` to the desktop palette (src/theme.rs) before handing this file
+// to the Splash. A script error therefore reports this file's line + 1.
+// The keys, all `#rrggbb`:
+//
+//   mp.bg          strip fill                mp.accent   selection, gain
+//   mp.bg_dark     gutter and inset panels   mp.red      mute lit, meter hot
+//   mp.bg_light    idle control fill         mp.green    meter low
+//   mp.fg          readouts                  mp.yellow   EQ, meter mid
+//   mp.fg_bright   the value that matters    mp.cyan     dynamics, pan
+//   mp.fg_dim      labels, scales
+//   mp.muted       1px borders, tracks, ticks
+//
+// The look is Omarchy: flat fills, square corners, one 1px border per state,
+// no bevels and no gradients. Colours belong to the theme — a layout that
+// wants a new one asks for a palette key, not a literal.
+//
+// == The slot contract ==
+// The host looks for strip slots named strip_0 .. strip_15 and binds the
+// mixer's own strip list (derived from the console's stereo-link state) to
+// them in order, hiding unused slots. Inside a slot, ALL of these child
+// names are OPTIONAL — a layout may show any subset:
+//
+//   eq        SolidView whose shader reads instances:
+//               eq_on, b1..b6 = vec4(type, freq01, gain01, q01),
+//               sel_f = freq01 of the band the eq slider drives.
+//               Clicking it picks the nearest band.
+//   eq_lbl   / eq_sl     EQ gain of the selected band (every strip), the
+//                         slider that bends the curve above it
+//   gain_lbl / gain_sl   preamp gain readout + slider (input strips only;
+//                         the host hides the row on bus/main strips)
+//   dyn       SolidView with instances: comp_on, thr_db, ratio, gate_on,
+//               gate_thr_db, gr_db (live gain reduction, dB <= 0)
+//   pan_lbl / pan_sl     pan readout + slider
+//   fader_db  Label — the fader value in dB
+//   fader     Slider (min 0, max 1) — the wire float, four-segment taper
+//   meter     SolidView with instances: level_db, peak_db (-90..0)
+//   strip_lbl Label — "Ch 1" / "Bus 5" / "Main 1"
+//   mute      clickable SolidView with instance: muted; child text "MUTE"
+//   name_plate clickable SolidView with instances: plate_rgb (vec3),
+//               plate_filled; child name_lbl Label
+//   surface_note (top level) Label the host uses for status text
+//
+// Sliders carry the raw wire value 0..1; every dB conversion lives host-side.
+// SAFETY: a layout can only NAME these visual slots. It cannot express OSC
+// addresses — the host's closed whitelist (safety.rs) is the only place
+// wire addresses exist, and its deny-list gate sits at the socket either way.
+
+let ValueLabel = Label{
+    width: Fill
+    height: 13
+    flow: Right
+    align: Align{x: 0.5}
+    text: "—"
+    draw_text.color: mp.fg
+    draw_text.text_style: theme.font_code{font_size: 8.0}
+}
+
+let RowSlider = Slider{
+    width: Fill
+    height: 13
+    min: 0.0
+    max: 1.0
+    step: 0.0
+    text: ""
+    text_input: TextInput{width: 0, height: 0}
+    draw_bg +: {
+        track: uniform(mp.muted)
+        fill: uniform(mp.accent)
+        knob: uniform(mp.fg_bright)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let cy = self.rect_size.y * 0.5
+            let x0 = 4.0
+            let x1 = self.rect_size.x - 4.0
+            sdf.rect(x0, cy - 1.0, x1 - x0, 2.0)
+            sdf.fill(self.track)
+            let px = x0 + (x1 - x0) * self.slide_pos
+            sdf.rect(x0, cy - 1.0, max(px - x0, 1.0), 2.0)
+            sdf.fill(self.fill)
+            // A square tab, not a bead: the position is a value, and a flat
+            // edge is easier to read one against the next.
+            sdf.rect(px - 1.5, cy - 4.5, 3.0, 9.0)
+            sdf.fill(self.knob)
+            return sdf.result
+        }
+    }
+}
+
+let EqSlider = RowSlider{
+    draw_bg +: {
+        fill: uniform(mp.yellow)
+        detent: uniform(mp.fg_dim)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let cy = self.rect_size.y * 0.5
+            let x0 = 4.0
+            let x1 = self.rect_size.x - 4.0
+            sdf.rect(x0, cy - 1.0, x1 - x0, 2.0)
+            sdf.fill(self.track)
+            // fill grows out of the centre: this slider is a +/- 15 dB cut/boost
+            let mid = (x0 + x1) * 0.5
+            let px = x0 + (x1 - x0) * self.slide_pos
+            sdf.rect(min(px, mid), cy - 1.0, max(abs(px - mid), 1.0), 2.0)
+            sdf.fill(self.fill)
+            sdf.rect(mid - 0.5, cy - 3.5, 1.0, 7.0)
+            sdf.fill(self.detent)
+            sdf.rect(px - 1.5, cy - 4.5, 3.0, 9.0)
+            sdf.fill(self.knob)
+            return sdf.result
+        }
+    }
+}
+
+let PanSlider = RowSlider{
+    draw_bg +: {
+        fill: uniform(mp.cyan)
+    }
+}
+
+let EqCurve = SolidView{
+    width: Fill
+    height: 38
+    cursor: MouseCursor.Hand
+    draw_bg +: {
+        c_panel: uniform(mp.bg_dark)
+        c_zero: uniform(mp.muted)
+        c_ink: uniform(mp.yellow)
+        c_ink_off: uniform(mp.fg_dim)
+        c_sel: uniform(mp.accent)
+        c_dot: uniform(mp.fg_bright)
+        eq_on: instance(1.0)
+        b1: instance(vec4(2.0, 0.15, 0.5, 0.5))
+        b2: instance(vec4(2.0, 0.40, 0.5, 0.5))
+        b3: instance(vec4(2.0, 0.65, 0.5, 0.5))
+        b4: instance(vec4(2.0, 0.88, 0.5, 0.5))
+        b5: instance(vec4(2.0, 0.94, 0.5, 0.5))
+        b6: instance(vec4(2.0, 0.98, 0.5, 0.5))
+        sel_f: instance(0.40)
+        band_db: fn(b: vec4, x: float) -> float {
+            let gd = (b.z - 0.5) * 30.0
+            let sig = 0.035 + 0.24 * b.w
+            let d = x - b.y
+            let bell = gd * exp(-(d * d) / (2.0 * sig * sig))
+            let lsh = gd * (1.0 - smoothstep(b.y - 0.14, b.y + 0.14, x))
+            let hsh = gd * smoothstep(b.y - 0.14, b.y + 0.14, x)
+            let lcut = -90.0 * max(b.y - x, 0.0)
+            let hcut = -90.0 * max(x - b.y, 0.0)
+            if b.x < 0.5 { return lcut }
+            if b.x < 1.5 { return lsh }
+            if b.x < 3.5 { return bell }
+            if b.x < 4.5 { return hsh }
+            return hcut
+        }
+        pixel: fn() {
+            let x = self.pos.x
+            var db = self.band_db(self.b1, x) + self.band_db(self.b2, x)
+                + self.band_db(self.b3, x) + self.band_db(self.b4, x)
+                + self.band_db(self.b5, x) + self.band_db(self.b6, x)
+            db = clamp(db, -16.0, 16.0)
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            let y = h * 0.5 - db * (h / 36.0)
+            let py = self.pos.y * h
+            let curve = 1.0 - smoothstep(0.8, 1.9, abs(py - y))
+            let center = 1.0 - smoothstep(0.2, 0.9, abs(py - h * 0.5))
+            // A flat inset panel, a muted zero line, and the curve — dimmed to
+            // the quiet foreground while the console reports EQ off, so an
+            // unknown state never reads as a confident flat response.
+            let ink = self.c_ink_off.mix(self.c_ink, self.eq_on)
+            var col = self.c_panel.mix(self.c_zero, center).mix(ink, curve)
+            // The band the gain slider drives: a dim accent hairline plus a
+            // bright dot where it meets the curve.
+            let dx = abs(x - self.sel_f) * w
+            col = col.mix(self.c_sel, 0.4 * (1.0 - smoothstep(0.4, 1.3, dx)))
+            let hit = 1.0 - smoothstep(1.6, 2.9, length(vec2(dx, py - y)))
+            col = col.mix(self.c_dot, hit)
+            return col
+        }
+    }
+}
+
+let DynCurve = SolidView{
+    width: Fill
+    height: 32
+    draw_bg +: {
+        c_panel: uniform(mp.bg_dark)
+        c_ink: uniform(mp.cyan)
+        c_gate: uniform(mp.cyan)
+        c_gr: uniform(mp.red)
+        comp_on: instance(0.0)
+        thr_db: instance(0.0)
+        ratio: instance(1.0)
+        gate_on: instance(0.0)
+        gate_thr_db: instance(-80.0)
+        gr_db: instance(0.0)
+        pixel: fn() {
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            let in_db = -60.0 + 60.0 * self.pos.x
+            var out_db = in_db
+            if self.comp_on > 0.5 {
+                if in_db > self.thr_db {
+                    out_db = self.thr_db + (in_db - self.thr_db) / max(self.ratio, 1.0)
+                }
+            }
+            let y = h * (-out_db / 60.0)
+            let py = self.pos.y * h
+            let curve = 1.0 - smoothstep(0.8, 1.9, abs(py - y))
+            var col = self.c_panel.mix(self.c_ink, curve)
+            // gate region: a flat wash below the gate threshold
+            if self.gate_on > 0.5 {
+                let gx = (self.gate_thr_db + 60.0) / 60.0
+                if self.pos.x < gx && py > y {
+                    col = col.mix(self.c_gate, 0.22)
+                }
+            }
+            // live gain reduction: a bar dropping from the top right
+            let grn = clamp(-self.gr_db / 20.0, 0.0, 1.0)
+            if self.pos.x > 1.0 - 3.5 / w && self.pos.y < grn {
+                col = self.c_gr
+            }
+            return col
+        }
+    }
+}
+
+let MeterBar = SolidView{
+    width: Fill{weight: 14.0}
+    height: Fill
+    draw_bg +: {
+        gutter: uniform(mp.bg)
+        trough: uniform(mp.bg_dark)
+        low: uniform(mp.green)
+        mid: uniform(mp.yellow)
+        hot: uniform(mp.red)
+        tick: uniform(mp.fg_bright)
+        level_db: instance(-90.0)
+        peak_db: instance(-90.0)
+        pixel: fn() {
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            let norm = clamp((self.level_db + 60.0) / 60.0, 0.0, 1.0)
+            let peakn = clamp((self.peak_db + 60.0) / 60.0, 0.0, 1.0)
+            let frac = 1.0 - self.pos.y
+            // The ladder: green, into yellow from about -18 dB, into red over
+            // the last three. Unlit, the red zone stays visible as a dim cap.
+            let ladder = self.low.mix(self.mid, smoothstep(0.70, 0.88, frac))
+                .mix(self.hot, smoothstep(0.88, 0.97, frac))
+            // segment shading so the bar reads "LED-ish"
+            let seg = 0.88 + 0.12 * smoothstep(0.35, 0.5, abs(fract(frac * 30.0) - 0.5))
+            var col = self.trough.mix(self.hot, 0.16 * step(0.955, frac))
+            if frac < norm {
+                col = self.trough.mix(ladder, seg)
+            }
+            // peak-hold tick
+            if abs(frac - peakn) < 1.5 / h && peakn > 0.01 {
+                col = self.tick
+            }
+            let x = self.pos.x * w
+            if x < 1.0 || x > w - 1.0 {
+                col = self.gutter
+            }
+            return col
+        }
+    }
+}
+
+let FaderSlider = Slider{
+    axis: Vertical
+    width: Fill{weight: 46.0}
+    height: Fill
+    min: 0.0
+    max: 1.0
+    step: 0.0
+    text: ""
+    text_input: TextInput{width: 0, height: 0}
+    draw_bg +: {
+        body: uniform(mp.bg_dark)
+        slot: uniform(mp.muted)
+        tick: uniform(mp.muted)
+        cap: uniform(mp.fg_dim)
+        cap_edge: uniform(mp.accent)
+        cap_line: uniform(mp.fg_bright)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            let h = self.rect_size.y
+            let w = self.rect_size.x
+            sdf.rect(0.0, 0.0, w, h)
+            sdf.fill(self.body)
+            // tick marks every 1/8 of travel (the taper puts the printed
+            // dB scale exactly on these lines)
+            let rel = self.pos.y
+            let grid = abs(fract(rel * 8.0 + 0.5) - 0.5) * (h / 8.0)
+            let mark = 1.0 - smoothstep(0.4, 0.9, grid)
+            let px = self.pos.x * w
+            if px < 6.0 {
+                sdf.rect(0.0, rel * h - 0.5, 5.0, 1.0)
+                sdf.fill(self.tick * mark)
+            }
+            // centre slot
+            sdf.rect(w * 0.5 - 1.0, 3.0, 2.0, h - 6.0)
+            sdf.fill(self.slot)
+            // handle: a flat square cap, edged in the accent, with the
+            // pointer line across it
+            let cap_h = 22.0
+            let cy = (1.0 - self.slide_pos) * (h - cap_h)
+            sdf.rect(3.5, cy + 0.5, w - 7.0, cap_h - 1.0)
+            sdf.fill_keep(self.cap)
+            sdf.stroke(self.cap_edge, 1.0)
+            sdf.rect(3.0, cy + cap_h * 0.5 - 1.0, w - 6.0, 2.0)
+            sdf.fill(self.cap_line)
+            return sdf.result
+        }
+    }
+}
+
+let ScaleMark = Label{
+    width: Fill
+    height: Fill
+    flow: Right
+    align: Align{x: 1.0}
+    draw_text.color: mp.fg_dim
+    draw_text.text_style: theme.font_code{font_size: 7.0}
+    text: ""
+}
+
+let ScaleCol = View{
+    width: Fill{weight: 26.0}
+    height: Fill
+    flow: Down
+    ScaleMark{text: "10"}
+    ScaleMark{text: "5"}
+    ScaleMark{text: "0" draw_text.color: mp.fg}
+    ScaleMark{text: "-5"}
+    ScaleMark{text: "-10"}
+    ScaleMark{text: "-20"}
+    ScaleMark{text: "-30"}
+    ScaleMark{text: "-50"}
+}
+
+let MutePlate = SolidView{
+    width: Fill
+    height: 21
+    cursor: MouseCursor.Hand
+    new_batch: true
+    align: Align{x: 0.5, y: 0.5}
+    draw_bg +: {
+        idle: uniform(mp.bg_light)
+        idle_edge: uniform(mp.muted)
+        lit: uniform(mp.red)
+        deep: uniform(mp.bg_dark)
+        muted: instance(0.0)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.5, 0.5, self.rect_size.x - 1.0, self.rect_size.y - 1.0)
+            // Lit is red laid over the deepest background: a red plate that
+            // still carries its own word, edged in the full-strength hue.
+            let fill = self.idle.mix(self.lit.mix(self.deep, 0.5), self.muted)
+            // fill_keep, not fill: `fill` clears the shape, so a stroke after
+            // it draws nothing at all.
+            sdf.fill_keep(fill)
+            sdf.stroke(self.idle_edge.mix(self.lit, self.muted), 1.0)
+            return sdf.result
+        }
+    }
+    Label{
+        text: "MUTE"
+        draw_text.color: mp.fg_bright
+        draw_text.text_style: theme.font_code{font_size: 7.0}
+    }
+}
+
+let NamePlate = SolidView{
+    width: Fill
+    height: 23
+    cursor: MouseCursor.Hand
+    new_batch: true
+    align: Align{x: 0.5, y: 0.5}
+    draw_bg +: {
+        idle: uniform(mp.bg_light)
+        // The console's scribble colour, until it reports one. The default is
+        // the muted key — nothing on this surface is a neutral grey.
+        plate_rgb: instance(vec3(0.254, 0.282, 0.408))
+        plate_filled: instance(0.0)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.5, 0.5, self.rect_size.x - 1.0, self.rect_size.y - 1.0)
+            sdf.fill_keep(self.idle.mix(vec4(self.plate_rgb, 1.0), self.plate_filled))
+            sdf.stroke(vec4(self.plate_rgb, 1.0), 1.0)
+            return sdf.result
+        }
+    }
+    name_lbl := Label{
+        flow: Right
+        text: "—"
+        draw_text.color: mp.fg
+        draw_text.text_style: theme.font_code{font_size: 7.5}
+    }
+}
+
+let Strip = View{
+    width: Fill
+    height: Fill
+    flow: Down
+    spacing: 2
+    padding: Inset{top: 3, bottom: 3, left: 2, right: 2}
+    show_bg: true
+    new_batch: true
+    draw_bg +: {
+        fill: uniform(mp.bg)
+        edge: uniform(mp.muted)
+        pixel: fn() {
+            let sdf = Sdf2d.viewport(self.pos * self.rect_size)
+            sdf.rect(0.0, 0.0, self.rect_size.x, self.rect_size.y)
+            sdf.fill(self.fill)
+            sdf.rect(self.rect_size.x - 1.0, 0.0, 1.0, self.rect_size.y)
+            sdf.fill(self.edge)
+            return sdf.result
+        }
+    }
+
+    eq := EqCurve{}
+    eq_row := View{
+        width: Fill height: 41 flow: Down
+        eq_lbl := ValueLabel{}
+        eq_sl := EqSlider{}
+    }
+    gain_slot := View{
+        width: Fill height: 41 flow: Down
+        gain_row := View{
+            width: Fill height: 41 flow: Down
+            gain_lbl := ValueLabel{}
+            gain_sl := RowSlider{}
+        }
+    }
+    dyn := DynCurve{}
+    pan_row := View{
+        width: Fill height: 41 flow: Down
+        pan_lbl := ValueLabel{}
+        pan_sl := PanSlider{}
+    }
+    fader_db := Label{
+        width: Fill
+        height: 15
+        flow: Right
+        align: Align{x: 0.5}
+        text: "—"
+        draw_text.color: mp.fg_bright
+        draw_text.text_style: theme.font_code{font_size: 9.0}
+    }
+    fader_block := View{
+        width: Fill
+        height: Fill
+        flow: Right
+        spacing: 2
+        align: Align{x: 0.5}
+        scale := ScaleCol{}
+        fader := FaderSlider{}
+        meter := MeterBar{}
+    }
+    strip_lbl := Label{
+        width: Fill
+        height: 12
+        flow: Right
+        align: Align{x: 0.5}
+        text: ""
+        draw_text.color: mp.fg_dim
+        draw_text.text_style: theme.font_code{font_size: 7.5}
+    }
+    mute := MutePlate{}
+    name_plate := NamePlate{}
+}
+
+View{
+    width: Fill
+    height: Fill
+    flow: Down
+    show_bg: true
+    new_batch: true
+    draw_bg.color: mp.bg_dark
+
+    surface_note := Label{
+        visible: false
+        width: Fill
+        height: Fit
+        align: Align{x: 0.5}
+        text: ""
+        draw_text.color: mp.fg_dim
+        draw_text.text_style: theme.font_code{font_size: 8.0}
+    }
+    strip_row := View{
+        width: Fill
+        height: Fill
+        flow: Right
+        spacing: 0
+        strip_0 := Strip{}
+        strip_1 := Strip{}
+        strip_2 := Strip{}
+        strip_3 := Strip{}
+        strip_4 := Strip{}
+        strip_5 := Strip{}
+        strip_6 := Strip{}
+        strip_7 := Strip{}
+        strip_8 := Strip{}
+        strip_9 := Strip{}
+        strip_10 := Strip{}
+        strip_11 := Strip{}
+        strip_12 := Strip{}
+        strip_13 := Strip{}
+        strip_14 := Strip{}
+        strip_15 := Strip{}
+    }
+}

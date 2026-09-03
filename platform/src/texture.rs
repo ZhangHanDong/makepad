@@ -6,6 +6,17 @@ use {
     std::rc::Rc,
 };
 
+/// Upload decoded images as mipmapped textures (`VecMipBGRAu8_32`) so minifying them on low-DPI
+/// screens uses a mip chain instead of aliasing into a blocky look. Only helps when the source
+/// has detail over the display size. Default on for OpenGL only; override with `MAKEPAD_IMAGE_MIPMAPS`.
+pub fn image_cache_use_mipmaps() -> bool {
+    if let Ok(v) = std::env::var("MAKEPAD_IMAGE_MIPMAPS") {
+        return matches!(v.trim(), "1" | "true" | "on" | "yes");
+    }
+    // The platform crate can see the `use_vulkan` cfg the draw crate cannot, so the gate lives here.
+    cfg!(all(target_os = "linux", not(use_vulkan)))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Texture(Rc<PoolId>);
 
@@ -111,6 +122,15 @@ impl TextureSize {
     }
 }
 
+/// Wrap mode stored on vec textures. Metal/Vulkan/D3D take address from the
+/// shader sampler; OpenGL (and other per-texture wrap backends) read this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextureWrap {
+    #[default]
+    ClampToEdge,
+    Repeat,
+}
+
 #[derive(Clone)]
 pub enum TextureFormat {
     Unknown,
@@ -132,6 +152,7 @@ pub enum TextureFormat {
         height: usize,
         data: Option<Vec<u32>>,
         max_level: Option<usize>,
+        wrap: TextureWrap,
         updated: TextureUpdated,
     },
     VecMipRGBAf32 {
@@ -187,6 +208,15 @@ pub enum TextureFormat {
         size: TextureSize,
         initial: bool,
     },
+    /// Single-channel float render target (R32F). Added for GPU baking
+    /// passes that need real float precision (depth scratch maps) — sampled
+    /// with `sample_nearest` (32-bit float filtering is not universal).
+    /// Draw shaders rendering into it must declare `color_format: @Rf32`
+    /// so their pipeline state matches the attachment format.
+    RenderRf32 {
+        size: TextureSize,
+        initial: bool,
+    },
 
     SharedBGRAu8 {
         width: usize,
@@ -202,6 +232,9 @@ pub enum TextureFormat {
     /// normal texture upload path (e.g. Android SurfaceTexture/OES, or
     /// platform-native composited video output).
     VideoExternal,
+    /// Linux GStreamer `GLMemory` RGBA texture (`TEXTURE_2D`) shared into
+    /// Makepad's GL context via a sibling EGL share group. Not OES.
+    VideoGlMemoryRgba,
     /// Android/Vulkan camera texture backed by an imported RGBA
     /// `AHardwareBuffer`.
     VideoRgbaHardwareBuffer,
@@ -255,12 +288,16 @@ impl std::fmt::Debug for TextureFormat {
             TextureFormat::RenderRGBAf32 { size, .. } => {
                 write!(f, "TextureFormat::RenderRGBAf32(size:{:?})", size)
             }
+            TextureFormat::RenderRf32 { size, .. } => {
+                write!(f, "TextureFormat::RenderRf32(size:{:?})", size)
+            }
             TextureFormat::SharedBGRAu8 { width, height, .. } => write!(
                 f,
                 "TextureFormat::SharedBGRAu8(width:{width},height:{height})"
             ),
             TextureFormat::VideoYuvPlane => write!(f, "TextureFormat::VideoYuvPlane"),
             TextureFormat::VideoExternal => write!(f, "TextureFormat::VideoExternal"),
+            TextureFormat::VideoGlMemoryRgba => write!(f, "TextureFormat::VideoGlMemoryRgba"),
             TextureFormat::VideoRgbaHardwareBuffer => {
                 write!(f, "TextureFormat::VideoRgbaHardwareBuffer")
             }
@@ -372,6 +409,15 @@ impl PartialEq for TextureCategory {
     }
 }
 
+/// What of a Vec texture's CPU image still has to reach the GPU.
+///
+/// `Partial` describes the change RELATIVE TO WHAT THE GPU ALREADY HOLDS: a
+/// backend that updates its GPU storage in place may upload just that rect,
+/// but one that (re)allocates the storage — first sight, a size change (the
+/// slug glyph atlas grows by appending rows and marks only those dirty) —
+/// has nothing to keep and must upload the whole image regardless of the
+/// rect. Every backend honors that (GL `glTexImage2D`, D3D11's realloc path,
+/// the headless mirror rebuild, Metal's `vec_fresh`).
 #[derive(Clone, Copy, Debug)]
 pub enum TextureUpdated {
     Empty,
@@ -420,6 +466,8 @@ pub(crate) enum TexturePixel {
     VideoYuvPlane,
     /// Opaque external video pixel type (e.g. Android OES, composited RGBA).
     VideoExternal,
+    /// Linux GStreamer GLMemory RGBA (`TEXTURE_2D`).
+    VideoGlMemoryRgba,
     /// Android/Vulkan imported RGBA hardware buffer.
     VideoRgbaHardwareBuffer,
 }
@@ -448,6 +496,7 @@ impl CxTexture {
             TextureFormat::RenderCubeBGRAu8 { initial, .. } => initial,
             TextureFormat::RenderRGBAf16 { initial, .. } => initial,
             TextureFormat::RenderRGBAf32 { initial, .. } => initial,
+            TextureFormat::RenderRf32 { initial, .. } => initial,
             TextureFormat::SharedBGRAu8 { initial, .. } => initial,
             _ => panic!(),
         }
@@ -475,6 +524,7 @@ impl CxTexture {
             TextureFormat::RenderCubeBGRAu8 { initial, .. } => initial,
             TextureFormat::RenderRGBAf16 { initial, .. } => initial,
             TextureFormat::RenderRGBAf32 { initial, .. } => initial,
+            TextureFormat::RenderRf32 { initial, .. } => initial,
             TextureFormat::SharedBGRAu8 { initial, .. } => initial,
             _ => panic!(),
         } = initial;
@@ -540,6 +590,23 @@ impl CxTexture {
     #[allow(unused)]
     pub(crate) fn alloc_video(&mut self) -> bool {
         if let Some(alloc) = self.format.as_video_alloc() {
+            // Video textures are sized/filled by the present path (DMA-Buf / MediaCodec).
+            // Once the pixel type matches, do not treat width/height updates as a re-alloc —
+            // that would re-init the GL texture every frame and detach EGLImages (NVIDIA
+            // black screen / corner garbage).
+            if let Some(existing) = self.alloc.as_ref() {
+                if existing.pixel == alloc.pixel
+                    && matches!(
+                        existing.pixel,
+                        TexturePixel::VideoExternal
+                            | TexturePixel::VideoYuvPlane
+                            | TexturePixel::VideoGlMemoryRgba
+                            | TexturePixel::VideoRgbaHardwareBuffer
+                    )
+                {
+                    return false;
+                }
+            }
             if self.alloc.is_none() || self.alloc.as_ref().unwrap() != &alloc {
                 self.alloc = Some(alloc);
                 return true;
@@ -576,6 +643,7 @@ impl TextureFormat {
             Self::RenderCubeBGRAu8 { .. } => true,
             Self::RenderRGBAf16 { .. } => true,
             Self::RenderRGBAf32 { .. } => true,
+            Self::RenderRf32 { .. } => true,
             _ => false,
         }
     }
@@ -590,7 +658,10 @@ impl TextureFormat {
     pub fn is_video(&self) -> bool {
         matches!(
             self,
-            Self::VideoYuvPlane | Self::VideoExternal | Self::VideoRgbaHardwareBuffer
+            Self::VideoYuvPlane
+                | Self::VideoExternal
+                | Self::VideoGlMemoryRgba
+                | Self::VideoRgbaHardwareBuffer
         )
     }
 
@@ -600,6 +671,15 @@ impl TextureFormat {
 
     pub fn is_video_rgba_hardware_buffer(&self) -> bool {
         matches!(self, Self::VideoRgbaHardwareBuffer)
+    }
+
+    /// Per-texture wrap. Defaults to clamp; world/albedo mip textures set Repeat
+    /// so OpenGL matches the shader's `sample_*_repeat` sampler.
+    pub fn wrap(&self) -> TextureWrap {
+        match self {
+            Self::VecMipBGRAu8_32 { wrap, .. } => *wrap,
+            _ => TextureWrap::ClampToEdge,
+        }
     }
 
     pub fn vec_width_height(&self) -> Option<(usize, usize)> {
@@ -612,6 +692,19 @@ impl TextureFormat {
             Self::VecRu8 { width, height, .. } => Some((*width, *height)),
             Self::VecRGu8 { width, height, .. } => Some((*width, *height)),
             Self::VecRf32 { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        }
+    }
+
+    /// Fixed dimensions of a render-target texture, when declared. Auto
+    /// targets take their pass's size at draw time and report None here —
+    /// a consumer that needs dims for layout (e.g. Image) can only size a
+    /// Fixed target.
+    pub fn render_fixed_width_height(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::RenderBGRAu8 { size: TextureSize::Fixed { width, height }, .. } => {
+                Some((*width, *height))
+            }
             _ => None,
         }
     }
@@ -709,6 +802,15 @@ impl TextureFormat {
                     category: TextureCategory::Render,
                 })
             }
+            Self::RenderRf32 { size, .. } => {
+                let (width, height) = size.width_height(width, height);
+                Some(TextureAlloc {
+                    width,
+                    height,
+                    pixel: TexturePixel::Rf32,
+                    category: TextureCategory::Render,
+                })
+            }
             _ => None,
         }
     }
@@ -742,6 +844,12 @@ impl TextureFormat {
                 width: 0,
                 height: 0,
                 pixel: TexturePixel::VideoExternal,
+                category: TextureCategory::Video,
+            }),
+            Self::VideoGlMemoryRgba => Some(TextureAlloc {
+                width: 0,
+                height: 0,
+                pixel: TexturePixel::VideoGlMemoryRgba,
                 category: TextureCategory::Video,
             }),
             Self::VideoRgbaHardwareBuffer => Some(TextureAlloc {
@@ -926,4 +1034,41 @@ pub struct CxTexture {
     pub(crate) animation: Option<TextureAnimation>,
     pub os: CxOsTexture,
     pub previous_platform_resource: Option<CxOsTexture>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TextureFormat, TextureUpdated, TextureWrap};
+
+    #[test]
+    fn mip_format_reports_wrap() {
+        let clamp = TextureFormat::VecMipBGRAu8_32 {
+            width: 4,
+            height: 4,
+            data: None,
+            max_level: Some(2),
+            wrap: TextureWrap::ClampToEdge,
+            updated: TextureUpdated::Full,
+        };
+        let repeat = TextureFormat::VecMipBGRAu8_32 {
+            width: 4,
+            height: 4,
+            data: None,
+            max_level: Some(2),
+            wrap: TextureWrap::Repeat,
+            updated: TextureUpdated::Full,
+        };
+        assert_eq!(clamp.wrap(), TextureWrap::ClampToEdge);
+        assert_eq!(repeat.wrap(), TextureWrap::Repeat);
+        assert_eq!(
+            TextureFormat::VecBGRAu8_32 {
+                width: 1,
+                height: 1,
+                data: None,
+                updated: TextureUpdated::Full,
+            }
+            .wrap(),
+            TextureWrap::ClampToEdge
+        );
+    }
 }

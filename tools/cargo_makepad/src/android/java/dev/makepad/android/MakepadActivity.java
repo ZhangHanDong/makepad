@@ -21,6 +21,9 @@ import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.input.InputManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.media.MediaCodec;
@@ -30,6 +33,7 @@ import android.media.MediaFormat;
 import android.media.midi.MidiDevice;
 import android.media.midi.MidiDeviceInfo;
 import android.media.midi.MidiManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -78,6 +82,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -1054,6 +1059,11 @@ public class MakepadActivity
     // setSystemBarAppearance(). true = dark icons (for light app backgrounds).
     private boolean mSystemBarDarkIcons = false;
 
+    // File/folder dialogs (Storage Access Framework). Request codes we handed
+    // out and are still waiting on; anything else arriving in onActivityResult
+    // belongs to somebody else and must be left alone.
+    private final HashSet<Integer> mFileDialogRequests = new HashSet<>();
+
     // clipboard actions (ActionMode for copy/paste/cut)
     private ActionMode mActionMode;
     private boolean mHasSelection = false;
@@ -1504,6 +1514,10 @@ public class MakepadActivity
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (mFileDialogRequests.remove(requestCode)) {
+            handleFileDialogResult(requestCode, resultCode, data);
+            return;
+        }
         //% MAIN_ACTIVITY_ON_ACTIVITY_RESULT
     }
 
@@ -1562,6 +1576,108 @@ public class MakepadActivity
         } else {
             // Permissions are granted at install time on older Android versions
             MakepadNative.onPermissionResult(permission, requestId, 1); // 1 = Granted
+        }
+    }
+
+    // Storage Access Framework picker. Called from Rust on the render thread,
+    // from inside the platform-op drain that holds the Cx borrow, so the Intent
+    // is built and started on the looper: Activity methods are main-thread only,
+    // and startActivityForResult must not run under that borrow.
+    //
+    // kind: 0 = ACTION_OPEN_DOCUMENT, 1 = ACTION_CREATE_DOCUMENT,
+    //       2 = ACTION_OPEN_DOCUMENT_TREE.
+    public void openFileDialog(
+        final int requestCode,
+        final int kind,
+        final String mimeType,
+        final String[] mimeTypes,
+        final boolean allowMultiple,
+        final String fileName
+    ) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Intent intent;
+                    if (kind == 2) {
+                        intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                    } else if (kind == 1) {
+                        intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType(mimeType);
+                        if (fileName != null && !fileName.isEmpty()) {
+                            intent.putExtra(Intent.EXTRA_TITLE, fileName);
+                        }
+                    } else {
+                        intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType(mimeType);
+                        if (allowMultiple) {
+                            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                        }
+                    }
+                    if (kind != 2 && mimeTypes != null && mimeTypes.length > 0) {
+                        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+                    }
+                    // Ask for a grant that outlives this process, so a URI handed
+                    // to Rust is still openable after the app is killed and
+                    // relaunched (see takePersistableUriPermission below).
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                    if (kind != 0) {
+                        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    }
+                    mFileDialogRequests.add(requestCode);
+                    startActivityForResult(intent, requestCode);
+                } catch (Throwable e) {
+                    // No document provider on the device, or the activity is
+                    // gone. Cancelling is the honest answer: the user gets no
+                    // picker, and Rust must not be left waiting forever.
+                    Log.e(LOG_TAG, "openFileDialog failed", e);
+                    mFileDialogRequests.remove(requestCode);
+                    MakepadNative.onFileDialogResult(requestCode, new String[0]);
+                }
+            }
+        });
+    }
+
+    // An empty URI array means cancelled, which is a normal outcome.
+    private void handleFileDialogResult(int requestCode, int resultCode, Intent data) {
+        ArrayList<String> uris = new ArrayList<>();
+        if (resultCode == RESULT_OK && data != null) {
+            ClipData clip = data.getClipData();
+            if (clip != null) {
+                // Multi-select answers through ClipData; single-select through
+                // getData(). A picker set to allow multiple still uses getData()
+                // when the user picked exactly one.
+                for (int i = 0; i < clip.getItemCount(); i++) {
+                    Uri uri = clip.getItemAt(i).getUri();
+                    if (uri != null) {
+                        takePersistableUriPermission(uri, data.getFlags());
+                        uris.add(uri.toString());
+                    }
+                }
+            } else if (data.getData() != null) {
+                Uri uri = data.getData();
+                takePersistableUriPermission(uri, data.getFlags());
+                uris.add(uri.toString());
+            }
+        }
+        MakepadNative.onFileDialogResult(requestCode, uris.toArray(new String[0]));
+    }
+
+    private void takePersistableUriPermission(Uri uri, int intentFlags) {
+        int grant = intentFlags
+            & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (grant == 0) {
+            return;
+        }
+        try {
+            getContentResolver().takePersistableUriPermission(uri, grant);
+        } catch (Throwable e) {
+            // Not every provider offers a persistable grant. The URI is still
+            // usable for this run, which is all most callers need.
+            Log.w(LOG_TAG, "takePersistableUriPermission failed: " + e);
         }
     }
 
@@ -2603,6 +2719,91 @@ public class MakepadActivity
         }
     }
 
+    // location (Cx::start_location_updates)
+    private LocationManager mLocationManager;
+    private LocationListener mLocationListener;
+
+    private void sendLocationUpdate(Location loc) {
+        MakepadNative.onLocationUpdate(
+            loc.getLongitude(), loc.getLatitude(), loc.getAccuracy(),
+            loc.hasAltitude(), loc.getAltitude(),
+            loc.hasSpeed(), loc.getSpeed(),
+            loc.hasBearing(), loc.getBearing(),
+            loc.getTime());
+    }
+
+    public void startLocationUpdates(final long minIntervalMs, final float minDistanceM) {
+        runOnUiThread(() -> {
+            if (mLocationListener != null) {
+                return; // already running
+            }
+            try {
+                mLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+                if (mLocationManager == null) {
+                    MakepadNative.onLocationError(2, "no location service");
+                    return;
+                }
+                LocationListener listener = new LocationListener() {
+                    @Override
+                    public void onLocationChanged(Location loc) {
+                        sendLocationUpdate(loc);
+                    }
+                    @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+                    @Override public void onProviderEnabled(String provider) {}
+                    @Override public void onProviderDisabled(String provider) {}
+                };
+                boolean any = false;
+                if (mLocationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    mLocationManager.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER, minIntervalMs, minDistanceM,
+                        listener, Looper.getMainLooper());
+                    any = true;
+                }
+                if (mLocationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    mLocationManager.requestLocationUpdates(
+                        LocationManager.NETWORK_PROVIDER, minIntervalMs, minDistanceM,
+                        listener, Looper.getMainLooper());
+                    any = true;
+                }
+                if (!any) {
+                    MakepadNative.onLocationError(2, "location providers disabled");
+                    return;
+                }
+                mLocationListener = listener;
+                // seed with the last known fix so the app has a position immediately
+                Location last = mLocationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                if (last == null) {
+                    last = mLocationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                }
+                if (last != null) {
+                    sendLocationUpdate(last);
+                }
+            }
+            catch (SecurityException e) {
+                mLocationListener = null;
+                MakepadNative.onLocationError(1, "location permission missing");
+            }
+            catch (Exception e) {
+                mLocationListener = null;
+                MakepadNative.onLocationError(2, e.toString());
+            }
+        });
+    }
+
+    public void stopLocationUpdates() {
+        runOnUiThread(() -> {
+            try {
+                if (mLocationManager != null && mLocationListener != null) {
+                    mLocationManager.removeUpdates(mLocationListener);
+                }
+            }
+            catch (Exception e) {
+                Log.e("Makepad", "stopLocationUpdates: " + e.toString());
+            }
+            mLocationListener = null;
+        });
+    }
+
     public void attachCameraNativePreview(final long videoId, final int left, final int top, final int right, final int bottom) {
         runOnUiThread(new Runnable() {
             @Override
@@ -3002,6 +3203,13 @@ public class MakepadActivity
         VideoPlayerRunnable runnable = mVideoPlayerRunnables.get(videoId);
         if(runnable != null) {
             runnable.unmute();
+        }
+    }
+
+    public void setVideoPlaybackRate(long videoId, double rate) {
+        VideoPlayerRunnable runnable = mVideoPlayerRunnables.get(videoId);
+        if(runnable != null) {
+            runnable.setPlaybackRate(rate);
         }
     }
 

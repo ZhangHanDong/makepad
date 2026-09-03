@@ -8,7 +8,7 @@ use {
     rustybuzz,
     rustybuzz::UnicodeBuffer,
     std::{
-        collections::VecDeque,
+        collections::BTreeMap,
         hash::{Hash, Hasher},
         mem,
         rc::Rc,
@@ -94,8 +94,17 @@ pub struct Shaper {
     cached_features_source: Vec<(u32, u32)>,
     cached_rb_features: Vec<rustybuzz::Feature>,
     cache_size: usize,
-    cached_params: VecDeque<ShapeParams>,
-    cached_results: FxHashMap<ShapeParams, Rc<ShapedText>>,
+    cache_tick: u64,
+    cached_results: FxHashMap<ShapeParams, CachedShape>,
+    cache_lru_order: BTreeMap<u64, ShapeParams>,
+}
+
+/// A shaping cache entry, tracked with its position in the least-recently-used
+/// order (the tick under which it is registered in `Shaper::cache_lru_order`).
+#[derive(Debug)]
+struct CachedShape {
+    result: Rc<ShapedText>,
+    last_used: u64,
 }
 
 impl Shaper {
@@ -106,11 +115,12 @@ impl Shaper {
             cached_features_source: Vec::new(),
             cached_rb_features: Vec::new(),
             cache_size: settings.cache_size,
-            cached_params: VecDeque::with_capacity(settings.cache_size),
+            cache_tick: 0,
             cached_results: FxHashMap::with_capacity_and_hasher(
                 settings.cache_size,
                 Default::default(),
             ),
+            cache_lru_order: BTreeMap::new(),
         }
     }
 
@@ -118,17 +128,33 @@ impl Shaper {
         if self.cache_size == 0 {
             return Rc::new(self.shape(params));
         }
-        if let Some(result) = self.cached_results.get(&params) {
-            return result.clone();
+        if let Some(entry) = self.cached_results.get_mut(&params) {
+            // Refresh recency so the hot working set of words survives
+            // eviction while scrolling through varied text.
+            if let Some(key) = self.cache_lru_order.remove(&entry.last_used) {
+                self.cache_tick += 1;
+                entry.last_used = self.cache_tick;
+                self.cache_lru_order.insert(entry.last_used, key);
+            }
+            return entry.result.clone();
         }
-        if self.cached_params.len() == self.cache_size {
-            let params = self.cached_params.pop_front().unwrap();
-            self.cached_results.remove(&params);
+        while self.cached_results.len() >= self.cache_size {
+            let Some((_, key)) = self.cache_lru_order.pop_first() else {
+                break;
+            };
+            self.cached_results.remove(&key);
         }
         let cache_key = params.clone();
         let result = Rc::new(self.shape(params));
-        self.cached_params.push_back(cache_key.clone());
-        self.cached_results.insert(cache_key, result.clone());
+        self.cache_tick += 1;
+        self.cache_lru_order.insert(self.cache_tick, cache_key.clone());
+        self.cached_results.insert(
+            cache_key,
+            CachedShape {
+                result: result.clone(),
+                last_used: self.cache_tick,
+            },
+        );
         result
     }
 
@@ -227,6 +253,27 @@ impl Shaper {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Logs one warning per unique codepoint that no loaded font can render,
+    /// so ".notdef" boxes in the UI are explained in the log instead of being
+    /// silently drawn (a missing arrow/symbol glyph is otherwise very hard to
+    /// distinguish from a layout bug).
+    fn warn_missing_glyph_once(text: &str, cluster: usize) {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+        static WARNED: Mutex<Option<HashSet<char>>> = Mutex::new(None);
+        let Some(ch) = text.get(cluster..).and_then(|s| s.chars().next()) else {
+            return;
+        };
+        let mut warned = WARNED.lock().unwrap();
+        if warned.get_or_insert_with(HashSet::new).insert(ch) {
+            crate::makepad_platform::log!(
+                "no loaded font has a glyph for '{}' (U+{:04X}); rendering .notdef",
+                ch,
+                ch as u32
+            );
+        }
+    }
+
     fn shape_recursive(
         &mut self,
         text: &str,
@@ -318,6 +365,11 @@ impl Shaper {
                 }
             } else {
                 let glyph_group = glyph_groups[i];
+                if remaining_fonts.is_empty() {
+                    for glyph in glyph_group.iter().filter(|glyph| glyph.id == 0) {
+                        Self::warn_missing_glyph_once(text, glyph.cluster);
+                    }
+                }
                 // If we've exhausted all fallback fonts and still have
                 // unmapped glyphs (id == 0), use the primary font's .notdef
                 // so a visible placeholder is rendered instead of nothing.

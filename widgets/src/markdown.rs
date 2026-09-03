@@ -1292,8 +1292,7 @@ impl Markdown {
                         self.in_code_block = true;
                         self.code_block_string.clear();
                     } else {
-                        const FIXED_FONT_SIZE_SCALE: f64 = 0.85;
-                        tf.push_size_rel_scale(FIXED_FONT_SIZE_SCALE);
+                        tf.push_size_rel_scale(tf.fixed_font_size_scale);
                         tf.combine_spaces.push(false);
                         tf.fixed.push();
                         tf.begin_code(cx);
@@ -1369,8 +1368,7 @@ impl Markdown {
                             link_href: self.table_cell_link.clone(),
                         });
                     } else {
-                        const FIXED_FONT_SIZE_SCALE: f64 = 0.85;
-                        tf.push_size_rel_scale(FIXED_FONT_SIZE_SCALE);
+                        tf.push_size_rel_scale(tf.fixed_font_size_scale);
                         tf.fixed.push();
                         tf.inline_code.push();
                         tf.draw_text(cx, &text);
@@ -1412,8 +1410,7 @@ impl Markdown {
                         });
                     } else {
                         // Fallback: render as inline code style
-                        const FIXED_FONT_SIZE_SCALE: f64 = 0.85;
-                        tf.push_size_rel_scale(FIXED_FONT_SIZE_SCALE);
+                        tf.push_size_rel_scale(tf.fixed_font_size_scale);
                         tf.fixed.push();
                         tf.inline_code.push();
                         tf.draw_text(cx, &text);

@@ -15,6 +15,7 @@ use crate::{
     web_socket::WebSocketMessage,
     window::CxWindowPool,
 };
+use crate::makepad_objc_sys::{msg_send, sel, sel_impl};
 use makepad_studio_protocol::{AppToStudio, GCSample, StudioToApp, StudioToAppVec};
 
 /// Local swapchain for client-side texture management
@@ -40,12 +41,43 @@ impl StdinWindow {
     }
 }
 
+/// Startup-order trace for the drag-stall hunt: appends timestamped lines
+/// to the file named by MAKEPAD_STUDIO_TRACE. Free when the env var is
+/// unset (one static branch).
+pub(crate) fn stdin_trace(line: &str) {
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    static FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+    let file = FILE.get_or_init(|| {
+        std::env::var("MAKEPAD_STUDIO_TRACE").ok().and_then(|p| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+                .map(Mutex::new)
+        })
+    });
+    let Some(file) = file else { return };
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    if let Ok(mut f) = file.lock() {
+        let _ = writeln!(f, "{:.2} C {}", ms % 1.0e7, line);
+    }
+}
+
 impl Cx {
     fn stdin_send_to_host(msg: AppToStudio) {
         Cx::send_studio_message(msg);
     }
 
     pub(crate) fn stdin_send_draw_complete(presentable_draw: PresentableDraw) {
+        stdin_trace(&format!(
+            "flip {}x{}",
+            presentable_draw.width, presentable_draw.height
+        ));
         Self::stdin_send_to_host(AppToStudio::DrawCompleteAndFlip(presentable_draw));
     }
 
@@ -55,6 +87,11 @@ impl Cx {
         stdin_windows: &mut [StdinWindow],
         time: f32,
     ) {
+        // Safety flush for frame-batched offscreen passes (see macos.rs).
+        if let Some(shared) = metal_cx.frame_command_buffer.take() {
+            let () = unsafe { msg_send![shared, commit] };
+            let () = unsafe { msg_send![shared, release] };
+        }
         //self.demo_time_repaint = false;
         let mut passes_todo = Vec::new();
         self.compute_pass_repaint_order(&mut passes_todo);
@@ -117,6 +154,7 @@ impl Cx {
         self.call_event_handler(&Event::Startup);
         Self::stdin_send_to_host(AppToStudio::AfterStartup);
 
+        let mut last_recv: Option<std::time::Instant> = None;
         loop {
             if !Self::has_studio_web_socket() {
                 crate::error!("--stdin-loop mode requires a studio websocket");
@@ -126,10 +164,36 @@ impl Cx {
                 Some(incoming) => incoming,
                 None => break,
             };
+            // Trace gaps in host->child delivery: with an 8ms tick the
+            // receive loop should never sit idle for long.
+            if let Some(last) = last_recv {
+                let gap = last.elapsed().as_secs_f64() * 1000.0;
+                if gap > 25.0 {
+                    stdin_trace(&format!("rxgap {:.1}", gap));
+                }
+            }
+            last_recv = Some(std::time::Instant::now());
+            crate::memory_watchdog::note_stdin_host_message();
 
             match incoming {
                 WebSocketMessage::Binary(data) => match StudioToAppVec::deserialize_bin(&data) {
                     Ok(msgs) => {
+                        {
+                            // One compact line per batch: M=mouse move, T=tick.
+                            let mut m = 0usize;
+                            let mut t = 0usize;
+                            let mut o = 0usize;
+                            for msg in &msgs.0 {
+                                match msg {
+                                    StudioToApp::MouseMove(_) => m += 1,
+                                    StudioToApp::Tick => t += 1,
+                                    _ => o += 1,
+                                }
+                            }
+                            if m > 0 || o > 0 {
+                                stdin_trace(&format!("rx m={} t={} o={}", m, t, o));
+                            }
+                        }
                         for msg in msgs.0 {
                             if self.stdin_handle_host_to_stdin(msg, metal_cx, &mut stdin_windows) {
                                 return;
@@ -316,17 +380,28 @@ impl Cx {
                 if !self.new_next_frames.is_empty() {
                     self.call_next_frame_event(time_now);
                 }
-                if self.need_redrawing() {
+                let drew = self.need_redrawing();
+                if drew {
+                    let t0 = std::time::Instant::now();
                     self.call_draw_event(time_now);
                     self.mtl_compile_shaders(metal_cx);
+                    stdin_trace(&format!("draw {:.1}", t0.elapsed().as_secs_f64() * 1000.0));
                 }
+                let t0 = std::time::Instant::now();
                 self.stdin_handle_repaint(
                     metal_cx,
                     stdin_windows,
                     self.os.stdin_timers.time_now() as f32,
                 );
+                if drew {
+                    stdin_trace(&format!(
+                        "repaint {:.1}",
+                        t0.elapsed().as_secs_f64() * 1000.0
+                    ));
+                }
 
                 let gc_start = self.seconds_since_app_start();
+                let gc_t0 = std::time::Instant::now();
                 let mut gc_heap_live = None;
                 self.with_vm(|vm| {
                     if vm.heap().needs_gc() {
@@ -334,6 +409,12 @@ impl Cx {
                         gc_heap_live = Some(vm.heap().gc_live_len() as u64);
                     }
                 });
+                if gc_heap_live.is_some() {
+                    stdin_trace(&format!(
+                        "gc {:.1}",
+                        gc_t0.elapsed().as_secs_f64() * 1000.0
+                    ));
+                }
                 if let Some(heap_live) = gc_heap_live {
                     let gc_end = self.seconds_since_app_start();
                     Cx::send_studio_message(AppToStudio::GCSample(GCSample {
@@ -365,7 +446,7 @@ impl Cx {
         stdin_windows: &mut Vec<StdinWindow>,
     ) {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     while window_id.id() >= stdin_windows.len() {
@@ -411,6 +492,12 @@ impl Cx {
                 }
                 CxOsOp::CopyToClipboard(content) => {
                     Self::stdin_send_to_host(AppToStudio::SetClipboard(content));
+                }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!(
+                        "external file dragging is not available in the Studio stdin runtime"
+                    );
+                    self.call_event_handler(&Event::DragEnd);
                 }
                 _ => (), /*
                          CxOsOp::CloseWindow(_window_id) => {},

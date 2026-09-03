@@ -21,6 +21,19 @@ use std::{
     time::Instant,
 };
 
+/// Backing-store scale for a headless window. Retina by default, because a
+/// screenshot is expected to match what a real display would show. Rendering is
+/// a software rasteriser here, so the cost is per PIXEL: a suite that only
+/// asserts on logical geometry can set `MAKEPAD_HEADLESS_DPI=1` and do a
+/// quarter of the work.
+fn configured_headless_dpi() -> f64 {
+    std::env::var("MAKEPAD_HEADLESS_DPI")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|dpi| *dpi > 0.0)
+        .unwrap_or(2.0)
+}
+
 #[derive(Default)]
 struct HeadlessWindowState {
     created: bool,
@@ -125,6 +138,12 @@ impl Cx {
             if SignalToUI::check_and_clear_action_signal() {
                 self.handle_action_receiver();
             }
+            // The `--remote` HTTP control surface and the studio control
+            // channel: every windowed backend services them from its event
+            // loop; the bounded headless loop must too, or a headless
+            // `--remote` session answers its metadata routes and then times
+            // out on anything that needs the app (snap, click, grab).
+            self.poll_control_channel();
             self.dispatch_network_runtime_events();
 
             let timer_events = self.os.stdin_timers.get_dispatch();
@@ -262,6 +281,7 @@ impl Cx {
                             self.windows.window_id_contains(dvec2(e.x, e.y))
                         };
                     self.call_event_handler(&Event::MouseMove(crate::event::MouseMoveEvent {
+                lock_delta: Default::default(),
                         abs: dvec2(e.x - pos.x, e.y - pos.y),
                         window_id,
                         modifiers: e.modifiers.into_key_modifiers(),
@@ -315,6 +335,7 @@ impl Cx {
                         handled_y: std::cell::Cell::new(false),
                         is_mouse: e.is_mouse,
                         time: e.time,
+                        phase: crate::event::ScrollPhase::None,
                     }));
                 }
                 StudioToApp::WindowGeomChange {
@@ -454,34 +475,59 @@ impl Cx {
     ) -> bool {
         let output_dir = self.headless_output_dir();
         let mut rendered_any = false;
+        // `MAKEPAD_HEADLESS_FRAMES=off` skips the per-frame PNG files — a
+        // long-lived `--remote` sweep instance redraws continuously and the
+        // per-frame encode+write is a disk flood; grabs (below) still work.
+        // Default keeps every frame on disk, which is what the UI render
+        // suites read.
+        let write_files =
+            !matches!(std::env::var("MAKEPAD_HEADLESS_FRAMES").as_deref(), Ok("off"));
 
         // Render all passes using the real draw tree + JIT shaders
         let framebuffers = self.headless_render_all_passes(time_now);
 
-        for (window_id, fb) in framebuffers {
+        for window_id in framebuffers {
             // Skip if we don't have a window state for this window
             if window_id >= windows.len() {
                 continue;
             }
+            let Some((width, height)) = self
+                .os
+                .window_framebuffers
+                .get(&window_id)
+                .map(|fb| (fb.width as u32, fb.height as u32))
+            else {
+                continue;
+            };
             let state = &mut windows[window_id];
             if !state.created {
                 state.created = true;
                 state.ensure_size_defaults();
             }
 
-            let width = fb.width as u32;
-            let height = fb.height as u32;
-
-            let request_ids = if send_protocol {
-                self.take_studio_screenshot_request_ids(0)
-            } else {
-                Vec::new()
-            };
+            // Pending grabs: the studio protocol drains them below; a plain
+            // headless run answers `--remote` /g requests right here — the
+            // windowed backends do this from their GPU completion path, and
+            // without it a headless /g hangs forever.
+            let request_ids =
+                self.take_studio_screenshot_request_ids_for_window(0, Some(window_id));
             if send_protocol && request_ids.is_empty() {
                 continue;
             }
+            if !write_files && request_ids.is_empty() {
+                state.frame_id += 1;
+                rendered_any = true;
+                continue;
+            }
 
-            let rgba = fb.to_rgba8();
+            let Some(rgba) = self
+                .os
+                .window_framebuffers
+                .get(&window_id)
+                .map(|fb| fb.to_rgba8())
+            else {
+                continue;
+            };
             let png = match encode_png_rgba(width, height, &rgba) {
                 Ok(png) => png,
                 Err(err) => {
@@ -495,17 +541,36 @@ impl Cx {
                 }
             };
 
-            let png_path = output_dir.join(format!(
-                "window_{window_id}_frame_{:06}.png",
-                state.frame_id
-            ));
-            if let Err(err) = std::fs::write(&png_path, &png) {
-                crate::error!(
-                    "headless frame write failed for `{}`: {}",
-                    png_path.display(),
-                    err
+            if !send_protocol && !request_ids.is_empty() {
+                Self::send_studio_screenshot_response(
+                    request_ids.clone(),
+                    width,
+                    height,
+                    png.clone(),
                 );
-                continue;
+            }
+
+            if write_files {
+                let png_path = output_dir.join(format!(
+                    "window_{window_id}_frame_{:06}.png",
+                    state.frame_id
+                ));
+                if let Err(err) = std::fs::write(&png_path, &png) {
+                    crate::error!(
+                        "headless frame write failed for `{}`: {}",
+                        png_path.display(),
+                        err
+                    );
+                    continue;
+                }
+                if !send_protocol {
+                    crate::log!(
+                        "headless frame written: {} ({}x{})",
+                        png_path.display(),
+                        width,
+                        height
+                    );
+                }
             }
 
             if send_protocol {
@@ -528,13 +593,6 @@ impl Cx {
                     width,
                     height,
                 }));
-            } else {
-                crate::log!(
-                    "headless frame written: {} ({}x{})",
-                    png_path.display(),
-                    width,
-                    height
-                );
             }
 
             state.frame_id += 1;
@@ -568,7 +626,7 @@ impl Cx {
         send_protocol: bool,
     ) -> bool {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     while window_id.id() >= windows.len() {
@@ -576,11 +634,14 @@ impl Cx {
                     }
 
                     let window = &mut self.windows[window_id];
-                    let inner_size = window
-                        .create_inner_size
-                        .unwrap_or_else(|| dvec2(1920.0, 1080.0));
-                    let position = window.create_position.unwrap_or_else(|| dvec2(0.0, 0.0));
-                    let dpi_factor = 2.0;
+                    let (position, inner_size) = window.create_geom();
+                    let inner_size = if window.create_inner_size.is_some() {
+                        inner_size
+                    } else {
+                        dvec2(1920.0, 1080.0)
+                    };
+                    let position = position.unwrap_or_else(|| dvec2(0.0, 0.0));
+                    let dpi_factor = configured_headless_dpi();
 
                     let state = &mut windows[window_id.id()];
                     state.created = true;
@@ -668,6 +729,12 @@ impl Cx {
                 CxOsOp::Quit => {
                     return false;
                 }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented in headless mode");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 _ => {}
             }
         }

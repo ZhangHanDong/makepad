@@ -35,6 +35,11 @@ pub struct MouseDownEvent {
 #[derive(Clone, Debug)]
 pub struct MouseMoveEvent {
     pub abs: Vec2d,
+    /// Relative motion while the pointer is LOCKED (cx.lock_mouse_pointer):
+    /// the browser pointer-lock model — `abs` stays pinned at the lock point
+    /// (so widget routing is stable) and the true movement arrives here.
+    /// Always zero when unlocked or on platforms without lock support.
+    pub lock_delta: Vec2d,
     pub window_id: WindowId,
     pub modifiers: KeyModifiers,
     pub time: f64,
@@ -70,6 +75,45 @@ pub struct MouseLeaveEvent {
     pub handled: Cell<Area>,
 }
 
+/// The gesture phase of a scroll event, when the OS provides one.
+///
+/// Trackpad scrolling on some platforms (macOS in particular) is a gesture: the OS reports
+/// when fingers touch the pad (`Began`), each movement while they are down (`Changed`), when
+/// they lift off (`Ended`), and then a stream of decaying momentum deltas
+/// (`Momentum`/`MomentumEnded`).
+///
+/// The scrollable widgets apply the user-driven deltas directly and, on `Ended`, start a fling
+/// that follows the OS momentum stream so the deceleration matches the OS (see
+/// `widgets::scroll_motion`). Widgets that don't track phases can apply every delta directly,
+/// which gives plain OS momentum scrolling.
+///
+/// On platforms and devices with no phase information (classic mouse wheels, X11, Windows),
+/// this is `None`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ScrollPhase {
+    /// No phase information available (classic mouse wheel, or the platform doesn't report phases).
+    #[default]
+    None,
+    /// Fingers touched the trackpad; a scroll gesture may begin (the delta is usually zero).
+    Began,
+    /// A raw finger contact on the trackpad, sent for every touch with a zero delta
+    /// (macOS only). Unlike `Began`, this fires even for single-finger contacts that never
+    /// become a scroll gesture, so widgets use it to instantly stop kinetic scrolling the
+    /// way a touch natively catches a coast. It must not disturb anything else: any
+    /// tap-to-click press or drag from the same contact arrives separately as mouse events.
+    Touched,
+    /// Fingers moved while on the trackpad: a user-driven scroll delta.
+    Changed,
+    /// Fingers lifted off the trackpad: the last event of the user-driven gesture (the delta
+    /// may be zero). Widgets start their fling here.
+    Ended,
+    /// A momentum delta arriving from the OS after the fingers lifted. Widgets follow these to
+    /// match the OS deceleration rate.
+    Momentum,
+    /// The OS momentum stream finished (the delta is zero).
+    MomentumEnded,
+}
+
 #[derive(Clone, Debug)]
 pub struct ScrollEvent {
     pub window_id: WindowId,
@@ -80,6 +124,7 @@ pub struct ScrollEvent {
     pub handled_y: Cell<bool>,
     pub is_mouse: bool,
     pub time: f64,
+    pub phase: ScrollPhase,
 }
 
 #[derive(Clone, Debug)]
@@ -249,6 +294,12 @@ pub struct CxDigitCapture {
     pub switch_capture: Option<Area>,
     pub time: f64,
     pub abs_start: Vec2d,
+    /// A scrub pin rides ON the capture: while set, the hardware cursor is
+    /// hidden+detached and pointer events exist only for this owner (hover
+    /// resolution and new captures are suppressed in hits()). Because the
+    /// state lives on the capture, it structurally cannot outlive the
+    /// button — `mouse_up` releases the capture and the pin with it.
+    pub pinned: bool,
 }
 
 #[derive(Default, Clone)]
@@ -378,6 +429,7 @@ impl CxFingers {
             abs_start,
             has_long_press_occurred: false,
             switch_capture: None,
+            pinned: false,
         })
         /*}*/
     }
@@ -394,8 +446,52 @@ impl CxFingers {
         self.captures.iter_mut().find(|v| v.area == area)
     }
 
+    /// Reassign the finger currently captured by `from` to `to` (also updating its
+    /// sweep area). Lets a drag begun on one widget be handed to another mid-press.
+    /// Returns true if a capture on `from` was actually found and switched — false
+    /// means the finger was already released (nothing to hand off).
+    pub(crate) fn switch_capture_area(&mut self, from: Area, to: Area, to_sweep: Area) -> bool {
+        if let Some(cap) = self.captures.iter_mut().find(|v| v.area == from) {
+            cap.area = to;
+            cap.sweep_area = to_sweep;
+            cap.switch_capture = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Hand a finger that an interactive child grabbed up to a container that
+    /// already co-captures it (via `capture_overload`). Finds the digit `over`
+    /// co-captures, drops every OTHER area's capture of that digit, and leaves
+    /// `over` as the sole capture so it receives the finger's subsequent moves.
+    /// Lets e.g. the home pager start a page-swipe/drag even when the press began
+    /// on a button inside a widget tile. Returns true if a child capture was
+    /// actually dropped (false = nothing was in the way).
+    pub(crate) fn promote_capture_over(&mut self, over: Area) -> bool {
+        let Some(digit) = self
+            .captures
+            .iter()
+            .find(|v| v.area == over)
+            .map(|v| v.digit_id)
+        else {
+            return false;
+        };
+        let before = self.captures.len();
+        self.captures
+            .retain(|v| v.digit_id != digit || v.area == over);
+        self.captures.len() != before
+    }
+
     pub fn is_area_captured(&self, area: Area) -> bool {
         self.captures.iter().find(|v| v.area == area).is_some()
+    }
+
+    /// The area that captured the touch with the given uid, if any.
+    /// Lets a raw `Event::LongPress` handler check which widget owns the press.
+    pub fn touch_capture_area(&self, uid: u64) -> Option<Area> {
+        let digit_id: DigitId = live_id_num!(touch, uid).into();
+        self.captures.iter().find(|v| v.digit_id == digit_id).map(|v| v.area)
     }
 
     pub fn any_areas_captured(&self) -> bool {
@@ -504,6 +600,37 @@ impl CxFingers {
             }
             _ => {}
         }
+    }
+
+    /// True while any capture carries a scrub pin (the owner is the only
+    /// consumer of pointer events).
+    pub fn has_pinned_capture(&self) -> bool {
+        self.captures.iter().any(|c| c.pinned)
+    }
+
+    /// Mark the current mouse capture pinned. Returns false when there is
+    /// no mouse capture to pin (the press was already released).
+    pub(crate) fn pin_mouse_capture(&mut self) -> bool {
+        let digit_id = live_id!(mouse).into();
+        if let Some(c) = self.captures.iter_mut().find(|c| c.digit_id == digit_id) {
+            c.pinned = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear the pin flag on whatever capture carries it (release or
+    /// cancel). Returns true when a pin was actually cleared.
+    pub(crate) fn unpin_captures(&mut self) -> bool {
+        let mut any = false;
+        for c in &mut self.captures {
+            if c.pinned {
+                c.pinned = false;
+                any = true;
+            }
+        }
+        any
     }
 
     pub(crate) fn test_sweep_lock(&mut self, sweep_area: Area) -> bool {
@@ -748,6 +875,7 @@ pub struct FingerScrollEvent {
     pub modifiers: KeyModifiers,
     pub time: f64,
     pub rect: Rect,
+    pub phase: ScrollPhase,
 }
 
 /*
@@ -832,6 +960,21 @@ impl Event {
                 cx.fingers.uncapture_area(*area);
             }
             _ => (),
+        }
+    }
+
+    /// The area that has claimed this pointer event so far (hover, mouse press, or touch start).
+    /// Snapshot it before dispatching a subtree: a claim appearing across that dispatch came from within.
+    pub fn pointer_claimed_area(&self) -> Area {
+        match self {
+            Event::MouseMove(e) => e.handled.get(),
+            Event::MouseDown(e) => e.handled.get(),
+            Event::TouchUpdate(e) => e
+                .touches
+                .iter()
+                .find(|t| t.state == TouchState::Start)
+                .map_or(Area::Empty, |t| t.handled.get()),
+            _ => Area::Empty,
         }
     }
 }
@@ -955,6 +1098,7 @@ impl Event {
                         modifiers: e.modifiers,
                         time: e.time,
                         scroll: e.scroll,
+                        phase: e.phase,
                     });
                 }
             }
@@ -971,6 +1115,16 @@ impl Event {
                             // someone did a second call on our area
                             if cx.fingers.find_digit_for_captured_area(area).is_some() {
                                 let rect = area.clipped_rect(&cx);
+                                // A second touch landing on an area that already captured one
+                                // belongs to that area (e.g. the second finger of a pinch), so
+                                // mark it handled to keep widgets behind us from capturing it.
+                                // The emptiness check preserves the claim of a widget (e.g. a
+                                // child) that already handled this touch earlier in dispatch.
+                                if t.handled.get().is_empty()
+                                    && hit_test(t.abs, &rect, &options.margin_for(&device))
+                                {
+                                    t.handled.set(area);
+                                }
                                 return Hit::FingerDown(FingerDownEvent {
                                     window_id: e.window_id,
                                     abs: t.abs,
@@ -1238,6 +1392,13 @@ impl Event {
                         return event;
                     }
                 } else {
+                    // Absolute pin semantics: while a capture carries a
+                    // scrub pin the pointer exists only for its owner — no
+                    // hover resolution anywhere (the virtual abs must never
+                    // highlight widgets it wanders over).
+                    if cx.fingers.has_pinned_capture() {
+                        return Hit::Nothing;
+                    }
                     let device = DigitDevice::Mouse {
                         button: MouseButton::PRIMARY,
                     };
@@ -1277,6 +1438,14 @@ impl Event {
                 }
             }
             Event::MouseDown(e) => {
+                // Absolute pin semantics: no NEW captures while a capture
+                // carries a scrub pin — a press at the virtual abs must not
+                // engage whatever widget it happens to sit over. (The
+                // owner's own press predates the pin; cancel gestures
+                // listen to raw events, not hits.)
+                if cx.fingers.has_pinned_capture() {
+                    return Hit::Nothing;
+                }
                 let digit_id = live_id!(mouse).into();
 
                 let device = DigitDevice::Mouse { button: e.button };

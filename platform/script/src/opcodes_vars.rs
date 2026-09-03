@@ -15,11 +15,14 @@ impl<'a> ScriptVm<'a> {
     // Object/Array begin handlers
 
     pub(crate) fn handle_begin_proto(&mut self) {
+        let ip = self.bx.threads.cur_ref().trap.ip;
         let proto = self.bx.threads.cur().pop_stack_resolved(&self.bx.heap);
         let me = self
             .bx
             .heap
             .new_with_proto_checked(proto, self.bx.threads.cur().trap.pass());
+        // the construction site: cascade view / doc lookup key
+        self.bx.heap.set_made_at(me, ip);
         self.bx.threads.cur().mes.push(ScriptMe::Object(me));
         self.bx.threads.cur().trap.goto_next();
     }
@@ -39,7 +42,7 @@ impl<'a> ScriptVm<'a> {
                 self.bx.threads.cur().trap.pass(),
             );
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 if let Some(field_id) = field.as_id() {
                     self.bx.heap.proto_field_from_type_check(
                         object,
@@ -83,7 +86,7 @@ impl<'a> ScriptVm<'a> {
         let proto = if let Some(id) = id.as_id() {
             let value = self.bx.threads.cur().scope_value(&self.bx.heap, id);
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 value
@@ -126,7 +129,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .value(obj, field, self.bx.threads.cur().trap.pass());
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 value
@@ -172,7 +175,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .value(obj, index, self.bx.threads.cur().trap.pass());
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 value
@@ -184,7 +187,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .array_index(arr, idx, self.bx.threads.cur().trap.pass());
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 value
@@ -231,7 +234,9 @@ impl<'a> ScriptVm<'a> {
     }
 
     pub(crate) fn handle_begin_bare(&mut self) {
+        let ip = self.bx.threads.cur_ref().trap.ip;
         let me = self.bx.heap.new_object();
+        self.bx.heap.set_made_at(me, ip);
         self.bx.threads.cur().mes.push(ScriptMe::Object(me));
         self.bx.threads.cur().trap.goto_next();
     }
@@ -399,7 +404,7 @@ impl<'a> ScriptVm<'a> {
                     .heap
                     .proto_field_from_value(obj, field, self.bx.threads.cur().trap.pass());
             if value.is_nil() || value.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 if let Some(field_id) = field.as_id() {
                     let value = self.bx.heap.proto_field_from_type_check(
                         obj,
@@ -536,7 +541,7 @@ impl<'a> ScriptVm<'a> {
             let value = if value.is_err()
                 && (index.is_string_like() || index.is_object() || index.is_color())
             {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 value
@@ -695,7 +700,7 @@ impl<'a> ScriptVm<'a> {
             if value != NIL {
                 if let Some(err_ptr) = value.as_err() {
                     if let Some(loc2) = self.bx.code.ip_to_loc(err_ptr.ip) {
-                        let err_queue = self.bx.threads.cur_ref().trap.err.borrow();
+                        let err_queue = self.bx.threads.cur_ref().trap.err_borrow();
                         if let Some(err) = err_queue.iter().find(|e| e.value == value) {
                             log_with_level(
                                 &loc.file,
@@ -792,7 +797,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .array_index(arr, idx, self.bx.threads.cur().trap.pass());
             if result.is_err() {
-                self.bx.threads.cur().trap.err.take(); // Clear the error
+                self.bx.threads.cur().trap.err_take(); // Clear the error
                 NIL
             } else {
                 result
@@ -803,7 +808,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .value(obj, index, self.bx.threads.cur().trap.pass());
             if result.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 result
@@ -831,7 +836,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .array_index(arr, index, self.bx.threads.cur().trap.pass());
             if result.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 result
@@ -843,7 +848,7 @@ impl<'a> ScriptVm<'a> {
                 self.bx.threads.cur().trap.pass(),
             );
             if result.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 result
@@ -879,7 +884,7 @@ impl<'a> ScriptVm<'a> {
                 .heap
                 .value(obj, id, self.bx.threads.cur().trap.pass());
             if result.is_err() {
-                self.bx.threads.cur().trap.err.take();
+                self.bx.threads.cur().trap.err_take();
                 NIL
             } else {
                 result

@@ -8,6 +8,17 @@ pub type AudioInputFn = Box<dyn FnMut(AudioInfo, &AudioBuffer) + Send + 'static>
 #[derive(Clone, Debug, Default, Eq, Hash, Copy, PartialEq, FromLiveId)]
 pub struct AudioDeviceId(pub LiveId);
 
+/// Options for `use_audio_inputs_with_options`. Best-effort per platform:
+/// a platform without the capability captures plain audio instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AudioInputOptions {
+    /// Route capture through the OS voice-processing path (echo
+    /// cancellation / feedback suppression), so device playback — e.g. the
+    /// app's own TTS — is removed from the mic signal. Apple: the input
+    /// unit becomes VoiceProcessingIO (system-wide AEC; typically mono).
+    pub echo_cancellation: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct AudioInfo {
     pub device_id: AudioDeviceId,
@@ -48,22 +59,47 @@ pub struct AudioDevicesEvent {
 }
 
 impl AudioDevicesEvent {
+    /// The device to record from: the default device, or if that one failed to
+    /// open, the default device anyway.
+    ///
+    /// Deliberately does *not* fall back to some other microphone the way
+    /// [`Self::default_output`] falls back to another speaker. Capture devices
+    /// are not interchangeable - the next input in the list is typically a
+    /// monitor source, which is a loopback of everything the machine is
+    /// playing, so silently recording from it instead would be a privacy
+    /// breach. Which microphone to use when the default one is unavailable is
+    /// the app's decision to make, from `descs`.
     pub fn default_input(&self) -> Vec<AudioDeviceId> {
+        // Real microphones only: the loopback device captures SYSTEM AUDIO
+        // (via screen-recording privileges on macOS) and must never be
+        // selected implicitly — apps opt into it by explicit device id.
         for d in &self.descs {
-            if d.is_default && d.device_type.is_input() && !d.has_failed {
+            if d.is_default && matches!(d.device_type, AudioDeviceType::Input) && !d.has_failed {
                 return vec![d.device_id];
             }
         }
         for d in &self.descs {
-            if d.is_default && d.device_type.is_input() {
+            if d.is_default && matches!(d.device_type, AudioDeviceType::Input) {
                 return vec![d.device_id];
             }
         }
         Vec::new()
     }
+    /// The device to play to, as a fallback chain: the default device, then any
+    /// other device that has not failed to open, and only if everything has
+    /// failed the default anyway.
+    ///
+    /// Handing back a device that is already known to have failed is what makes
+    /// an app ask for it again on every device change, so it is the last resort
+    /// rather than the first fallback.
     pub fn default_output(&self) -> Vec<AudioDeviceId> {
         for d in &self.descs {
             if d.is_default && d.device_type.is_output() && !d.has_failed {
+                return vec![d.device_id];
+            }
+        }
+        for d in &self.descs {
+            if d.device_type.is_output() && !d.has_failed {
                 return vec![d.device_id];
             }
         }

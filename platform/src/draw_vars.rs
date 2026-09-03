@@ -127,6 +127,31 @@ impl ScriptHook for DrawVars {
 }
 
 impl DrawVars {
+    /// Loud report for a failed draw-shader compile. A shader that fails
+    /// must never fall back silently: the draw is skipped from then on and
+    /// the only on-screen symptom is a flat clear-color region where the
+    /// shader should have painted. Names the shader and lists every
+    /// collected compile error.
+    pub fn log_shader_compile_failure(
+        vm: &ScriptVm,
+        io_self: ScriptObject,
+        output: &crate::makepad_script::shader::ShaderOutput,
+    ) {
+        let name = vm
+            .bx
+            .heap
+            .object_type_name_in_chain(io_self)
+            .map(|id| format!("{}", id))
+            .unwrap_or_else(|| format!("<script object {}>", io_self.index()));
+        let report = output.error_report();
+        crate::shader_error::note(format!("{name}: {report}"));
+        crate::error!(
+            "draw shader '{}' failed to compile and will NOT be drawn:\n{}",
+            name,
+            report
+        );
+    }
+
     fn prune_stale_object_shader_cache(vm: &mut ScriptVm) {
         let object_reuse_epoch = vm.bx.heap.object_reuse_epoch();
         let cx = vm.host.cx_mut();
@@ -459,6 +484,42 @@ impl DrawVars {
                     draw_call.uniforms_dirty = true;
                     cx.passes[draw_list.draw_pass_id.unwrap()].paint_dirty = true;
                 }
+            }
+        }
+    }
+
+    /// Writes one uniform into EVERY retained draw call of this shader in
+    /// `list`'s draw list, and marks the pass for repaint. A widget whose
+    /// instances batch into many calls (texture changes split them) can move
+    /// its camera between redraws with this: the standing buffers re-present
+    /// under fresh uniforms — nothing is rebuilt.
+    pub fn set_uniform_on_draw_list(&mut self, cx: &mut Cx, list: Area, id: LiveId, value: &[f32]) {
+        let Some(draw_shader_id) = self.draw_shader_id else { return };
+        let Some(draw_list_id) = list.draw_list_id() else { return };
+        let sh = &cx.draw_shaders[draw_shader_id.index];
+        let Some(input) = sh.mapping.dyn_uniforms.inputs.iter().find(|i| i.id == id) else { return };
+        let slots = input.slots.min(value.len());
+        let offset = input.offset;
+        for i in 0..slots {
+            self.dyn_uniforms[offset + i] = value[i];
+        }
+        let draw_list = &mut cx.draw_lists[draw_list_id];
+        let mut touched = false;
+        for item in 0..draw_list.draw_items.len() {
+            let draw_item = &mut draw_list.draw_items[item];
+            let Some(draw_call) = draw_item.kind.draw_call_mut() else { continue };
+            if draw_call.draw_shader_id != draw_shader_id {
+                continue;
+            }
+            for i in 0..slots {
+                draw_call.dyn_uniforms[offset + i] = value[i];
+            }
+            draw_call.uniforms_dirty = true;
+            touched = true;
+        }
+        if touched {
+            if let Some(pass_id) = draw_list.draw_pass_id {
+                cx.passes[pass_id].paint_dirty = true;
             }
         }
     }
@@ -931,6 +992,7 @@ impl DrawVars {
             let mut output = ShaderOutput::default();
             output.backend = ShaderBackend::Glsl;
             output.use_vulkan = false;
+            output.const_table = vm.host.cx().shader_const_table_mode();
             output.pre_collect_rust_instance_io(vm, io_self);
             output.pre_collect_shader_io(vm, io_self);
 
@@ -970,6 +1032,7 @@ impl DrawVars {
             }
 
             if output.has_errors {
+                Self::log_shader_compile_failure(vm, io_self, &output);
                 return;
             }
 

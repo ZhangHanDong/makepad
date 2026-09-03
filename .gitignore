@@ -2,6 +2,12 @@
 # will have compiled files and executables
 **/target/
 
+# Private Arcade frontend. Clone into this path:
+#   git clone git@github.com:makepad/sandbox.git apps/sandbox
+/apps/sandbox/
+#   git clone git@github.com:makepad/source-library.git apps/source-library
+/apps/source-library/
+
 # Remove Cargo.lock from gitignore if creating an executable, leave it for libraries
 # More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
 Cargo.lock
@@ -41,6 +47,7 @@ GOOGLE_KEY
 experiments/websocket-windows/nodejs-websocketserver
 experiments/svgloader
 CLAUDE.md
+!examples/godot/resources/template/CLAUDE.md
 
 /tools/__pycache__/
 **/*.obsidian
@@ -69,3 +76,68 @@ aichat_appgen_history.json
 ggml-*.bin
 /kokoro_voices/
 __pycache__/
+tesla_credentials.json
+
+# Studio per-checkout runtime state: terminal scrollback, AI chat logs, window
+# layout. Committed once by mistake (fab00bf27 "Studio term histories") — it is
+# local scratch, it churns every session, and it had grown to ~30 MB of chat
+# JSON and terminal buffers carrying developer email addresses and home paths.
+.makepad/
+
+# Working notes, plans and handoff docs. These are scratch for whoever is
+# mid-task — they go stale the moment the work lands, and a repo root full of
+# them buries the three docs that are actually reference material. Kept on
+# disk, out of the repo. The reference docs (README, splash.md, splashgame.md)
+# and the Studio runbook (AGENTS.md) stay tracked.
+/aigame*.md
+/blur.md
+/bridge.md
+/datasources.md
+/game.md
+/glass.md
+/gps.md
+/handoff.md
+/isolate.md
+/layers.md
+/map.md
+/map2.md
+/profiler.md
+/route.md
+/shiny.md
+/status.md
+
+# Baked AO atlases: regenerate with tools/ao_bake, never commit (41 MB).
+**/ao_atlas.png
+
+# LAN fleet configs — machine-local, never committed
+fleet-hosts*.txt
+
+# Local secrets and AI-session state — never commit
+/GOOGLE_API_KEY
+/aichat_history.json
+/godot_chat_history.json
+/codex2
+/hello_world.py
+/package-lock.json
+/mapplan.md
+/mix.md
+/overlay.md
+
+# Local data dumps, benches and scratch checkouts — never commit
+/*.csv
+/*.mbtiles
+/kokoro_ref*
+/silero_vad.onnx
+/.rustup/
+/build/
+/box3d/
+/sub/
+/refdump/
+/traces/
+/xr/dump/
+/examples/splash_preview/
+/examples/automate/local/
+/examples/cad/generated/
+window_*_frame_*.png
+remote-jobs/
+apps/asset-ui/resources/

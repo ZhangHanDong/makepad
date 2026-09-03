@@ -97,6 +97,15 @@ pub fn request_window_gauss(cx: &mut Cx2d) -> Option<GaussBlurSnapshot> {
     entry.snapshot.clone()
 }
 
+// DRAW-ORDER RULE FOR GLASS SURFACES
+// -----------------------------------
+// Gauss/lens surfaces render their refraction overlay in a LATER pass that
+// composites above anything the *parent* widget drew after this child in the
+// main pass. Consequence for widget authors: any chrome that must appear on
+// top of a glass surface (badges, resize grips, selection outlines) must be a
+// CHILD of the glass view - quads drawn by the parent after the child will be
+// covered by the lens overlay even though they were drawn "later".
+
 script_mod! {
     use mod.prelude.widgets_internal.*
     use mod.widgets.View
@@ -129,7 +138,14 @@ script_mod! {
             lensing_strength: uniform(12.0)
             lensing_width: uniform(22.0)
             press_flatten: uniform(0.0)
-            ripple_start: uniform(-1000.0)
+            // PERF LAW: the click ripple's clock is fed by the widget, NOT by
+            // `draw_pass.time`. Any shader that reads `draw_pass.time` is flagged
+            // `uses_time` (platform/src/draw_shader.rs) and arms `demo_time_repaint`
+            // every frame it draws, which pins the whole window at display rate for
+            // as long as the glass is on screen. `ripple_age` is elapsed seconds since
+            // the press, pushed from Rust on a NextFrame chain that only runs while a
+            // ripple is live (~1.1s). Default 1000.0 = no ripple.
+            ripple_age: uniform(1000.0)
             ripple_strength: uniform(0.0)
             corner_radius: instance(14.0)
             tint_color: instance(#b8b8b8)
@@ -163,6 +179,32 @@ script_mod! {
                 return self.clip_and_transform_vertex(self.rect_pos2, self.rect_size3)
             }
 
+            // Bicubic B-spline reconstruction, 4 bilinear taps. Bilinear alone is C0 — its
+            // derivative kinks at every texel boundary read as a visible lattice when a low-res
+            // mip is stretched over the window. The B-spline is C2-smooth so the texel grid
+            // disappears entirely. h packs the two tap coordinates (h0.xy, h1.zw); g0 holds the
+            // per-axis weight of the h0 tap pair (the h1 pair weight is 1 - g0).
+            bicubic_h: fn(uv: vec2, size: vec2) -> vec4 {
+                let tc = uv * size - 0.5
+                let f = fract(tc)
+                let tc0 = floor(tc)
+                let f2 = f * f
+                let f3 = f2 * f
+                let omf = 1.0 - f
+                let w1 = (f3 * 3.0 - f2 * 6.0 + 4.0) / 6.0
+                let g0 = omf * omf * omf / 6.0 + w1
+                let h0 = clamp((tc0 - 0.5 + w1 / g0) / size, vec2(0.0, 0.0), vec2(1.0, 1.0))
+                let h1 = clamp((tc0 + 1.5 + (f3 / 6.0) / (1.0 - g0)) / size, vec2(0.0, 0.0), vec2(1.0, 1.0))
+                return vec4(h0.x, h0.y, h1.x, h1.y)
+            }
+
+            bicubic_g0: fn(uv: vec2, size: vec2) -> vec2 {
+                let f = fract(uv * size - 0.5)
+                let f2 = f * f
+                let omf = 1.0 - f
+                return omf * omf * omf / 6.0 + (f2 * f * 3.0 - f2 * 6.0 + 4.0) / 6.0
+            }
+
             sample_level: fn(level: float, uv: vec2) -> vec4 {
                 let source_uv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, self.source_y_flip))
                 let safe_uv = clamp(source_uv, vec2(0.0, 0.0), vec2(1.0, 1.0))
@@ -170,105 +212,63 @@ script_mod! {
                     return self.scene_texture.sample_as_bgra(safe_uv)
                 }
                 if level < 1.5 {
-                    let size = self.mip0_texture.size()
-                    let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                    return self.mip0_texture.sample_as_bgra(safe_uv) * 0.20
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip0_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                    let size = max(self.mip0_texture.size(), vec2(1.0, 1.0))
+                    let h = self.bicubic_h(safe_uv, size)
+                    let g0 = self.bicubic_g0(safe_uv, size)
+                    let g1 = 1.0 - g0
+                    return self.mip0_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                        + self.mip0_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                        + self.mip0_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                        + self.mip0_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
                 }
                 if level < 2.5 {
-                    let size = self.mip1_texture.size()
-                    let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                    return self.mip1_texture.sample_as_bgra(safe_uv) * 0.20
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip1_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                    let size = max(self.mip1_texture.size(), vec2(1.0, 1.0))
+                    let h = self.bicubic_h(safe_uv, size)
+                    let g0 = self.bicubic_g0(safe_uv, size)
+                    let g1 = 1.0 - g0
+                    return self.mip1_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                        + self.mip1_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                        + self.mip1_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                        + self.mip1_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
                 }
                 if level < 3.5 {
-                    let size = self.mip2_texture.size()
-                    let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                    return self.mip2_texture.sample_as_bgra(safe_uv) * 0.20
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip2_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                    let size = max(self.mip2_texture.size(), vec2(1.0, 1.0))
+                    let h = self.bicubic_h(safe_uv, size)
+                    let g0 = self.bicubic_g0(safe_uv, size)
+                    let g1 = 1.0 - g0
+                    return self.mip2_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                        + self.mip2_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                        + self.mip2_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                        + self.mip2_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
                 }
                 if level < 4.5 {
-                    let size = self.mip3_texture.size()
-                    let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                    return self.mip3_texture.sample_as_bgra(safe_uv) * 0.20
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip3_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                    let size = max(self.mip3_texture.size(), vec2(1.0, 1.0))
+                    let h = self.bicubic_h(safe_uv, size)
+                    let g0 = self.bicubic_g0(safe_uv, size)
+                    let g1 = 1.0 - g0
+                    return self.mip3_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                        + self.mip3_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                        + self.mip3_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                        + self.mip3_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
                 }
                 if level < 5.5 {
-                    let size = self.mip4_texture.size()
-                    let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                    return self.mip4_texture.sample_as_bgra(safe_uv) * 0.20
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                        + self.mip4_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                    let size = max(self.mip4_texture.size(), vec2(1.0, 1.0))
+                    let h = self.bicubic_h(safe_uv, size)
+                    let g0 = self.bicubic_g0(safe_uv, size)
+                    let g1 = 1.0 - g0
+                    return self.mip4_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                        + self.mip4_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                        + self.mip4_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                        + self.mip4_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
                 }
-                let size = self.mip5_texture.size()
-                let texel = vec2(1.0 / max(size.x, 1.0), 1.0 / max(size.y, 1.0))
-                return self.mip5_texture.sample_as_bgra(safe_uv) * 0.20
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.12
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-1.0, -1.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.06
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(-2.0, 0.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, 2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
-                    + self.mip5_texture.sample_as_bgra(clamp(safe_uv + texel * vec2(0.0, -2.0), vec2(0.0, 0.0), vec2(1.0, 1.0))) * 0.02
+                let size = max(self.mip5_texture.size(), vec2(1.0, 1.0))
+                let h = self.bicubic_h(safe_uv, size)
+                let g0 = self.bicubic_g0(safe_uv, size)
+                let g1 = 1.0 - g0
+                return self.mip5_texture.sample_as_bgra(vec2(h.x, h.y)) * (g0.x * g0.y)
+                    + self.mip5_texture.sample_as_bgra(vec2(h.z, h.y)) * (g1.x * g0.y)
+                    + self.mip5_texture.sample_as_bgra(vec2(h.x, h.w)) * (g0.x * g1.y)
+                    + self.mip5_texture.sample_as_bgra(vec2(h.z, h.w)) * (g1.x * g1.y)
             }
 
             sample_blur: fn(level: float, uv: vec2) -> vec4 {
@@ -300,15 +300,29 @@ script_mod! {
                 return vec2(0.0, 1.0)
             }
 
+            // Effective refraction band width: never wider than ~35% of the
+            // surface's smaller side. Past that the whole surface becomes edge
+            // distortion, which renders small discs (< ~32px) as smeared blobs.
+            eff_lensing_width: fn() -> float {
+                let cap = max(min(self.sdf_rect_size.x, self.sdf_rect_size.y) * 0.35, 1.0)
+                return min(max(self.lensing_width, 1.0), cap)
+            }
+
+            // Scale factor for lensing strength when the band was capped, so
+            // small surfaces also refract proportionally less.
+            eff_lensing_scale: fn() -> float {
+                return self.eff_lensing_width() / max(self.lensing_width, 1.0)
+            }
+
             rounded_edge_lens: fn(shape: float) -> float {
-                let edge = clamp(1.0 - abs(shape) / max(self.lensing_width, 1.0), 0.0, 1.0)
+                let edge = clamp(1.0 - abs(shape) / self.eff_lensing_width(), 0.0, 1.0)
                 return pow(edge, 1.45) * clamp(self.lensing_effect, 0.0, 1.0)
             }
 
             lensed_uv: fn(uv: vec2, shape: float) -> vec2 {
                 let normal = self.rounded_edge_normal(shape)
                 let lens = self.rounded_edge_lens(shape)
-                let offset = normal * (lens * self.lensing_strength) / max(self.source_size, vec2(1.0, 1.0))
+                let offset = normal * (lens * self.lensing_strength * self.eff_lensing_scale()) / max(self.source_size, vec2(1.0, 1.0))
                 return clamp(uv + offset, vec2(0.0, 0.0), vec2(1.0, 1.0))
             }
 
@@ -344,11 +358,11 @@ script_mod! {
                 let edge_uv = abs(self.pos * 2.0 - 1.0)
                 let edge_gradient = clamp((edge_uv.x + edge_uv.y) * 0.5, 0.0, 1.0)
                 let highlight = self.specular_strength * (0.55 * edge_gradient + 0.45 * (1.0 - self.pos.y))
-                let noise = (
-                    Math.random_2d(
-                        screen_pos + vec2(self.draw_pass.time * 31.0, self.draw_pass.time * 17.0)
-                    ) - 0.5
-                ) * self.noise_strength
+                // Static banding dither, hashed from screen position only. It must NOT
+                // depend on `draw_pass.time`: that flags the shader `uses_time` and pins
+                // the window at display rate forever (see the ripple_age note above).
+                // The grain is a de-banding device, not an animation - frozen looks the same.
+                let noise = (Math.random_2d(screen_pos) - 0.5) * self.noise_strength
                 let fill = vec4(material + highlight + noise, self.surface_alpha)
 
                 sdf.fill_keep(fill)
@@ -398,7 +412,7 @@ script_mod! {
 
                 let screen_pos = self.rect_pos2 + self.pos * self.rect_size3
                 let uv = screen_pos / max(self.source_size, vec2(1.0, 1.0))
-                let ripple_age = max(self.draw_pass.time - self.ripple_start, 0.0)
+                let ripple_age = max(self.ripple_age, 0.0)
                 let ripple_life = clamp(1.0 - ripple_age / 1.05, 0.0, 1.0)
                 let lens_pos = self.pos * 2.0 - 1.0
                 let ripple_dist = length(lens_pos)
@@ -422,7 +436,7 @@ script_mod! {
                 let lens = self.rounded_edge_lens(sdf.shape) * lens_depth
                 let normal = self.rounded_edge_normal(sdf.shape)
                 let water_offset = ripple_dir * (ripple_surface * 22.0) / max(self.source_size, vec2(1.0, 1.0))
-                let base_offset = normal * (lens * self.lensing_strength) / max(self.source_size, vec2(1.0, 1.0)) + water_offset
+                let base_offset = normal * (lens * self.lensing_strength * self.eff_lensing_scale()) / max(self.source_size, vec2(1.0, 1.0)) + water_offset
                 let color_offset = normal * (lens * self.diffraction_strength * diffraction_depth) / max(self.source_size, vec2(1.0, 1.0))
                     + ripple_dir * ((ripple_surface + ripple_wave * 0.65) * self.diffraction_strength * 4.5) / max(self.source_size, vec2(1.0, 1.0))
                 let uv_g = clamp(uv + base_offset, vec2(0.0, 0.0), vec2(1.0, 1.0))
@@ -442,11 +456,8 @@ script_mod! {
                 let ripple_highlight = ripple_wave * 0.11
                 let sparkle = edge * self.diffraction_strength * 0.004 * (1.0 - flatten * 0.45)
                 let highlight = self.specular_strength * (0.45 * edge_gradient + 0.55 * edge + 0.30 * (1.0 - self.pos.y)) * (1.0 - flatten * 0.28) + ripple_highlight
-                let noise = (
-                    Math.random_2d(
-                        screen_pos + vec2(self.draw_pass.time * 31.0, self.draw_pass.time * 17.0)
-                    ) - 0.5
-                ) * self.noise_strength
+                // Static banding dither - see the note in GaussRoundedView's pixel().
+                let noise = (Math.random_2d(screen_pos) - 0.5) * self.noise_strength
                 let fill_alpha = mix(self.surface_alpha, 1.0, self.has_gauss)
                 let fill = vec4(material + highlight + sparkle + noise, fill_alpha)
 
@@ -608,11 +619,16 @@ impl GaussRoundedView {
         self.set_shader_uniform(cx, live_id!(lensing_effect), lensing_effect.clamp(0.0, 1.0));
     }
 
+    /// Drive the press/ripple response. `ripple_age` is elapsed seconds since the
+    /// press started (1000.0 = no ripple). The caller owns the clock and must only
+    /// keep ticking (NextFrame) while the ripple is live - the shader deliberately
+    /// does not read `draw_pass.time`, because that would pin the window at display
+    /// rate for as long as the glass is visible.
     pub fn set_press_response(
         &mut self,
         cx: &mut Cx,
         flatten: f32,
-        ripple_start: f32,
+        ripple_age: f32,
         ripple_strength: f32,
     ) {
         self.view.draw_bg.draw_vars.set_uniform(
@@ -623,7 +639,7 @@ impl GaussRoundedView {
         self.view
             .draw_bg
             .draw_vars
-            .set_uniform(cx, live_id!(ripple_start), &[ripple_start]);
+            .set_uniform(cx, live_id!(ripple_age), &[ripple_age]);
         self.view.draw_bg.draw_vars.set_uniform(
             cx,
             live_id!(ripple_strength),
@@ -634,11 +650,10 @@ impl GaussRoundedView {
             live_id!(press_flatten),
             &[flatten.clamp(-1.0, 1.0)],
         );
-        self.view.draw_bg.draw_vars.set_uniform_on_area(
-            cx,
-            live_id!(ripple_start),
-            &[ripple_start],
-        );
+        self.view
+            .draw_bg
+            .draw_vars
+            .set_uniform_on_area(cx, live_id!(ripple_age), &[ripple_age]);
         self.view.draw_bg.draw_vars.set_uniform_on_area(
             cx,
             live_id!(ripple_strength),
@@ -680,11 +695,11 @@ impl GaussRoundedViewRef {
         &self,
         cx: &mut Cx,
         flatten: f32,
-        ripple_start: f32,
+        ripple_age: f32,
         ripple_strength: f32,
     ) {
         if let Some(mut inner) = self.borrow_mut() {
-            inner.set_press_response(cx, flatten, ripple_start, ripple_strength);
+            inner.set_press_response(cx, flatten, ripple_age, ripple_strength);
         }
     }
 }

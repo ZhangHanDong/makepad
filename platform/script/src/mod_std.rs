@@ -1,6 +1,5 @@
 use crate::heap::*;
 use crate::makepad_live_id::live_id::*;
-use crate::makepad_live_id_macros::*;
 use crate::native::*;
 use crate::value::*;
 use crate::*;
@@ -71,10 +70,15 @@ pub fn define_std_module(heap: &mut ScriptHeap, native: &mut ScriptNative) {
                 })
                 .is_none()
             {
-                vm.bx.heap.temp_string_with(|heap, temp| {
-                    heap.cast_to_string(what, temp);
-                    print!("{}", temp)
-                });
+                let len = vm.bx.heap.cast_to_string_len(what);
+                let _ = vm.bx.heap.temp_string_with_preflight(
+                    len,
+                    "formatting print output",
+                    |heap, temp| {
+                        heap.cast_to_string(what, temp);
+                        print!("{}", temp)
+                    },
+                );
             }
             NIL
         },
@@ -93,14 +97,23 @@ pub fn define_std_module(heap: &mut ScriptHeap, native: &mut ScriptNative) {
                 })
                 .is_none()
             {
-                let is_empty = vm.bx.heap.temp_string_with(|heap, temp| {
-                    heap.cast_to_string(what, temp);
-                    if temp.is_empty() {
-                        return true;
-                    }
-                    println!("{}", temp);
-                    false
-                });
+                let len = vm.bx.heap.cast_to_string_len(what);
+                let is_empty = vm
+                    .bx
+                    .heap
+                    .temp_string_with_preflight(
+                        len,
+                        "formatting println output",
+                        |heap, temp| {
+                            heap.cast_to_string(what, temp);
+                            if temp.is_empty() {
+                                return true;
+                            }
+                            println!("{}", temp);
+                            false
+                        },
+                    )
+                    .unwrap_or(false);
                 if is_empty {
                     return script_err_unexpected!(
                         vm.bx.threads.cur_ref().trap,

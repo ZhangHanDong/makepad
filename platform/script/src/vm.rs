@@ -114,6 +114,60 @@ impl std::fmt::Display for ScriptLoc {
 }
 
 impl ScriptCode {
+    /// The source text of the fn whose body starts at `ip` — the `fn` token's
+    /// line through the matching closing brace — plus where it lives. What
+    /// the design tweaker shows under a material well: the pixel/vertex
+    /// function as written, docs included, for a code-only rewrite.
+    pub fn fn_source_text(&self, ip: ScriptIp) -> Option<(ScriptLoc, String)> {
+        let loc = self.ip_to_loc(ip)?;
+        let bodies = self.bodies.borrow();
+        let body = bodies.get(ip.body as usize)?;
+        let source_map = &body.parser.source_map;
+        // Synthetic opcodes map to no token; take the nearest mapped one on
+        // either side, as `ip_to_loc` does.
+        let ip_index = (ip.index as usize).min(source_map.len().saturating_sub(1));
+        let token_index = (0..=ip_index)
+            .rev()
+            .find_map(|i| source_map.get(i).and_then(|slot| *slot))
+            .or_else(|| {
+                ((ip_index + 1)..source_map.len()).find_map(|i| source_map.get(i).and_then(|slot| *slot))
+            })?;
+        let (row, _col) = body.tokenizer.token_index_to_row_col(token_index)?;
+        let code = &body.effective_code;
+        let lines: Vec<&str> = code.split_inclusive('\n').collect();
+        // The ip maps to a token INSIDE the fn; walk back to the header line
+        // (the nearest line above holding `fn`), then take from there to the
+        // matching closing brace.
+        let mut header = (row as usize).min(lines.len().saturating_sub(1));
+        while header > 0 && !lines[header].contains("fn") {
+            header -= 1;
+        }
+        let start: usize = lines[..header].iter().map(|l| l.len()).sum();
+        let rest = &code[start.min(code.len())..];
+        // From the first `{` after the fn header to its matching `}`.
+        let open = rest.find('{')?;
+        let mut depth = 0i32;
+        let mut end = None;
+        for (i, ch) in rest[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end?;
+        // Include the header line (e.g. `pixel: fn() {`) from its own start.
+        let line_start = rest[..open].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let text = rest[line_start..end].to_string();
+        Some((loc, text))
+    }
+
     pub fn ip_to_loc(&self, ip: ScriptIp) -> Option<ScriptLoc> {
         if let Some(body) = self.bodies.borrow().get(ip.body as usize) {
             let source_map = &body.parser.source_map;
@@ -207,8 +261,7 @@ impl<'a> ScriptVm<'a> {
             .threads
             .cur()
             .trap
-            .on
-            .set(Some(ScriptTrapOn::Bail(err)));
+            .set_on(Some(ScriptTrapOn::Bail(err)));
     }
 
     pub fn with_instruction_limit<R>(
@@ -217,16 +270,61 @@ impl<'a> ScriptVm<'a> {
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
         let previous_remaining = self.bx.threads.cur_ref().instruction_limit_remaining;
-        self.bx.threads.cur().instruction_limit_remaining = Some(
-            previous_remaining
-                .map(|remaining| remaining.min(instruction_limit))
-                .unwrap_or(instruction_limit),
-        );
+        let applied = previous_remaining
+            .map(|remaining| remaining.min(instruction_limit))
+            .unwrap_or(instruction_limit);
+        self.bx.threads.cur().instruction_limit_remaining = Some(applied);
+        // If f() runs no script at all, exit_remaining is never written —
+        // seed it so consumed reads 0 in that case.
+        self.bx.last_limit_exit_remaining = applied;
         let result = f(self);
+        // Record what this call actually charged: hosts running several
+        // calls against ONE cumulative budget (e.g. a game tick where
+        // on_tick + timers + touch events share a pool) read it back via
+        // last_limit_consumed and shrink the next call's limit accordingly.
+        // A completed run wipes the thread's remaining to None (Return/Bail
+        // in handle_trap_on), which stashes it in last_limit_exit_remaining.
+        let remaining_now = self
+            .bx
+            .threads
+            .cur_ref()
+            .instruction_limit_remaining
+            .unwrap_or(self.bx.last_limit_exit_remaining);
+        self.bx.last_limit_consumed = applied.saturating_sub(remaining_now);
         if !self.bx.threads.cur_ref().is_paused() {
             self.bx.threads.cur().instruction_limit_remaining = previous_remaining;
         }
         result
+    }
+
+    /// Run one untrusted evaluation/callback under a logical heap-allocation
+    /// ceiling. The default VM has no ceiling; callers opt in explicitly, so
+    /// trusted widget, shader and Studio script execution is unchanged.
+    ///
+    /// Container growth is charged before allocation. If a script exceeds
+    /// the allowance, the current run bails with a captured `script limit`
+    /// error instead of attempting the allocation. The report lets a host
+    /// share one cumulative allowance across several callbacks in a tick.
+    pub fn with_heap_allocation_limit<R>(
+        &mut self,
+        allocation_limit: usize,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, ScriptAllocationReport) {
+        let previous = self.bx.heap.begin_allocation_budget(allocation_limit);
+        let result = f(self);
+        // Parser/native work can be the last action in `f`, with no following
+        // opcode for run_core's poll. Surface that pending refusal here too.
+        if let Some(message) = self.bx.heap.take_allocation_error() {
+            let _ = script_err_limit!(self.bx.threads.cur_ref().trap, "{}", message);
+            self.drain_errors();
+        }
+        let report = self.bx.heap.end_allocation_budget(previous);
+        (result, report)
+    }
+
+    /// Instructions charged by the most recent `with_instruction_limit` call.
+    pub fn last_limit_consumed(&self) -> usize {
+        self.bx.last_limit_consumed
     }
 
     pub fn heap(&self) -> &ScriptHeap {
@@ -242,13 +340,35 @@ impl<'a> ScriptVm<'a> {
         self.bx.heap.println(value.into());
     }
 
-    /// Run garbage collection (mark and sweep), only logs if it takes >1ms.
+    /// Run garbage collection (mark and sweep). Deliberately does NOT return
+    /// backing capacity to the allocator: routine GC (paint loop, isolate
+    /// round-robin) refills the free lists at the same rate, and repeated
+    /// shrink/regrow churn costs more than the high-water memory it saves.
     pub fn gc(&mut self) {
         self.bx.heap.mark(&self.bx.threads, &self.bx.code);
         self.bx.heap.sweep(false);
-        // Return memory held purely for reuse/over-allocation after the sweep (safe: no live
-        // slot is moved or removed). gc() is itself gated by `needs_gc()`, so this is rare.
+    }
+
+    /// [`Self::gc`] plus returning over-allocated backing capacity (safe: no
+    /// live slot is moved or removed). Call after a known allocation spike —
+    /// a world teardown, an eval reset — not on the routine GC cadence.
+    pub fn gc_and_compact(&mut self) {
+        self.gc();
         self.bx.heap.shrink_to_fit();
+    }
+
+    /// Free a host-created transient value (a per-call args container, a
+    /// per-tick input object) immediately instead of leaving it for GC. Safe
+    /// by construction: if the script retained the value, the escape barrier
+    /// (`ScriptHeap::escape_value`) tagged it REFFED and this is a no-op —
+    /// normal GC handles it. Two caveats for hosts: (1) values bound as fn
+    /// args of a call that PAUSED are still live in the paused scope without
+    /// being REFFED — only release after the call completed unpaused (check
+    /// `vm.thread().is_paused()`); (2) values stored via the `*_unchecked`
+    /// heap fns bypass the barrier — releasing those is the host's own
+    /// responsibility.
+    pub fn release_transient(&mut self, v: ScriptValue) {
+        self.bx.heap.free_value_if_unreffed(v);
     }
 
     /// Run garbage collection with status logging.
@@ -345,10 +465,16 @@ impl<'a> ScriptVm<'a> {
                     let result = unsafe { (*func_ptr)(self, scope) };
                     // Only unpause if native didn't explicitly pause (via pause() which sets trap.on to Pause)
                     if !matches!(
-                        self.bx.threads.cur().trap.on.get(),
+                        self.bx.threads.cur().trap.get_on(),
                         Some(ScriptTrapOn::Pause)
                     ) {
                         self.bx.threads.cur().is_paused = false;
+                        // Eager-free the call scope (same contract as
+                        // handle_call_exec): a native that stored or returned
+                        // it left it REFFED / guarded.
+                        if result.as_object() != Some(scope) {
+                            self.bx.heap.free_object_if_unreffed(scope);
+                        }
                     }
                     return result;
                 }
@@ -357,6 +483,7 @@ impl<'a> ScriptVm<'a> {
                         bases: self.bx.threads.cur_ref().new_bases(),
                         args: OpcodeArgs::default(),
                         return_ip: None,
+                        prev_slot_base: self.bx.threads.cur_ref().slot_base,
                     };
                     self.bx.threads.cur().scopes.push(scope);
                     self.bx.threads.cur().calls.push(call);
@@ -517,7 +644,7 @@ impl<'a> ScriptVm<'a> {
     pub fn take_errors(&mut self) -> Vec<String> {
         let mut out = std::mem::take(&mut self.bx.captured_errors).unwrap_or_default();
         loop {
-            let err = self.bx.threads.cur().trap.err.borrow_mut().pop_front();
+            let err = self.bx.threads.cur().trap.err_pop_front();
             let Some(err) = err else {
                 break;
             };
@@ -536,7 +663,7 @@ impl<'a> ScriptVm<'a> {
     /// would otherwise be dropped as meaningless-mid-stream.
     pub fn drain_errors(&mut self) {
         loop {
-            let err = self.bx.threads.cur().trap.err.borrow_mut().pop_front();
+            let err = self.bx.threads.cur().trap.err_pop_front();
             if let Some(err) = err {
                 if self.bx.captured_errors.is_some() {
                     let formatted = self.format_error(&err);
@@ -594,7 +721,7 @@ impl<'a> ScriptVm<'a> {
     fn handle_errors(&mut self) {
         if self.bx.threads.cur().call_has_try() {
             // pop all errors
-            self.bx.threads.cur().trap.err.borrow_mut().clear();
+            self.bx.threads.cur().trap.err_clear();
             let try_frame = self.bx.threads.cur().tries.pop().unwrap();
             self.bx
                 .threads
@@ -632,13 +759,17 @@ impl<'a> ScriptVm<'a> {
     }
 
     fn handle_trap_on(&mut self) -> Option<ScriptValue> {
-        if self.bx.threads.cur().trap.on.get().is_none() {
+        if self.bx.threads.cur().trap.on_is_none() {
             return None;
         }
-        Some(match self.bx.threads.cur().trap.on.take().unwrap() {
+        Some(match self.bx.threads.cur().trap.take_on().unwrap() {
             ScriptTrapOn::Pause | ScriptTrapOn::TimeBudgetYield => NIL,
             ScriptTrapOn::Return(value) => {
-                self.bx.threads.cur().instruction_limit_remaining = None;
+                // Preserve the remaining allowance for consumption accounting
+                // (with_instruction_limit reads it after the None wipe).
+                if let Some(rem) = self.bx.threads.cur().instruction_limit_remaining.take() {
+                    self.bx.last_limit_exit_remaining = rem;
+                }
                 value
             }
             ScriptTrapOn::Bail(value) => {
@@ -646,6 +777,7 @@ impl<'a> ScriptVm<'a> {
                 // and truncate all stacks back to clean state.
                 loop {
                     if let Some(call) = self.bx.threads.cur().calls.pop() {
+                        self.bx.threads.cur().slot_base = call.prev_slot_base;
                         self.bx
                             .threads
                             .cur()
@@ -657,7 +789,9 @@ impl<'a> ScriptVm<'a> {
                         break;
                     }
                 }
-                self.bx.threads.cur().instruction_limit_remaining = None;
+                if let Some(rem) = self.bx.threads.cur().instruction_limit_remaining.take() {
+                    self.bx.last_limit_exit_remaining = rem;
+                }
                 value
             }
         })
@@ -670,6 +804,26 @@ impl<'a> ScriptVm<'a> {
         let mut opcodes_len: usize = 0;
 
         loop {
+            // Heap growth paths cannot own the interpreter trap (many are
+            // shared with parsers/native bindings), so they record one hard
+            // refusal on the heap. Turn it into the same uncatchable Bail as
+            // the instruction ceiling before executing another opcode.
+            if let Some(message) = self.bx.heap.take_allocation_error() {
+                let err = script_err_limit!(
+                    self.bx.threads.cur_ref().trap,
+                    "{}",
+                    message
+                );
+                self.drain_errors();
+                self.bx
+                    .threads
+                    .cur()
+                    .trap
+                    .set_on(Some(ScriptTrapOn::Bail(err)));
+                if let Some(value) = self.handle_trap_on() {
+                    return value;
+                }
+            }
             let instruction_limit_exceeded = if let Some(remaining) =
                 self.bx.threads.cur().instruction_limit_remaining.as_mut()
             {
@@ -694,8 +848,7 @@ impl<'a> ScriptVm<'a> {
                     .threads
                     .cur()
                     .trap
-                    .on
-                    .set(Some(ScriptTrapOn::Bail(err)));
+                    .set_on(Some(ScriptTrapOn::Bail(err)));
                 if let Some(value) = self.handle_trap_on() {
                     return value;
                 }
@@ -709,8 +862,7 @@ impl<'a> ScriptVm<'a> {
                             .threads
                             .cur()
                             .trap
-                            .on
-                            .set(Some(ScriptTrapOn::TimeBudgetYield));
+                            .set_on(Some(ScriptTrapOn::TimeBudgetYield));
                     }
                     ScriptRunBudgetHit::Hard => {
                         let err = script_err_limit!(
@@ -721,8 +873,7 @@ impl<'a> ScriptVm<'a> {
                             .threads
                             .cur()
                             .trap
-                            .on
-                            .set(Some(ScriptTrapOn::Bail(err)));
+                            .set_on(Some(ScriptTrapOn::Bail(err)));
                     }
                 }
                 if let Some(value) = self.handle_trap_on() {
@@ -757,14 +908,26 @@ impl<'a> ScriptVm<'a> {
             // SAFETY: opcodes_ptr is valid as long as bodies isn't mutated during execution
             let opcode = unsafe { *opcodes_ptr.add(ip_index) };
 
+            if self.bx.debug_trace {
+                let stack_len = self.bx.threads.cur_ref().stack.len();
+                if let Some((op, a)) = opcode.as_opcode() {
+                    eprintln!("TRACE b{body_index} ip{ip_index} stack{stack_len} {op:?} {a:?}");
+                } else {
+                    eprintln!("TRACE b{body_index} ip{ip_index} stack{stack_len} PUSH {opcode:?}");
+                }
+            }
+
             if let Some((opcode, args)) = opcode.as_opcode() {
                 self.opcode(opcode, args);
-                // if exception tracing - is_empty() is faster than len()>0
-                if !self.bx.threads.cur().trap.err.borrow().is_empty() {
-                    self.handle_errors();
-                }
-                if let Some(value) = self.handle_trap_on() {
-                    return value;
+                // single-load poll for both interrupt sources (errors + traps)
+                let pending = self.bx.threads.cur().trap.pending();
+                if pending != 0 {
+                    if pending & crate::trap::TRAP_PENDING_ERR != 0 {
+                        self.handle_errors();
+                    }
+                    if let Some(value) = self.handle_trap_on() {
+                        return value;
+                    }
                 }
             } else {
                 // its a direct value-to-stack
@@ -784,6 +947,8 @@ impl<'a> ScriptVm<'a> {
             )
         };
 
+        let root_slots = self.bx.threads.cur_ref().slots.len();
+        let root_slot_base = self.bx.threads.cur_ref().slot_base;
         self.bx.threads.cur().calls.push(CallFrame {
             bases: StackBases {
                 tries: 0,
@@ -791,9 +956,13 @@ impl<'a> ScriptVm<'a> {
                 stack: 0,
                 scope: 0,
                 mes: 0,
+                // unlike the other zeroed bases, never truncate slots below
+                // what an enclosing (paused/re-entrant) frame allocated
+                slots: root_slots,
             },
             args: Default::default(),
             return_ip: None,
+            prev_slot_base: root_slot_base,
         });
 
         self.bx.threads.cur().scopes.push(scope);
@@ -820,7 +989,7 @@ impl<'a> ScriptVm<'a> {
                 let result = unsafe { (*func_ptr)(self, obj) };
                 // Only unpause if native didn't explicitly pause
                 if !matches!(
-                    self.bx.threads.cur().trap.on.get(),
+                    self.bx.threads.cur().trap.get_on(),
                     Some(ScriptTrapOn::Pause)
                 ) {
                     self.bx.threads.cur().is_paused = false;
@@ -843,7 +1012,7 @@ impl<'a> ScriptVm<'a> {
                 let result = unsafe { (*func_ptr)(self, args_obj) };
                 // Only unpause if native didn't explicitly pause
                 if !matches!(
-                    self.bx.threads.cur().trap.on.get(),
+                    self.bx.threads.cur().trap.get_on(),
                     Some(ScriptTrapOn::Pause)
                 ) {
                     self.bx.threads.cur().is_paused = false;
@@ -1022,6 +1191,13 @@ impl<'a> ScriptVm<'a> {
     }
 
     pub fn new_string_with<F: FnOnce(&mut Self, &mut String)>(&mut self, f: F) -> ScriptValue {
+        if self.bx.heap.has_allocation_budget() {
+            let _ = self.bx.heap.charge_allocation(
+                usize::MAX,
+                "building a native string without an allocation preflight",
+            );
+            return NIL;
+        }
         let mut out = if let Some(s) = self.bx.heap.strings_reuse.pop() {
             s
         } else {
@@ -1204,7 +1380,14 @@ impl<'a> ScriptVm<'a> {
                 );
                 body.source_len = body.effective_code.len();
             }
+            // Parse errors never enter the trap queue (the parser recovers);
+            // surface them to a captured-diagnostics sink here or a validating
+            // host reports success for a script that failed to parse.
+            let parse_errors = std::mem::take(&mut body.parser.parse_errors);
             drop(bodies);
+            if let Some(sink) = self.bx.captured_errors.as_mut() {
+                sink.extend(parse_errors);
+            }
             // lets point our thread to it
             let result = self.run_root(body_id);
             // Mark the result object with FROM_EVAL flag
@@ -1307,6 +1490,7 @@ impl<'a> ScriptVm<'a> {
             let unfinished = body.tokenizer.intern_unfinished_string(&mut self.bx.heap);
 
             // Incremental parse: continue from checkpoint, auto-close for execution
+            let errors_before = body.parser.parse_errors.len();
             let cp = body.parser.parse_streaming(
                 &body.tokenizer,
                 &existing_mod.file,
@@ -1317,7 +1501,20 @@ impl<'a> ScriptVm<'a> {
 
             body.checkpoint = Some(cp);
 
+            // A host that installed a captured-error sink is running a GAME
+            // eval and needs structural parse errors to FAIL it — the
+            // tolerant recovery otherwise runs something else entirely
+            // (`let loop` recovered into an infinite empty loop and burned
+            // the instruction budget). Live-typing paths install no sink and
+            // keep the log-only tolerance.
+            let new_parse_errors: Vec<String> =
+                body.parser.parse_errors[errors_before.min(body.parser.parse_errors.len())..]
+                    .to_vec();
+
             drop(bodies);
+            if let Some(sink) = &mut self.bx.captured_errors {
+                sink.extend(new_parse_errors);
+            }
             // Silence runtime errors during incremental eval — incomplete code
             // will inevitably produce errors that are meaningless until the
             // source is fully received.
@@ -1349,6 +1546,12 @@ pub struct ScriptVmBase {
     /// agent editing the script live).
     pub captured_errors: Option<Vec<String>>,
     pub run_budget: Option<ScriptRunBudget>,
+    /// Instructions charged by the most recent with_instruction_limit call
+    /// (see ScriptVm::last_limit_consumed).
+    pub last_limit_consumed: usize,
+    /// The thread's remaining allowance at Return/Bail, stashed because
+    /// handle_trap_on wipes instruction_limit_remaining to None on exit.
+    pub last_limit_exit_remaining: usize,
 }
 
 impl ScriptVmBase {
@@ -1364,6 +1567,8 @@ impl ScriptVmBase {
             silence_errors: false,
             captured_errors: None,
             run_budget: None,
+            last_limit_consumed: 0,
+            last_limit_exit_remaining: 0,
         }
     }
 
@@ -1397,6 +1602,8 @@ impl ScriptVmBase {
             silence_errors: false,
             captured_errors: None,
             run_budget: None,
+            last_limit_consumed: 0,
+            last_limit_exit_remaining: 0,
         }
     }
 }
@@ -1438,5 +1645,55 @@ mod tests {
                 idx
             );
         }
+    }
+
+    fn parse_reports_error(code: &str) -> bool {
+        let mut bx = ScriptVmBase::new();
+        let mut tokenizer = ScriptTokenizer::default();
+        // Production eval appends "\n;" so the tail statement finalizes
+        // (the streaming parser only closes a statement on the next token);
+        // mirror that here or emit-time checks never run for the last line.
+        let code = format!("{}\n;", code);
+        tokenizer.tokenize(&code, &mut bx.heap);
+        let mut parser = ScriptParser::default();
+        parser.parse(&tokenizer, "reserved_binding_test", (0, 0), &[]);
+        parser.had_error
+    }
+
+    #[test]
+    fn reserved_words_cannot_be_bound() {
+        // let / var
+        assert!(parse_reports_error("let me = 1"));
+        assert!(parse_reports_error("let self = 1"));
+        assert!(parse_reports_error("let scope = 1"));
+        assert!(parse_reports_error("let nil = 1"));
+        assert!(parse_reports_error("let true = 1"));
+        assert!(parse_reports_error("let for = 1"));
+        assert!(parse_reports_error("var me = 1"));
+        // fn / closure argument names
+        assert!(parse_reports_error("let f = |me| me"));
+        assert!(parse_reports_error("let f = |x, self| x"));
+        assert!(parse_reports_error("fn f(me) { }"));
+        // for-loop variables
+        assert!(parse_reports_error("for me in [1] { }"));
+        assert!(parse_reports_error("for k, self in [1] { }"));
+        // destructuring patterns
+        assert!(parse_reports_error("let [me] = [1]"), "array simple");
+        assert!(parse_reports_error("let {a, me} = {x: 1}"), "object multi");
+        assert!(parse_reports_error("let {me} = {x: 1}"), "object single");
+        assert!(parse_reports_error("let [nil] = [1]"));
+        assert!(parse_reports_error("let [a, [me]] = [1, [2]]"));
+    }
+
+    #[test]
+    fn reserved_words_still_read_and_normal_names_bind() {
+        // Reading the implicits stays legal — only BINDING them errors.
+        assert!(!parse_reports_error("let hero = 1"));
+        assert!(!parse_reports_error("let x = me"));
+        assert!(!parse_reports_error("let f = |dt, input| dt"));
+        assert!(!parse_reports_error("for k, v in [1] { }"));
+        assert!(!parse_reports_error("let {x} = {x: 1}"));
+        // `me:` as an OBJECT KEY is data, not a binding.
+        assert!(!parse_reports_error("let o = {me: 1}"));
     }
 }

@@ -131,9 +131,11 @@ script_mod! {
             }
 
             hsv2rgb: fn(c: vec4) -> vec4 { //http://gamedev.stackexchange.com/questions/59797/glsl-shader-change-hue-saturation-brightness
+                // clamp/mix take matching vector args here: the script
+                // shader's builtins (and WGSL) do not splat scalar bounds.
                 let K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
                 let p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-                return vec4(c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y), c.w);
+                return vec4(c.z * mix(K.xxx, clamp(p - K.xxx, vec3(0.0), vec3(1.0)), c.y), c.w);
             }
 
             rgb2hsv: fn(c: vec4) -> vec4 {
@@ -368,17 +370,27 @@ script_mod! {
                 self.shape = min(self.shape, self.dist);
             }
 
-            arc2: fn(x: float, y: float, r: float, s:float, e:float)->vec4{
+            // A circular arc segment of the current path. Unlike arc_round_caps/
+            // arc_flat_caps, this adds the distance to the bare arc centerline
+            // (no baked thickness), so it chains after move_to/line_to and is
+            // covered by a single stroke. Angles are in radians, 0 = +x axis;
+            // end_angle may be less than start_angle (sweep follows the sign) and
+            // last_pos advances to the arc end so a following line_to connects.
+            arc_to: fn(x: float, y: float, r: float, start_angle: float, end_angle: float) {
                 let c = self.pos - vec2(x, y);
-                let pi = 3.141592653589793; // FIX THIS BUG
-
-                //let circle = (sqrt(c.x * c.x + c.y * c.y) - r)*ang;
-
-                // ok lets do atan2
-                let ang = (atan(c.y,c.x)+pi)/(2.0*pi);
-                let ces = (e-s)*0.5;
-                let ang2 = 1.0 - abs(ang - ces)+ces
-                return mix(vec4(0.,0.,0.,1.0),vec4(1.0),ang2);
+                let ring = abs(length(c) - r);
+                let ang = atan2(c.y, c.x);
+                let sweep = end_angle - start_angle;
+                // rel = angular distance from start_angle along the sweep, 0..TAU
+                let rel = fract((ang - start_angle) * sign(sweep) / TAU) * TAU;
+                let on = step(rel, abs(sweep));
+                let ps = vec2(x, y) + r * vec2(cos(start_angle), sin(start_angle));
+                let pe = vec2(x, y) + r * vec2(cos(end_angle), sin(end_angle));
+                let ends = min(length(self.pos - ps), length(self.pos - pe));
+                self.dist = mix(ends, ring, on) / self.scale_factor;
+                self.old_shape = self.shape;
+                self.shape = min(self.shape, self.dist);
+                self.last_pos = pe;
             }
 
 
@@ -392,8 +404,12 @@ script_mod! {
             box: fn(x: float, y: float, w: float, h: float, r: float) {
                 let p = self.pos - vec2(x, y);
                 let size = vec2(0.5 * w, 0.5 * h);
-                let bp = max(abs(p - size.xy) - (size.xy - vec2(2. * r, 2. * r).xy), vec2(0., 0.));
-                self.dist = (length(bp) - 2. * r) / self.scale_factor;
+                // The effective visual radius is 2*r. Clamp it to the half-size:
+                // past that the SDF used to degenerate into a rotated diamond
+                // (e.g. a 22px disc with r=11), instead of saturating at a circle.
+                let k = min(2. * r, min(size.x, size.y));
+                let bp = max(abs(p - size.xy) - (size.xy - vec2(k, k).xy), vec2(0., 0.));
+                self.dist = (length(bp) - k) / self.scale_factor;
                 self.old_shape = self.shape;
                 self.shape = min(self.shape, self.dist);
             }
@@ -403,14 +419,19 @@ script_mod! {
                 let p_r = self.pos - vec2(x, y);
                 let p = abs(p_r - size.xy) - size.xy;
 
-                let bp_top = max(p + vec2(2. * r_top, 2. * r_top).xy, vec2(0., 0.));
-                let bp_bottom = max(p + vec2(2. * r_bottom, 2. * r_bottom).xy, vec2(0., 0.));
+                // Clamp each (doubled) radius to the half-size so oversized radii
+                // saturate at a capsule instead of degenerating into a diamond.
+                let k_top = min(2. * r_top, min(size.x, size.y));
+                let k_bottom = min(2. * r_bottom, min(size.x, size.y));
+                let q_top = p + vec2(k_top, k_top).xy;
+                let q_bottom = p + vec2(k_bottom, k_bottom).xy;
 
-                self.dist = mix(
-                    (length(bp_top) - 2. * r_top),
-                    (length(bp_bottom) - 2. * r_bottom),
-                    step(0.5 * h, p_r.y)
-                ) / self.scale_factor;
+                // The min(max(q.x,q.y),0) interior term keeps the field continuous; without it
+                // the interior dist was -2r, so switching radius at the midpoint left a coverage seam.
+                let dist_top = min(max(q_top.x, q_top.y), 0.) + length(max(q_top, vec2(0., 0.))) - k_top;
+                let dist_bottom = min(max(q_bottom.x, q_bottom.y), 0.) + length(max(q_bottom, vec2(0., 0.))) - k_bottom;
+
+                self.dist = mix(dist_top, dist_bottom, step(0.5 * h, p_r.y)) / self.scale_factor;
 
                 self.old_shape = self.shape;
                 self.shape = min(self.shape, self.dist);
@@ -421,12 +442,16 @@ script_mod! {
                 let p_r = self.pos - vec2(x, y);
                 let p = abs(p_r - size.xy) - size.xy;
 
-                let bp_left = max(p + vec2(2. * r_left, 2. * r_left).xy, vec2(0., 0.));
-                let bp_right = max(p + vec2(2. * r_right, 2. * r_right).xy, vec2(0., 0.));
+                // Clamp each (doubled) radius to the half-size so oversized radii
+                // saturate at a capsule instead of degenerating into a diamond.
+                let k_left = min(2. * r_left, min(size.x, size.y));
+                let k_right = min(2. * r_right, min(size.x, size.y));
+                let bp_left = max(p + vec2(k_left, k_left).xy, vec2(0., 0.));
+                let bp_right = max(p + vec2(k_right, k_right).xy, vec2(0., 0.));
 
                 self.dist = mix(
-                    (length(bp_left) - 2. * r_left),
-                    (length(bp_right) - 2. * r_right),
+                    (length(bp_left) - k_left),
+                    (length(bp_right) - k_right),
                     step(0.5 * w, p_r.x)
                 ) / self.scale_factor;
 
@@ -448,20 +473,26 @@ script_mod! {
                 let p_r = self.pos - vec2(x, y);
                 let p = abs(p_r - size.xy) - size.xy;
 
-                let bp_lt = max(p + vec2(2. * r_left_top, 2. * r_left_top).xy, vec2(0., 0.));
-                let bp_rt = max(p + vec2(2. * r_right_top, 2. * r_right_top).xy, vec2(0., 0.));
-                let bp_rb = max(p + vec2(2. * r_right_bottom, 2. * r_right_bottom).xy, vec2(0., 0.));
-                let bp_lb = max(p + vec2(2. * r_left_bottom, 2. * r_left_bottom).xy, vec2(0., 0.));
+                // Clamp each (doubled) radius to the half-size so oversized radii
+                // saturate instead of degenerating into a diamond.
+                let k_lt = min(2. * r_left_top, min(size.x, size.y));
+                let k_rt = min(2. * r_right_top, min(size.x, size.y));
+                let k_rb = min(2. * r_right_bottom, min(size.x, size.y));
+                let k_lb = min(2. * r_left_bottom, min(size.x, size.y));
+                let bp_lt = max(p + vec2(k_lt, k_lt).xy, vec2(0., 0.));
+                let bp_rt = max(p + vec2(k_rt, k_rt).xy, vec2(0., 0.));
+                let bp_rb = max(p + vec2(k_rb, k_rb).xy, vec2(0., 0.));
+                let bp_lb = max(p + vec2(k_lb, k_lb).xy, vec2(0., 0.));
 
                 self.dist = mix(
                     mix(
-                        (length(bp_lt) - 2. * r_left_top),
-                        (length(bp_lb) - 2. * r_left_bottom),
+                        (length(bp_lt) - k_lt),
+                        (length(bp_lb) - k_lb),
                         step(0.5 * h, p_r.y)
                     ),
                     mix(
-                        (length(bp_rt) - 2. * r_right_top),
-                        (length(bp_rb) - 2. * r_right_bottom),
+                        (length(bp_rt) - k_rt),
+                        (length(bp_rb) - k_rb),
                         step(0.5 * h, p_r.y)
                     ),
                     step(0.5 * w, p_r.x)

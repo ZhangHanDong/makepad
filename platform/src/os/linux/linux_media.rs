@@ -18,7 +18,9 @@ impl Cx {
     pub(crate) fn handle_media_signals(&mut self) {
         let pulse_enabled = pulse_audio_enabled();
         let audio_first = self.os.media.alsa_audio.is_none()
-            || (pulse_enabled && self.os.media.pulse_audio.is_none());
+            || (pulse_enabled
+                && self.os.media.pulse_audio.is_none()
+                && !self.os.media.pulse_audio_unavailable);
         if audio_first || self.os.media.audio_change.check_and_clear() {
             // alright so. if we 'failed' opening a device here
             // what do we do. we could flag our device as 'failed' on the desc
@@ -30,14 +32,10 @@ impl Cx {
                 .unwrap()
                 .get_updated_descs();
             if pulse_enabled {
-                let descs2 = self
-                    .os
-                    .media
-                    .pulse_audio()
-                    .lock()
-                    .unwrap()
-                    .get_updated_descs();
-                descs.extend(descs2);
+                if let Some(pulse_audio) = self.os.media.pulse_audio() {
+                    let descs2 = pulse_audio.lock().unwrap().get_updated_descs();
+                    descs.extend(descs2);
+                }
             }
             self.call_event_handler(&Event::AudioDevices(AudioDevicesEvent { descs }));
         }
@@ -70,6 +68,9 @@ impl Cx {
 #[derive(Default)]
 pub struct CxLinuxMedia {
     pub(crate) pulse_audio: Option<Arc<Mutex<PulseAudioAccess>>>,
+    /// Set when connecting to a PulseAudio server failed, so we don't retry
+    /// (and re-log) on every audio device change on machines without one.
+    pub(crate) pulse_audio_unavailable: bool,
     pub(crate) alsa_audio: Option<Arc<Mutex<AlsaAudioAccess>>>,
     pub(crate) audio_change: SignalToUI,
     pub(crate) alsa_midi: Option<Arc<Mutex<AlsaMidiAccess>>>,
@@ -79,14 +80,17 @@ pub struct CxLinuxMedia {
 }
 
 impl CxLinuxMedia {
-    pub fn pulse_audio(&mut self) -> Arc<Mutex<PulseAudioAccess>> {
-        if self.pulse_audio.is_none() {
-            self.pulse_audio = Some(PulseAudioAccess::new(
+    /// Returns `None` when there is no usable PulseAudio server, in which case
+    /// audio runs through ALSA alone.
+    pub fn pulse_audio(&mut self) -> Option<Arc<Mutex<PulseAudioAccess>>> {
+        if self.pulse_audio.is_none() && !self.pulse_audio_unavailable {
+            self.pulse_audio = PulseAudioAccess::new(
                 self.audio_change.clone(),
                 &self.alsa_audio().lock().unwrap(),
-            ));
+            );
+            self.pulse_audio_unavailable = self.pulse_audio.is_none();
         }
-        self.pulse_audio.as_ref().unwrap().clone()
+        self.pulse_audio.clone()
     }
 
     pub fn alsa_audio(&mut self) -> Arc<Mutex<AlsaAudioAccess>> {
@@ -153,12 +157,9 @@ impl CxMediaApi for Cx {
             .unwrap()
             .use_audio_inputs(devices);
         if pulse_audio_enabled() {
-            self.os
-                .media
-                .pulse_audio()
-                .lock()
-                .unwrap()
-                .use_audio_inputs(devices);
+            if let Some(pulse_audio) = self.os.media.pulse_audio() {
+                pulse_audio.lock().unwrap().use_audio_inputs(devices);
+            }
         }
     }
 
@@ -170,16 +171,13 @@ impl CxMediaApi for Cx {
             .unwrap()
             .use_audio_outputs(devices);
         if pulse_audio_enabled() {
-            self.os
-                .media
-                .pulse_audio()
-                .lock()
-                .unwrap()
-                .use_audio_outputs(devices);
+            if let Some(pulse_audio) = self.os.media.pulse_audio() {
+                pulse_audio.lock().unwrap().use_audio_outputs(devices);
+            }
         }
     }
 
-    fn audio_output_box(&mut self, index: usize, f: AudioOutputFn) {
+    fn audio_output_box_os(&mut self, index: usize, f: AudioOutputFn) {
         *self.os.media.alsa_audio().lock().unwrap().audio_output_cb[index]
             .lock()
             .unwrap() = Some(f);
@@ -215,23 +213,57 @@ impl CxMediaApi for Cx {
         config: VideoEncoderConfig,
         f: VideoOutputFn,
     ) -> Result<(), VideoEncodeError> {
-        match config.source {
-            VideoEncodeSource::Camera { .. } => {
-                let camera = self.os.media.v4l2_camera();
-                let camera = camera.lock().unwrap();
-                *camera.video_encoder_config[index].lock().unwrap() = Some(config);
-                *camera.video_output_cb[index].lock().unwrap() = Some(f);
-                Ok(())
-            }
-            VideoEncodeSource::Texture { .. } => {
-                crate::error!("linux video texture source is not implemented");
-                Err(VideoEncodeError::UnsupportedSource)
-            }
-            VideoEncodeSource::CpuFrames { .. } => {
-                crate::error!("linux video cpu-frame source is not implemented");
-                Err(VideoEncodeError::UnsupportedSource)
-            }
+        let result = self
+            .os
+            .media
+            .v4l2_camera()
+            .lock()
+            .unwrap()
+            .configure_video_encoder(index, config, f);
+        if let Err(err) = result {
+            crate::error!("linux video_encoder_output_box failed: {:?}", err);
         }
+        result
+    }
+
+    fn video_encoder_push_frame(&mut self, index: usize, frame: CameraFrameRef<'_>) {
+        let Some(camera) = self.os.media.v4l2_camera.as_ref() else {
+            return;
+        };
+        camera.lock().unwrap().video_encoder_push_frame(index, frame);
+    }
+
+    fn video_encoder_capture_texture_frame(
+        &mut self,
+        index: usize,
+        timestamp_ns: u64,
+    ) -> Result<(), VideoEncodeError> {
+        let Some(opengl_cx) = self.os.opengl_cx.as_ref() else {
+            return Err(VideoEncodeError::EncoderNotStarted);
+        };
+        opengl_cx.make_current();
+        let gl = self.os.gl() as *const _;
+        self.os
+            .media
+            .v4l2_camera()
+            .lock()
+            .unwrap()
+            .video_encoder_capture_texture_frame(
+                index,
+                timestamp_ns,
+                unsafe { &*gl },
+                &mut self.textures,
+            )
+    }
+
+    fn video_encoder_request_keyframe(&mut self, index: usize) -> Result<(), VideoEncodeError> {
+        let Some(camera) = self.os.media.v4l2_camera.as_ref() else {
+            return Err(VideoEncodeError::EncoderNotStarted);
+        };
+        camera
+            .lock()
+            .unwrap()
+            .video_encoder_request_keyframe(index)
     }
 
     fn video_capabilities(&self) -> VideoCapabilities {

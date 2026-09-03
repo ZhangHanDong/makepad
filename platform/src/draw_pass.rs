@@ -11,11 +11,69 @@ use crate::{
     texture::Texture,
     window::WindowId,
 };
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
+
+#[derive(Clone, Default)]
+pub(crate) struct GpuTimeQuery {
+    samples_ms: Arc<Mutex<VecDeque<(u64, f64)>>>,
+    /// App-owned label for the pass content, captured at ENCODE time into
+    /// each completion sample. A pass replays on every window repaint, not
+    /// only when its owner rebuilt it, so completed durations cannot be
+    /// matched to submissions by arrival order — the tag travels with the
+    /// command buffer instead.
+    tag: Arc<AtomicU64>,
+}
+
+// Only backends that report command-buffer timing (Metal today) call the
+// recording half; the other backends still compile it.
+#[allow(dead_code)]
+impl GpuTimeQuery {
+    pub(crate) fn record_seconds_tagged(&self, tag: u64, seconds: f64) {
+        let ms = seconds * 1000.0;
+        if !ms.is_finite() || ms < 0.0 {
+            return;
+        }
+        let mut samples = self
+            .samples_ms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if samples.len() == 1024 {
+            samples.pop_front();
+        }
+        samples.push_back((tag, ms));
+    }
+
+    pub(crate) fn set_tag(&self, tag: u64) {
+        self.tag.store(tag, Ordering::Relaxed);
+    }
+
+    pub(crate) fn current_tag(&self) -> u64 {
+        self.tag.load(Ordering::Relaxed)
+    }
+
+    fn take_samples(&self) -> Vec<f64> {
+        self.take_tagged_samples().into_iter().map(|(_, ms)| ms).collect()
+    }
+
+    fn take_tagged_samples(&self) -> Vec<(u64, f64)> {
+        self.samples_ms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .drain(..)
+            .collect()
+    }
+}
 
 #[derive(Debug)]
 pub struct DrawPass(PoolId);
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DrawPassId(pub(crate) usize);
 
 #[derive(Default)]
@@ -204,6 +262,12 @@ impl DrawPass {
         &cxpass.debug_name
     }
 
+    /// This pass re-encodes whenever its consumer repaints (see
+    /// `CxDrawPass::live_with_parent`).
+    pub fn set_live_with_parent(&self, cx: &mut Cx, on: bool) {
+        cx.passes[self.draw_pass_id()].live_with_parent = on;
+    }
+
     pub fn set_size(&self, cx: &mut Cx, pass_size: Vec2d) {
         let mut pass_size = pass_size;
         if pass_size.x < 1.0 {
@@ -328,6 +392,45 @@ impl DrawPass {
         let cxpass = &mut cx.passes[self.draw_pass_id()];
         cxpass.dpi_factor = Some(dpi);
     }
+
+    /// Enable asynchronous backend GPU timing for this pass. Metal records
+    /// the command buffer's GPUStartTime/GPUEndTime; unsupported backends
+    /// simply leave the sample queue empty.
+    pub fn set_gpu_timing_enabled(&self, cx: &mut Cx, enabled: bool) {
+        let pass = &mut cx.passes[self.draw_pass_id()];
+        if enabled {
+            pass.gpu_time_query.get_or_insert_with(GpuTimeQuery::default);
+        } else {
+            pass.gpu_time_query = None;
+        }
+    }
+
+    /// Drain completed command-buffer durations without blocking for work
+    /// that is still in flight.
+    pub fn take_gpu_times_ms(&self, cx: &Cx) -> Vec<f64> {
+        cx.passes[self.draw_pass_id()]
+            .gpu_time_query
+            .as_ref()
+            .map_or_else(Vec::new, GpuTimeQuery::take_samples)
+    }
+
+    /// Label the pass's CURRENT content; every completion sample encoded
+    /// from now on carries this tag (`take_gpu_time_samples`). Repaints
+    /// replay a pass without its owner rebuilding it, so arrival order can
+    /// never identify what a duration measured — the tag can.
+    pub fn set_gpu_time_tag(&self, cx: &Cx, tag: u64) {
+        if let Some(q) = cx.passes[self.draw_pass_id()].gpu_time_query.as_ref() {
+            q.set_tag(tag);
+        }
+    }
+
+    /// Drain completed (tag, duration ms) samples.
+    pub fn take_gpu_time_samples(&self, cx: &Cx) -> Vec<(u64, f64)> {
+        cx.passes[self.draw_pass_id()]
+            .gpu_time_query
+            .as_ref()
+            .map_or_else(Vec::new, GpuTimeQuery::take_tagged_samples)
+    }
 }
 
 #[derive(Clone)]
@@ -416,12 +519,21 @@ pub struct CxDrawPass {
     pub main_draw_list_id: Option<DrawListId>,
     pub parent: CxDrawPassParent,
     pub paint_dirty: bool,
+    /// Opt-in liveness: when this pass's CONSUMER (its parent) repaints,
+    /// this pass re-encodes too. The gauss blur chain lives on it — glass
+    /// blurs the world in realtime instead of holding the last rebuild —
+    /// while texture caches, which exist to NOT re-render, stay untouched.
+    pub live_with_parent: bool,
     pub pass_rect: Option<CxDrawPassRect>,
     pub view_shift: Vec2d,
     pub view_scale: Vec2d,
     pub pass_uniforms: DrawPassUniforms,
     pub zbias_step: f32,
+    /// Set while the F10 exploded z-layer view is up on this pass; `None` is
+    /// ordinary flat 2D and leaves `camera_view` the identity it always was.
+    pub sploded: Option<crate::sploded::SplodedParams>,
     pub os: CxOsPass,
+    pub(crate) gpu_time_query: Option<GpuTimeQuery>,
 }
 
 impl Default for CxDrawPass {
@@ -432,6 +544,7 @@ impl Default for CxDrawPass {
             keep_camera_matrix: false,
             debug_name: String::new(),
             zbias_step: 0.001,
+            sploded: None,
             pass_uniforms: DrawPassUniforms::default(),
             color_textures: Vec::new(),
             depth_texture: None,
@@ -444,8 +557,10 @@ impl Default for CxDrawPass {
             view_scale: dvec2(1.0, 1.0),
             parent: CxDrawPassParent::None,
             paint_dirty: false,
+            live_with_parent: false,
             pass_rect: None,
             os: CxOsPass::default(),
+            gpu_time_query: None,
         }
     }
 }
@@ -485,7 +600,14 @@ impl CxDrawPass {
             1.0,
         );
         self.pass_uniforms.camera_projection = ortho;
-        self.pass_uniforms.camera_view = Mat4f::identity();
+        // The exploded z-layer view is exactly this one substitution: every 2D
+        // vertex ends in `camera_projection * (camera_view * world)`, so a
+        // non-identity `camera_view` tilts the whole window's draw-call stack
+        // without a single shader edit. See `crate::sploded`.
+        self.pass_uniforms.camera_view = match &self.sploded {
+            Some(params) => params.camera_view(offset, size),
+            None => Mat4f::identity(),
+        };
         // Regular 2D passes don't participate in XR scene-depth clipping.
         self.pass_uniforms.depth_projection = zero;
         self.pass_uniforms.depth_projection_r = zero;

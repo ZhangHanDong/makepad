@@ -27,6 +27,8 @@ script_mod! {
             focus: instance(0.0)
             disabled: instance(0.0)
 
+            ink_centered: true
+
             color_dither: uniform(1.0)
             gradient_fill_horizontal: uniform(0.0)
 
@@ -241,13 +243,15 @@ impl Widget for LinkLabel {
                 let trap = vm.bx.threads.cur().trap.pass();
                 let value = vm.bx.heap.vec_value(args_obj, 0, trap);
                 if !value.is_err() {
-                    let new_text = vm.bx.heap.temp_string_with(|heap, out| {
-                        heap.cast_to_string(value, out);
-                        out.to_string()
-                    });
-                    vm.with_cx_mut(|cx| {
-                        self.set_text(cx, &new_text);
-                    });
+                    if let Some(new_text) = vm
+                        .bx
+                        .heap
+                        .cast_to_owned_string(value, "copying link label text")
+                    {
+                        vm.with_cx_mut(|cx| {
+                            self.set_text(cx, &new_text);
+                        });
+                    }
                 }
             }
             return ScriptAsyncResult::Return(NIL);

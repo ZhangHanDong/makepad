@@ -326,8 +326,24 @@ fn has_explicit_lib_target(cargo_toml: &str, crate_dir: &Path) -> bool {
             .any(|line| line.trim_start().starts_with("[lib]"))
 }
 
+/// Turn a filesystem path into a Cargo.toml-friendly string.
+///
+/// On Windows, `Path::canonicalize()` often returns extended/verbatim paths
+/// (`\\?\C:\...`, `\\?\D:\...`, or `\\?\UNC\server\share\...`). Those prefixes
+/// are for Win32 APIs (bypass MAX_PATH); Cargo/TOML `path = "..."` does not
+/// accept them. Strip the prefix (any drive letter is left intact), keep UNC as
+/// `\\server\...`, then use forward slashes.
 fn normalize_toml_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let lossy = path.to_string_lossy();
+    let path = if let Some(rest) = lossy.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = lossy.strip_prefix(r"\\?\") {
+        // e.g. \\?\D:\foo -> D:\foo (C/D/E/... all use this branch)
+        rest.to_string()
+    } else {
+        lossy.into_owned()
+    };
+    path.replace('\\', "/")
 }
 
 fn absolutize_manifest_path(crate_dir: &Path, value: &str) -> String {
@@ -737,8 +753,8 @@ fn rust_build(
 
 /// Builds the `RUSTFLAGS` value for an Android `cargo rustc` invocation.
 ///
-/// `prefer_dynamic`: APK/dev builds pass `true` (dynamically linked `std`
-/// keeps incremental relinks fast). AAB builds pass `false` — `prefer-dynamic`
+/// `prefer_dynamic`: debug builds pass `true` (dynamically linked `std` keeps
+/// incremental relinks fast). Release and AAB builds pass `false` — `prefer-dynamic`
 /// makes Rust ship `std` as a separate `libstd-<hash>.so`, and the toolchain's
 /// prebuilt copy of that library is only 4 KB-page aligned, which fails Google
 /// Play's 16 KB page-size requirement for apps targeting Android 15+. Static
@@ -1106,6 +1122,7 @@ fn compile_java(
         makepad_java_classes_dir.join("ByteArrayMediaDataSource.java"),
         makepad_java_classes_dir.join("VideoPlayer.java"),
         makepad_java_classes_dir.join("VideoPlayerRunnable.java"),
+        makepad_java_classes_dir.join("OesDecodeSurface.java"),
         makepad_java_classes_dir.join("H264Encoder.java"),
         build_paths.java_file.clone(),
         build_paths.xr_file.clone(),
@@ -1156,7 +1173,11 @@ fn compile_java(
     let android_jar = android_jar_path(sdk_dir, urls);
     let _ = rmdir(&build_paths.java_out_dir);
     mkdir(&build_paths.java_out_dir)?;
+    // Force UTF-8: Chinese Windows defaults javac to GBK, and UTF-8 comments
+    // (e.g. em dashes) then fail with "unmappable character".
     let mut javac_args = vec![
+        "-encoding",
+        "UTF-8",
         "-source",
         "1.8",
         "-target",
@@ -1339,6 +1360,18 @@ fn resolve_ndk_prebuilt_root(
     Ok(versions.remove(0))
 }
 
+/// NDK host-prebuilt `llvm-readelf` path (`.exe` on Windows).
+fn llvm_readelf_path(ndk_prebuilt_root: &Path) -> Option<PathBuf> {
+    let bin = ndk_prebuilt_root.join("bin");
+    for name in ["llvm-readelf", "llvm-readelf.exe"] {
+        let candidate = bin.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Scan an ELF shared library for NEEDED entries using the NDK's llvm-readelf,
 /// then bundle any non-system shared libraries found in the NDK sysroot.
 ///
@@ -1358,13 +1391,11 @@ fn bundle_ndk_shared_deps(
     let (_ndk_version, ndk_prebuilt_root) =
         resolve_ndk_prebuilt_root(sdk_dir, host_os, urls.ndk_version_full)?;
 
-    // Path to llvm-readelf shipped with the NDK.
-    let readelf_path = ndk_prebuilt_root.join("bin/llvm-readelf");
-    if !readelf_path.exists() {
+    let Some(readelf_path) = llvm_readelf_path(&ndk_prebuilt_root) else {
         // Gracefully skip when the NDK toolchain doesn't include llvm-readelf
         // (e.g. a stripped SDK install).
         return Ok(());
-    }
+    };
 
     // Run `llvm-readelf -d <so>` to list dynamic section entries.
     let cwd = std::env::current_dir().unwrap();
@@ -1443,10 +1474,9 @@ fn read_needed_shared_libs(
     let (_ndk_version, ndk_prebuilt_root) =
         resolve_ndk_prebuilt_root(sdk_dir, host_os, urls.ndk_version_full)?;
 
-    let readelf_path = ndk_prebuilt_root.join("bin/llvm-readelf");
-    if !readelf_path.exists() {
+    let Some(readelf_path) = llvm_readelf_path(&ndk_prebuilt_root) else {
         return Ok(Vec::new());
-    }
+    };
 
     let cwd = std::env::current_dir().unwrap();
     let output = shell_env_cap(
@@ -1542,7 +1572,12 @@ fn bundle_local_shared_deps(
 fn find_rustup_shared_lib(android_target: &AndroidTarget, lib_name: &str) -> Option<PathBuf> {
     let rustup_home = std::env::var_os("RUSTUP_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")))?;
+        .or_else(|| {
+            // Windows installs default to `%USERPROFILE%\.rustup`; Unix uses `$HOME`.
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|home| PathBuf::from(home).join(".rustup"))
+        })?;
     let toolchains_dir = rustup_home.join("toolchains");
     let tail = Path::new("lib")
         .join("rustlib")
@@ -1744,6 +1779,22 @@ fn add_resources(
     Ok(())
 }
 
+// resources/ios is iOS-only; resources/android ships as runtime assets minus
+// the packaging inputs (manifest template, res/) already compiled into the package
+fn cp_android_runtime_assets(source_dir: &Path, dst_dir: &Path) -> Result<(), String> {
+    cp_all_skip_top(source_dir, dst_dir, &["android", "ios"], false)?;
+    let android_src = source_dir.join("android");
+    if android_src.is_dir() {
+        cp_all_skip_top(
+            &android_src,
+            &dst_dir.join("android"),
+            &["AndroidManifest.xml.template", "res"],
+            false,
+        )?;
+    }
+    Ok(())
+}
+
 fn add_assets_dir_to_apk(
     out_dir: &Path,
     assets_to_add: &mut Vec<String>,
@@ -1759,7 +1810,7 @@ fn add_assets_dir_to_apk(
     let crate_name = crate_name.replace('-', "_");
     let dst_dir = out_dir.join(format!("assets/makepad/{crate_name}/{asset_subdir}"));
     mkdir(&dst_dir)?;
-    cp_all(source_dir, &dst_dir, false)?;
+    cp_android_runtime_assets(source_dir, &dst_dir)?;
     if config.small_fonts && asset_subdir == "resources" {
         for (target_name, replacement_name) in SMALL_FONT_REPLACEMENTS {
             let replacement = source_dir.join(replacement_name);
@@ -1956,7 +2007,7 @@ fn stage_makepad_assets_subdir(
     let crate_name = crate_name.replace('-', "_");
     let dst_dir = assets_root.join(format!("makepad/{crate_name}/{asset_subdir}"));
     mkdir(&dst_dir)?;
-    cp_all(source_dir, &dst_dir, false)?;
+    cp_android_runtime_assets(source_dir, &dst_dir)?;
     if config.small_fonts && asset_subdir == "resources" {
         for (target_name, replacement_name) in SMALL_FONT_REPLACEMENTS {
             let replacement = source_dir.join(replacement_name);
@@ -2091,10 +2142,9 @@ fn stage_ndk_shared_deps_for_so(
 ) -> Result<(), String> {
     let (_ndk_version, ndk_prebuilt_root) =
         resolve_ndk_prebuilt_root(sdk_dir, host_os, urls.ndk_version_full)?;
-    let readelf_path = ndk_prebuilt_root.join("bin/llvm-readelf");
-    if !readelf_path.exists() {
+    let Some(readelf_path) = llvm_readelf_path(&ndk_prebuilt_root) else {
         return Ok(());
-    }
+    };
     let cwd = std::env::current_dir().unwrap();
     let output = shell_env_cap(
         &[],
@@ -2704,8 +2754,9 @@ pub fn build(
         android_targets,
         variant,
         urls,
-        // APK/dev builds keep `-C prefer-dynamic` for faster incremental relinks.
-        true,
+        // Only debug builds keep `-C prefer-dynamic`, for faster incremental
+        // relinks. Nobody ships a debug apk, and anything else might be shipped.
+        get_profile_from_args(args) == "debug",
     )?;
     // For APK builds, debuggable matches the cargo profile: release -> false,
     // anything else -> true (matches the historical behavior of `cargo makepad
@@ -3189,6 +3240,12 @@ pub fn java(sdk_dir: &Path, _host_os: HostOs, args: &[String]) -> Result<(), Str
 
 pub fn javac(sdk_dir: &Path, _host_os: HostOs, args: &[String]) -> Result<(), String> {
     let mut args_out = Vec::new();
+    // Match the APK build path: do not rely on the host default charset (GBK on
+    // Chinese Windows).
+    if !args.iter().any(|a| a == "-encoding") {
+        args_out.push("-encoding");
+        args_out.push("UTF-8");
+    }
     for arg in args {
         args_out.push(arg.as_ref());
     }

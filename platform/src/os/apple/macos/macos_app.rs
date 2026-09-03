@@ -1,4 +1,5 @@
-use crate::file_dialogs::FileDialog;
+use crate::cx::Cx;
+use crate::file_dialogs::{FileDialog, FileDialogAction};
 
 use {
     crate::{
@@ -9,7 +10,10 @@ use {
         //turtle::{
         //    Rect
         //},
-        event::{KeyCode, KeyEvent, KeyModifiers, TextClipboardEvent, TextInputEvent, TimerEvent},
+        event::{
+            KeyCode, KeyEvent, KeyModifiers, ScrollPhase, TextClipboardEvent, TextInputEvent,
+            TimerEvent,
+        },
         macos_menu::MacosMenu,
         makepad_live_id::*,
         makepad_math::Vec2d,
@@ -22,7 +26,9 @@ use {
             cx_native::EventFlow,
             macos::{macos_delegates::*, macos_event::*, macos_window::MacosWindow},
         },
+        window::WindowId,
     },
+    makepad_objc_sys::{objc_block, Encode, Encoding},
     std::{cell::RefCell, collections::HashMap, os::raw::c_void, rc::Rc, time::Instant},
 };
 
@@ -38,13 +44,196 @@ thread_local! {
     pub static MACOS_APP: RefCell<Option<MacosApp>> = RefCell::new(None);
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct CAFrameRateRange {
+    minimum: f32,
+    maximum: f32,
+    preferred: f32,
+}
+
+unsafe impl Encode for CAFrameRateRange {
+    fn encode() -> Encoding {
+        unsafe { Encoding::from_str("{CAFrameRateRange=fff}") }
+    }
+}
+
+static METAL_LINK_TRACE_UPDATES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static METAL_LINK_TRACE_DRAWABLES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static METAL_LINK_TRACE_PRESENTED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static METAL_LINK_TRACE_LAST_US: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn metal_link_frame_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("MAKEPAD_FRAME_TRACE").is_some())
+}
+
+pub(super) fn metal_link_trace_drawable_consumed() {
+    if metal_link_frame_trace_enabled() {
+        METAL_LINK_TRACE_DRAWABLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(super) fn metal_link_trace_presented() {
+    if metal_link_frame_trace_enabled() {
+        METAL_LINK_TRACE_PRESENTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn metal_link_trace_update_fired() {
+    if metal_link_frame_trace_enabled() {
+        METAL_LINK_TRACE_UPDATES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn metal_link_trace_report() {
+    if !metal_link_frame_trace_enabled() {
+        return;
+    }
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let now_us = START
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_micros()
+        .min(u64::MAX as u128) as u64;
+    let last_us = METAL_LINK_TRACE_LAST_US.load(std::sync::atomic::Ordering::Relaxed);
+    if now_us.saturating_sub(last_us) < 1_000_000
+        || METAL_LINK_TRACE_LAST_US
+            .compare_exchange(
+                last_us,
+                now_us,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_err()
+    {
+        return;
+    }
+    let updates = METAL_LINK_TRACE_UPDATES.swap(0, std::sync::atomic::Ordering::AcqRel);
+    let drawables = METAL_LINK_TRACE_DRAWABLES.swap(0, std::sync::atomic::Ordering::AcqRel);
+    let presented = METAL_LINK_TRACE_PRESENTED.swap(0, std::sync::atomic::Ordering::AcqRel);
+    eprintln!(
+        "[frame-trace] metal-link interval_ms={:.1} updates_fired={} drawables_consumed={} presented={}",
+        now_us.saturating_sub(last_us) as f64 / 1000.0,
+        updates,
+        drawables,
+        presented,
+    );
+}
+
 pub fn with_macos_app<R>(f: impl FnOnce(&mut MacosApp) -> R) -> R {
     MACOS_APP.with_borrow_mut(|app| f(app.as_mut().unwrap()))
+}
+
+/// Like [`with_macos_app`], but returns `None` instead of panicking when the
+/// app is already borrowed — for callbacks AppKit fires re-entrantly from
+/// inside our own event handling (`resetCursorRects` after an
+/// `invalidateCursorRects`, tracking-area updates), where a RefCell panic
+/// cannot unwind through the ObjC frame and aborts the whole process.
+pub fn try_with_macos_app<R>(f: impl FnOnce(&mut MacosApp) -> R) -> Option<R> {
+    MACOS_APP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut app) => app.as_mut().map(f),
+        Err(_) => None,
+    })
+}
+
+/// Whether this process may activate itself or make a window key.
+///
+/// USER LAW (2026-08-26): an agent-driven or test instance must never steal
+/// the user's focus — they could not type in their own terminal while lanes
+/// launched and clicked windows. `--remote` therefore means VISIBLE BUT
+/// UNFOCUSED: the window is ordered on screen, never made key, and the app
+/// never activates — the bridge injects input through the event loop, not
+/// the OS, so key-window status is not needed for anything it does.
+/// `MAKEPAD_NO_FOCUS=1` asks for the same without `--remote`;
+/// `MAKEPAD_FOCUS=1` restores activation for a remote run the user wants
+/// in front. Decided once per process.
+pub fn focus_allowed() -> bool {
+    static ALLOWED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALLOWED.get_or_init(|| {
+        if std::env::var_os("MAKEPAD_FOCUS").is_some() {
+            return true;
+        }
+        if std::env::var_os("MAKEPAD_NO_FOCUS").is_some() {
+            return false;
+        }
+        !crate::remote::requested()
+    })
+}
+
+/// Activate one Cocoa window without holding the global `MacosApp` RefCell
+/// borrow across AppKit calls (which can synchronously re-enter delegates).
+/// A no-focus process (see [`focus_allowed`]) never activates: bridge
+/// clicks run through here too, and each one used to raise the window over
+/// whatever the user was typing in.
+pub fn activate_cocoa_window_on_pointer_down(window: ObjcId) -> bool {
+    if window == nil || std::env::var_os("MAKEPAD_HIDE_WINDOWS").is_some() || !focus_allowed() {
+        return false;
+    }
+    unsafe {
+        let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+        let active: bool = msg_send![ns_app, isActive];
+        if !active {
+            let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+        }
+        let key: bool = msg_send![window, isKeyWindow];
+        if !key {
+            let () = msg_send![window, makeKeyAndOrderFront: nil];
+        }
+        !active || !key
+    }
+}
+
+extern "C" {
+    /// libobjc: the hook called with an exception object before it is
+    /// thrown. The only place that still sees the reason when the unwind
+    /// later meets a Rust frame and aborts ("Rust cannot catch foreign
+    /// exceptions") before AppKit's top-level handler can print anything.
+    fn objc_setExceptionPreprocessor(
+        f: extern "C" fn(ObjcId) -> ObjcId,
+    ) -> Option<extern "C" fn(ObjcId) -> ObjcId>;
+}
+
+unsafe fn objc_exception_text(obj: ObjcId) -> String {
+    if obj.is_null() {
+        return String::new();
+    }
+    let utf8: *const std::os::raw::c_char = msg_send![obj, UTF8String];
+    if utf8.is_null() {
+        return String::new();
+    }
+    std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+}
+
+extern "C" fn log_objc_exception(exception: ObjcId) -> ObjcId {
+    unsafe {
+        let name: ObjcId = msg_send![exception, name];
+        let reason: ObjcId = msg_send![exception, reason];
+        eprintln!(
+            "makepad: ObjC exception {}: {}",
+            objc_exception_text(name),
+            objc_exception_text(reason)
+        );
+        let symbols: ObjcId = msg_send![exception, callStackSymbols];
+        if !symbols.is_null() {
+            let count: u64 = msg_send![symbols, count];
+            for i in 0..count.min(16) {
+                let line: ObjcId = msg_send![symbols, objectAtIndex: i];
+                eprintln!("    {}", objc_exception_text(line));
+            }
+        }
+    }
+    exception
 }
 
 pub fn init_macos_app_global(event_callback: Box<dyn FnMut(MacosEvent) -> EventFlow>) {
     unsafe {
         MACOS_CLASSES = Box::into_raw(Box::new(MacosClasses::new()));
+        objc_setExceptionPreprocessor(log_objc_exception);
     }
     MACOS_APP.with(|app| {
         *app.borrow_mut() = Some(MacosApp::new(event_callback));
@@ -87,6 +276,10 @@ pub struct MacosClasses {
     pub menu_target: *const Class,
     pub view: *const Class,
     pub timer_delegate: *const Class,
+    /// Subclass swapped onto AppKit's NSTitlebarContainerView so the
+    /// transparent titlebar stops eating drags (see macos_delegates).
+    /// Null when the private class is absent — callers skip the swap.
+    pub titlebar_container: *const Class,
 }
 
 impl MacosClasses {
@@ -105,6 +298,7 @@ impl MacosClasses {
             app_delegate: define_app_delegate(),
             menu_target: define_menu_target_class(),
             view: define_cocoa_view_class(),
+            titlebar_container: define_titlebar_container_class(),
         }
     }
 }
@@ -115,8 +309,22 @@ pub struct MacosApp {
     pub time_start: Instant,
     pub timer_delegate_instance: ObjcId,
     timers: Vec<CocoaTimer>,
+    /// Per-layer CAMetalDisplayLink paint pacing on macOS 14+, with the
+    /// existing per-view CADisplayLink path as its runtime fallback: each
+    /// window's paint beat fires FROM its own panel's refresh callback
+    /// instead of an NSTimer racing it — the real frame-flip clock, per
+    /// window, per display. Empty until a window exists (or unsupported:
+    /// NSTimer pacing stays). Entries are (cocoa window, link).
+    display_links: Vec<(ObjcId, ObjcId)>,
+    display_links_paused: bool,
     //pub signals: Mutex<RefCell<HashSet<Signal>>>,
     pub cocoa_windows: Vec<(ObjcId, ObjcId)>,
+    /// Exact framework-to-Cocoa lookup for bridge-injected pointer activation.
+    pub cocoa_window_ids: Vec<(WindowId, ObjcId)>,
+    /// Cocoa owns/retains window delegates and views beyond `windowWillClose:`.
+    /// Keep their Rust callback targets alive for the same lifetime so a queued
+    /// native callback can never dereference a freed `MacosWindow`.
+    retired_cocoa_windows: Vec<Box<MacosWindow>>,
     last_key_mod: KeyModifiers,
     #[allow(unused)]
     pasteboard: ObjcId,
@@ -127,6 +335,34 @@ pub struct MacosApp {
 
     pub cursors: HashMap<MouseCursor, ObjcId>,
     pub current_cursor: MouseCursor,
+    /// Pointer lock (FPS mouse capture): while true the hardware cursor is
+    /// frozen+hidden and MouseMove positions are synthesized from NSEvent
+    /// deltas into `virtual_mouse` — downstream consumers never know.
+    pub mouse_pointer_lock: bool,
+    pub virtual_mouse: Option<Vec2d>,
+    /// Whether the lock's physical effects (hidden cursor, disassociation)
+    /// are currently applied. Diverges from `mouse_pointer_lock` while the
+    /// window is not key: macOS re-associates the cursor when the app
+    /// deactivates, so focus loss suspends the effects and focus gain
+    /// re-applies them — the same dance GLFW does for disabled-cursor mode.
+    pub pointer_lock_applied: bool,
+    /// The pin, cocoa global coords (bottom-left origin) — where the locked
+    /// cursor must stay.
+    pub lock_pin: Option<Vec2d>,
+    /// Where a widget-scoped pointer pin must restore the cursor on
+    /// release: the press point, cocoa-global coords (`set_pointer_pin`).
+    pub pin_restore: Option<Vec2d>,
+    /// True while the lock is a widget-scoped SCRUB pin (not a game FPS
+    /// lock): `abs` integrates the deltas into an unbounded virtual
+    /// position (the drag needs continuous positions; the pressed widget
+    /// holds the finger capture, so routing cannot wander), instead of the
+    /// game model where `abs` stays pinned and motion rides lock_delta.
+    pub pointer_pin_mode: bool,
+    /// Live-path measurement: hardware move events seen under the pin and
+    /// their integrated horizontal travel. Logged at release so a physical
+    /// pass is measurable against the owner's own FingerMove count.
+    pub pin_ns_moves: u64,
+    pub pin_sum_dx: f64,
     //current_ns_event: Option<ObjcId>,
 
     /// Set by `send_command_event()` to avoid sending keyboard events
@@ -150,11 +386,15 @@ impl MacosApp {
                 pasteboard: msg_send![class!(NSPasteboard), generalPasteboard],
                 time_start: Instant::now(),
                 timer_delegate_instance: msg_send![get_macos_class_global().timer_delegate, new],
+                display_links: Vec::new(),
+                display_links_paused: false,
                 menu_delegate_instance: msg_send![get_macos_class_global().menu_delegate, new],
                 //app_delegate_instance,
                 //signals: Mutex::new(RefCell::new(HashSet::new())),
                 timers: Vec::new(),
                 cocoa_windows: Vec::new(),
+                cocoa_window_ids: Vec::new(),
+                retired_cocoa_windows: Vec::new(),
                 event_flow: EventFlow::Poll,
                 last_key_mod: KeyModifiers {
                     ..Default::default()
@@ -162,6 +402,14 @@ impl MacosApp {
                 event_callback: Some(event_callback),
                 cursors: HashMap::new(),
                 current_cursor: MouseCursor::Default,
+                mouse_pointer_lock: false,
+                virtual_mouse: None,
+                pointer_lock_applied: false,
+                lock_pin: None,
+                pin_restore: None,
+                pointer_pin_mode: false,
+                pin_ns_moves: 0,
+                pin_sum_dx: 0.0,
                 terminating_from_app_delegate: false,
                 //current_ns_event: None,
                 menu_command_fired: false,
@@ -200,6 +448,13 @@ impl MacosApp {
                 let () = msg_send![ns_app, setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory as i64];
             }
         }
+    }
+
+    pub fn cocoa_window_for_id(&self, window_id: WindowId) -> Option<ObjcId> {
+        self.cocoa_window_ids
+            .iter()
+            .find(|(candidate, _)| *candidate == window_id)
+            .map(|(_, window)| *window)
     }
     pub fn update_macos_menu(&mut self, menu: &MacosMenu) {
         unsafe fn make_menu(
@@ -335,13 +590,20 @@ impl MacosApp {
                         my_app,
                         activateWithOptions: NSApplicationActivationOptions::NSApplicationActivateIgnoringOtherApps
                     ];
-                    let () = msg_send![self.cocoa_windows[0].0, makeKeyAndOrderFront: nil];
+                    if std::env::var_os("MAKEPAD_HIDE_WINDOWS").is_none() {
+                        let () = msg_send![self.cocoa_windows[0].0, makeKeyAndOrderFront: nil];
+                    }
                 }
                 //}
             }
         }
     }*/
     pub fn startup_focus_hack(&mut self) {
+        if !focus_allowed() {
+            // Visible-but-unfocused launch: no Dock dance, no activation.
+            self.startup_focus_hack_ran = true;
+            return;
+        }
         return unsafe {
             if !self.startup_focus_hack_ran {
                 self.startup_focus_hack_ran = true;
@@ -586,16 +848,53 @@ impl MacosApp {
                 if window_delegate == nil {
                     return;
                 }
+                // Foreign windows land in this event loop too (the macOS
+                // screen-capture overlay's TUINSWindow among them) and their
+                // delegates don't carry our ivar — skip them, don't panic.
+                if (*window_delegate)
+                    .class()
+                    .instance_variable("macos_window_ptr")
+                    .is_none()
+                {
+                    return;
+                }
                 let ptr: *mut c_void = *(*window_delegate).get_ivar("macos_window_ptr");
                 let cocoa_window = &mut *(ptr as *mut MacosWindow);
                 let dx: f64 = msg_send![ns_event, scrollingDeltaX];
                 let dy: f64 = msg_send![ns_event, scrollingDeltaY];
                 let has_prec: BOOL = msg_send![ns_event, hasPreciseScrollingDeltas];
+                // NSEventPhase bitmask values (NSEvent.h): Began = 1<<0, Stationary = 1<<1,
+                // Changed = 1<<2, Ended = 1<<3, Cancelled = 1<<4, MayBegin = 1<<5.
+                // `phase` covers the finger-driven part of a trackpad gesture; `momentumPhase`
+                // covers the momentum stream after lift-off. Classic wheel mice report 0 for
+                // both. See `ScrollPhase` for how widgets use these.
+                let phase_bits: u64 = msg_send![ns_event, phase];
+                let momentum_bits: u64 = msg_send![ns_event, momentumPhase];
+                let phase = if momentum_bits & ((1 << 3) | (1 << 4)) != 0 {
+                    ScrollPhase::MomentumEnded
+                } else if momentum_bits != 0 {
+                    ScrollPhase::Momentum
+                } else if phase_bits & ((1 << 0) | (1 << 5)) != 0 {
+                    ScrollPhase::Began
+                } else if phase_bits & ((1 << 1) | (1 << 2)) != 0 {
+                    ScrollPhase::Changed
+                } else if phase_bits & (1 << 3) != 0 {
+                    ScrollPhase::Ended
+                } else if phase_bits & (1 << 4) != 0 {
+                    // Cancelled: the system took over the gesture, e.g. a system-wide swipe.
+                    // Native behavior is to abort without momentum, so map it to `Began`, which
+                    // widgets treat as a gesture reset (samples cleared, fling stopped), rather
+                    // than `Ended`, which would start a fling.
+                    ScrollPhase::Began
+                } else {
+                    ScrollPhase::None
+                };
                 return if has_prec == YES {
                     cocoa_window.send_scroll(
                         Vec2d { x: -dx, y: -dy },
                         get_event_key_modifier(ns_event),
                         false,
+                        phase,
                     );
                 } else {
                     cocoa_window.send_scroll(
@@ -605,6 +904,7 @@ impl MacosApp {
                         },
                         get_event_key_modifier(ns_event),
                         true,
+                        phase,
                     );
                 };
             }
@@ -690,6 +990,64 @@ impl MacosApp {
             with_macos_app(|app| app.event_callback = Some(callback));
         }
     }
+
+    /// Deliver `WindowClosed` after the current Cocoa delegate callback has
+    /// returned. Removing a `MetalWindow` synchronously from
+    /// `windowWillClose:` would otherwise drop the boxed `MacosWindow` while
+    /// that same object is still borrowed by the delegate callback.
+    pub fn defer_window_closed(window_id: WindowId) {
+        unsafe {
+            let main_thread_block = objc_block!(move || {
+                MacosApp::do_callback(MacosEvent::WindowClosed(
+                    crate::event::WindowClosedEvent { window_id },
+                ));
+            });
+            let main_queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+            let block_operation: ObjcId =
+                msg_send![class!(NSBlockOperation), blockOperationWithBlock: &main_thread_block];
+            let () = msg_send![main_queue, addOperation: block_operation];
+        }
+    }
+
+    /// Retire a closed window without invalidating the raw pointers stored in
+    /// its still-retained Cocoa view and delegate. Those native objects retain
+    /// their original `alloc` ownership until process teardown; keeping this
+    /// small Rust peer for the same lifetime closes the corresponding UAF.
+    pub fn retire_cocoa_window(&mut self, mut window: Box<MacosWindow>) {
+        window.retire();
+        let native_window = window.window;
+        self.cocoa_window_ids
+            .retain(|(window_id, _)| *window_id != window.window_id);
+        self.cocoa_windows
+            .retain(|(window, _view)| *window != native_window);
+        self.retired_cocoa_windows.push(window);
+        // Drop the closing window's link; if the PRIMARY died, beats died
+        // with it — keep a heartbeat alive so the paint loop wakes and
+        // re-anchors (ensure_timer0_started spots the missing link).
+        let had = !self.display_links.is_empty();
+        self.display_links.retain(|(window, link)| {
+            if *window == native_window {
+                unsafe {
+                    let () = msg_send![*link, invalidate];
+                }
+                false
+            } else {
+                true
+            }
+        });
+        if had && self.display_links.is_empty() {
+            self.stop_timer(0);
+            self.start_timer(0, 0.2, true);
+        }
+    }
+
+    /// True when link pacing SHOULD be re-armed: a window exists without
+    /// its own link (fresh window, or the self-heal after a close).
+    pub fn display_link_needs_rearm(&self) -> bool {
+        self.cocoa_windows
+            .iter()
+            .any(|(window, _)| !self.display_links.iter().any(|(w, _)| w == window))
+    }
     /*
     pub fn post_signal(signal: Signal) {
         unsafe {
@@ -724,6 +1082,224 @@ impl MacosApp {
         }
     }*/
 
+    /// Apply or suspend the pointer lock's PHYSICAL effects, in GLFW's
+    /// proven order. Enable: hide → warp to the key window's centre (while
+    /// still associated — warping a disassociated cursor stalls event
+    /// delivery) → disassociate. Disable: re-associate → unhide. The logical
+    /// `mouse_pointer_lock` flag is managed by the caller; this only touches
+    /// the OS state, tracked in `pointer_lock_applied` so focus churn never
+    /// double-hides or double-shows the cursor.
+    pub fn apply_pointer_lock_effects(&mut self, on: bool) {
+        // Only an ACTIVE app may take the user's pointer: a bridge-driven,
+        // unfocused instance clicking its own fps view must never hide and
+        // pin the cursor the user is using elsewhere. A real click activates
+        // the app before it arrives here, so players are unaffected.
+        if on {
+            let active: bool = unsafe {
+                let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+                msg_send![ns_app, isActive]
+            };
+            if !active {
+                self.pointer_lock_applied = false;
+                return;
+            }
+        }
+        if self.pointer_lock_applied == on {
+            return;
+        }
+        self.pointer_lock_applied = on;
+        // THE deadzone bug: after every CGWarpMouseCursorPosition, macOS
+        // suppresses local hardware mouse events for 0.25s BY DEFAULT — so
+        // a moving locked mouse (drift repins = warps) had rolling windows
+        // where clicks reached no app at all, not even our own NSView's
+        // mouseDown. SDL zeroes this interval in Cocoa_InitMouse for
+        // exactly this reason; zero it before the first warp ever fires.
+        unsafe {
+            let _ = CGSetLocalEventsSuppressionInterval(0.0);
+        }
+        self.virtual_mouse = None;
+        unsafe {
+            if on {
+                let () = msg_send![class!(NSCursor), hide];
+                if let Some((win, _)) = self.cocoa_windows.first() {
+                    let frame: NSRect = msg_send![*win, frame];
+                    // Pin the cursor mid-way into the window's portion on
+                    // the PRIMARY screen — deterministic, never the seam or
+                    // an edge pixel (a cursor frozen on the screen edge has
+                    // its clicks eaten by macOS edge behaviour before they
+                    // ever reach the app). [win screen] was ambiguous on a
+                    // straddling/mirrored window and degenerated to the
+                    // frame centre = the exact edge.
+                    let screens0: ObjcId = msg_send![class!(NSScreen), screens];
+                    let wscreen: ObjcId = msg_send![screens0, firstObject];
+                    let svis: NSRect = if wscreen != nil {
+                        msg_send![wscreen, visibleFrame]
+                    } else {
+                        frame
+                    };
+                    let lo_x = frame.origin.x.max(svis.origin.x);
+                    let hi_x = (frame.origin.x + frame.size.width)
+                        .min(svis.origin.x + svis.size.width);
+                    let lo_y = frame.origin.y.max(svis.origin.y);
+                    let hi_y = (frame.origin.y + frame.size.height)
+                        .min(svis.origin.y + svis.size.height);
+                    let gx = if lo_x < hi_x { (lo_x + hi_x) * 0.5 } else { frame.origin.x + frame.size.width * 0.5 };
+                    let gy_cocoa = if lo_y < hi_y { (lo_y + hi_y) * 0.5 } else { frame.origin.y + frame.size.height * 0.5 };
+                    let screens: ObjcId = msg_send![class!(NSScreen), screens];
+                    let primary: ObjcId = msg_send![screens, firstObject];
+                    let sframe: NSRect = msg_send![primary, frame];
+                    let _ = CGWarpMouseCursorPosition(NSPoint {
+                        x: gx,
+                        y: sframe.size.height - gy_cocoa,
+                    });
+                    self.lock_pin = Some(Vec2d { x: gx, y: gy_cocoa });
+                }
+                CGAssociateMouseAndMouseCursorPosition(0);
+            } else {
+                CGAssociateMouseAndMouseCursorPosition(1);
+                let () = msg_send![class!(NSCursor), unhide];
+            }
+        }
+    }
+
+    /// Focus left the window (cmd-tab, a click elsewhere): whatever the
+    /// game thinks, the OS pointer goes back to the user NOW. A lock held
+    /// past focus loss — and re-pinned every frame — left the user with no
+    /// mouse at all (2026-08-26). The game re-locks on its next click.
+    pub fn release_pointer_lock_on_focus_loss(&mut self) {
+        if self.mouse_pointer_lock || self.pointer_lock_applied {
+            self.mouse_pointer_lock = false;
+            self.pointer_lock_applied = false;
+            self.lock_pin = None;
+            // A pin lost to focus loss does not warp anywhere: the pointer
+            // belongs to whoever has focus now. Just forget the restore.
+            self.pin_restore = None;
+            self.pointer_pin_mode = false;
+            self.apply_pointer_lock_effects(false);
+        }
+    }
+
+    /// The one pointer-lock abs transform every mouse move takes — the
+    /// hardware path (send_mouse_move) and the hardware-faithful injection
+    /// path (remote /m?hw=1) both come through here, so they can never
+    /// disagree. Under a scrub pin the delta integrates into an unbounded
+    /// virtual abs (the drag owner needs continuous positions; the finger
+    /// capture keeps routing to the owner). Under a game lock the abs
+    /// stays pinned and motion rides lock_delta.
+    pub fn locked_mouse_transform(
+        &mut self,
+        raw: Vec2d,
+        delta: Vec2d,
+        seed: Vec2d,
+    ) -> (Vec2d, Vec2d) {
+        if !self.mouse_pointer_lock {
+            return (raw, Vec2d::default());
+        }
+        if self.pointer_pin_mode {
+            self.pin_ns_moves += 1;
+            self.pin_sum_dx += delta.x;
+            let mut v = *self.virtual_mouse.get_or_insert(seed);
+            v.x += delta.x;
+            v.y += delta.y;
+            self.virtual_mouse = Some(v);
+            (v, delta)
+        } else {
+            (*self.virtual_mouse.get_or_insert(seed), delta)
+        }
+    }
+
+    /// Widget-scoped pointer pin (value scrubbing): the FPS lock machinery,
+    /// but the cursor pins AT ITS CURRENT POSITION and is restored there on
+    /// release. Engage only when a drag actually starts (the threshold
+    /// crossing), never on the initial press; release on mouse-up. Deltas
+    /// keep flowing (virtual mouse), `repin_pointer` holds the pin each
+    /// frame, and focus loss releases it like any lock.
+    pub fn set_pointer_pin(&mut self, on: bool) {
+        if on {
+            if self.mouse_pointer_lock || self.pointer_lock_applied {
+                return; // an FPS-style lock is already holding the pointer
+            }
+            unsafe {
+                let _ = CGSetLocalEventsSuppressionInterval(0.0);
+            }
+            self.virtual_mouse = None;
+            self.mouse_pointer_lock = true;
+            self.pointer_lock_applied = true;
+            self.pointer_pin_mode = true;
+            self.pin_ns_moves = 0;
+            self.pin_sum_dx = 0.0;
+            unsafe {
+                let loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+                self.lock_pin = Some(Vec2d { x: loc.x, y: loc.y });
+                self.pin_restore = Some(Vec2d { x: loc.x, y: loc.y });
+                let () = msg_send![class!(NSCursor), hide];
+                CGAssociateMouseAndMouseCursorPosition(0);
+            }
+        } else {
+            if !self.mouse_pointer_lock && !self.pointer_lock_applied {
+                self.pin_restore = None;
+                return;
+            }
+            crate::log!(
+                "PIN stats: ns_moves={} sum_dx={:.1}",
+                self.pin_ns_moves,
+                self.pin_sum_dx
+            );
+            self.mouse_pointer_lock = false;
+            self.pointer_lock_applied = false;
+            self.pointer_pin_mode = false;
+            self.lock_pin = None;
+            unsafe {
+                CGAssociateMouseAndMouseCursorPosition(1);
+                if let Some(restore) = self.pin_restore.take() {
+                    let screens: ObjcId = msg_send![class!(NSScreen), screens];
+                    let primary: ObjcId = msg_send![screens, firstObject];
+                    let sframe: NSRect = msg_send![primary, frame];
+                    let _ = CGWarpMouseCursorPosition(NSPoint {
+                        x: restore.x,
+                        y: sframe.size.height - restore.y,
+                    });
+                }
+                let () = msg_send![class!(NSCursor), unhide];
+            }
+        }
+    }
+
+    /// Per-frame while locked: force the hardware cursor back onto the pin
+    /// and re-assert the disassociation. On systems where the association
+    /// silently drops (observed live: deadzones the size of the desktop
+    /// minus the window), this is the enforcement that actually holds.
+    /// Never while the app is inactive: the pointer belongs to whoever has
+    /// focus, and repinning it from the background is a trap.
+    pub fn repin_pointer(&mut self) {
+        if !self.mouse_pointer_lock || !self.pointer_lock_applied {
+            return;
+        }
+        let active: bool = unsafe {
+            let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
+            msg_send![ns_app, isActive]
+        };
+        if !active {
+            return;
+        }
+        let Some(pin) = self.lock_pin else { return };
+        unsafe {
+            // mouseLocation is cocoa global (bottom-left origin, points).
+            let loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            let drift = (loc.x - pin.x).abs() + (loc.y - pin.y).abs();
+            if drift > 2.0 {
+                let screens: ObjcId = msg_send![class!(NSScreen), screens];
+                let primary: ObjcId = msg_send![screens, firstObject];
+                let sframe: NSRect = msg_send![primary, frame];
+                let _ = CGWarpMouseCursorPosition(NSPoint {
+                    x: pin.x,
+                    y: sframe.size.height - pin.y,
+                });
+                CGAssociateMouseAndMouseCursorPosition(0);
+            }
+        }
+    }
+
     pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
         if self.current_cursor != cursor {
             self.current_cursor = cursor;
@@ -737,6 +1313,227 @@ impl MacosApp {
                 }
             }
         }
+    }
+
+    /// Arm (or resume) display-link pacing: one link per window. On macOS 14+
+    /// CAMetalDisplayLink is built from that view's CAMetalLayer so its update
+    /// owns both the beat and drawable. Older systems take the existing
+    /// NSView.displayLink path unchanged. Returns false when neither can run,
+    /// so the caller falls back to NSTimer pacing.
+    pub fn ensure_display_link(&mut self) -> bool {
+        unsafe {
+            // Prune links whose window is gone.
+            let windows: Vec<ObjcId> = self.cocoa_windows.iter().map(|(w, _)| *w).collect();
+            self.display_links.retain(|(window, link)| {
+                if windows.contains(window) {
+                    true
+                } else {
+                    let () = msg_send![*link, invalidate];
+                    false
+                }
+            });
+            // Create missing ones.
+            for (window, view) in self.cocoa_windows.clone() {
+                if self.display_links.iter().any(|(w, _)| *w == window) {
+                    continue;
+                }
+                // Runtime availability is the contract here: referring to the
+                // class by name keeps the binary loadable before macOS 14.
+                let mut is_metal_link = false;
+                let mut link = nil;
+                // Opt-in until it paces at the display's rate: measured 11 fps
+                // visible on 2026-08-25 against 62 fps on the CVDisplayLink path.
+                let metal_link_wanted = std::env::var("MAKEPAD_METAL_DISPLAY_LINK")
+                    .map(|v| v != "0")
+                    .unwrap_or(false);
+                if let Some(link_class) = Class::get("CAMetalDisplayLink").filter(|_| metal_link_wanted) {
+                    let layer: ObjcId = msg_send![view, layer];
+                    if layer != nil {
+                        let allocated: ObjcId = msg_send![link_class, alloc];
+                        link = msg_send![allocated, initWithMetalLayer: layer];
+                        if link != nil {
+                            let () = msg_send![link, setDelegate: self.timer_delegate_instance];
+                            let default_range: CAFrameRateRange =
+                                msg_send![link, preferredFrameRateRange];
+                            let default_latency: isize =
+                                msg_send![link, preferredFrameLatency];
+                            let screen: ObjcId = msg_send![window, screen];
+                            let maximum_fps: isize = if screen != nil {
+                                msg_send![screen, maximumFramesPerSecond]
+                            } else {
+                                60
+                            };
+                            let requested_fps = maximum_fps.max(1) as f32;
+                            let requested_range = CAFrameRateRange {
+                                minimum: requested_fps,
+                                maximum: requested_fps,
+                                preferred: requested_fps,
+                            };
+                            // The defaults do not promise the panel maximum. Request it
+                            // explicitly, and keep two frames of render latency against
+                            // the CAMetalLayer's three-drawable pool.
+                            let () = msg_send![link, setPreferredFrameRateRange: requested_range];
+                            let () = msg_send![link, setPreferredFrameLatency: 2isize];
+                            if metal_link_frame_trace_enabled() {
+                                eprintln!(
+                                    "[frame-trace] metal-link defaults rate={:.1}..{:.1}@{:.1} latency={} requested={:.1} latency=2",
+                                    default_range.minimum,
+                                    default_range.maximum,
+                                    default_range.preferred,
+                                    default_latency,
+                                    requested_fps,
+                                );
+                            }
+                            is_metal_link = true;
+                        }
+                    }
+                }
+                if link == nil {
+                    let responds: bool = msg_send![
+                        view,
+                        respondsToSelector: sel!(displayLinkWithTarget: selector:)
+                    ];
+                    if !responds {
+                        return false;
+                    }
+                    link = msg_send![
+                        view,
+                        displayLinkWithTarget: self.timer_delegate_instance
+                        selector: sel!(receivedDisplayLink:)
+                    ];
+                    // An unconstrained CADisplayLink lets the SYSTEM pick the
+                    // rate, and it adaptively throttles a "static" window to
+                    // 30Hz — measured as a hard 33.9ms lock on frames that
+                    // cost 3ms. Pin the range to the panel's maximum.
+                    if link != nil {
+                        let responds: bool =
+                            msg_send![link, respondsToSelector: sel!(setPreferredFrameRateRange:)];
+                        if responds {
+                            let screen: ObjcId = msg_send![window, screen];
+                            let maximum_fps: isize = if screen != nil {
+                                msg_send![screen, maximumFramesPerSecond]
+                            } else {
+                                60
+                            };
+                            let fps = maximum_fps.max(1) as f32;
+                            let range = CAFrameRateRange {
+                                minimum: fps,
+                                maximum: fps,
+                                preferred: fps,
+                            };
+                            let () = msg_send![link, setPreferredFrameRateRange: range];
+                            crate::log!(
+                                "macos: display link pinned to {}fps (panel maximum)",
+                                maximum_fps
+                            );
+                        } else {
+                            crate::log!("macos: display link has no rate-range API");
+                        }
+                    }
+                }
+                if link == nil {
+                    continue;
+                }
+                let nsrunloop: ObjcId = msg_send![class!(NSRunLoop), mainRunLoop];
+                let () =
+                    msg_send![link, addToRunLoop: nsrunloop forMode: NSRunLoopCommonModes];
+                if self.display_links_paused {
+                    let () = msg_send![link, setPaused: YES];
+                }
+                self.display_links.push((window, link));
+                crate::log!(
+                    "macos: paint pacing on {} (frame-flip clock), window {}",
+                    if is_metal_link { "CAMetalDisplayLink" } else { "CADisplayLink" },
+                    self.display_links.len()
+                );
+            }
+            if self.display_links_paused {
+                for (_w, link) in &self.display_links {
+                    let () = msg_send![*link, setPaused: NO];
+                }
+                self.display_links_paused = false;
+            }
+            !self.display_links.is_empty()
+        }
+    }
+
+    pub fn pause_display_link(&mut self) {
+        unsafe {
+            if !self.display_links_paused {
+                for (_w, link) in &self.display_links {
+                    let () = msg_send![*link, setPaused: YES];
+                }
+                self.display_links_paused = true;
+            }
+        }
+    }
+
+    /// One window's display link fired: dispatch a LinkFire carrying WHICH
+    /// window and the flip's TARGET timestamp mapped into app time — the
+    /// rock-solid per-window clock the paint below samples.
+    pub fn send_display_link_fired(link: ObjcId) {
+        let Some((window, primary, app_now)) = try_with_macos_app(|app| {
+            app.display_links.iter().position(|(_w, l)| *l == link).map(|i| {
+                (app.display_links[i].0, i == 0, app.time_now())
+            })
+        }).flatten() else {
+            return;
+        };
+        let (target, media_now): (f64, f64) = unsafe {
+            (msg_send![link, targetTimestamp], CACurrentMediaTime())
+        };
+        let time = app_now + (target - media_now).clamp(0.0, 0.1);
+        MacosApp::do_callback(MacosEvent::LinkFire {
+            window,
+            time,
+            primary,
+            drawable: None,
+            target_presentation_time: target,
+        });
+    }
+
+    /// CAMetalDisplayLink's delegate update is the authoritative frame:
+    /// transport time comes from its presentation target, and rendering uses
+    /// the drawable delivered for that same target instead of polling the
+    /// layer. A re-entrant callback simply skips this update rather than
+    /// panicking through the Objective-C delegate frame.
+    pub fn send_metal_display_link_update(link: ObjcId, update: ObjcId) {
+        metal_link_trace_update_fired();
+        if update == nil {
+            metal_link_trace_report();
+            return;
+        }
+        let (target, target_presentation, drawable, media_now): (f64, f64, ObjcId, f64) =
+            unsafe {
+                (
+                    msg_send![update, targetTimestamp],
+                    msg_send![update, targetPresentationTimestamp],
+                    msg_send![update, drawable],
+                    CACurrentMediaTime(),
+                )
+            };
+        let Some((window, primary, app_now)) = try_with_macos_app(|app| {
+            app.display_links.iter().position(|(_w, l)| *l == link).map(|i| {
+                (app.display_links[i].0, i == 0, app.time_now())
+            })
+        }).flatten() else {
+            metal_link_trace_report();
+            return;
+        };
+        let flip_target = if target_presentation > 0.0 {
+            target_presentation
+        } else {
+            target
+        };
+        let time = app_now + (flip_target - media_now).clamp(-0.1, 0.1);
+        MacosApp::do_callback(MacosEvent::LinkFire {
+            window,
+            time,
+            primary,
+            drawable: Some(drawable),
+            target_presentation_time: flip_target,
+        });
+        metal_link_trace_report();
     }
 
     pub fn start_timer(&mut self, timer_id: u64, interval: f64, repeats: bool) {
@@ -870,19 +1667,306 @@ impl MacosApp {
         }
     }
 
-    pub fn open_save_file_dialog(&mut self, _settings: FileDialog) {
-        println!("open save file dialog!");
+    /// Native save panel (`NSSavePanel`). Deferred onto the main queue for
+    /// the same reason as the folder picker below: `runModal` spins its own
+    /// run loop, and the platform-op drain that calls this holds the `Cx`
+    /// borrow.
+    pub fn open_save_file_dialog(&mut self, settings: FileDialog) {
+        let id = settings.id;
+        let title = settings.title.clone().unwrap_or_default();
+        let filename = settings.filename.clone().unwrap_or_default();
+        let location = settings
+            .location
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let extensions = filter_extensions(&settings);
+        unsafe {
+            let main_thread_block = objc_block!(move || {
+                let picked = run_save_panel(&title, &filename, &location, &extensions);
+                Cx::post_action(match picked {
+                    Some(path) => FileDialogAction::SaveFileSelected { id, path },
+                    None => FileDialogAction::SaveFileCancelled { id },
+                });
+            });
+            let main_queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+            let block_operation: ObjcId =
+                msg_send![class!(NSBlockOperation), blockOperationWithBlock: &main_thread_block];
+            let () = msg_send![main_queue, addOperation: block_operation];
+        }
     }
 
-    pub fn open_select_file_dialog(&mut self, _settings: FileDialog) {
-        println!("open select file dialog!");
+    /// Native file picker (`NSOpenPanel`, files only), with type filters
+    /// and optional multi-select.
+    pub fn open_select_file_dialog(&mut self, settings: FileDialog) {
+        let id = settings.id;
+        let title = settings.title.clone().unwrap_or_default();
+        let location = settings
+            .location
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let multiple = settings.multiple;
+        let extensions = filter_extensions(&settings);
+        unsafe {
+            let main_thread_block = objc_block!(move || {
+                let picked = run_open_panel(&title, &location, &extensions, multiple);
+                Cx::post_action(if picked.is_empty() {
+                    FileDialogAction::FileCancelled { id }
+                } else {
+                    FileDialogAction::FileSelected { id, paths: picked }
+                });
+            });
+            let main_queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+            let block_operation: ObjcId =
+                msg_send![class!(NSBlockOperation), blockOperationWithBlock: &main_thread_block];
+            let () = msg_send![main_queue, addOperation: block_operation];
+        }
     }
 
-    pub fn open_save_folder_dialog(&mut self, _settings: FileDialog) {
-        println!("open save folder dialog!");
+    /// "Save into this folder": a save panel that names a directory.
+    pub fn open_save_folder_dialog(&mut self, settings: FileDialog) {
+        let title = settings.title.clone().unwrap_or_default();
+        let location = settings
+            .location
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        unsafe {
+            let main_thread_block = objc_block!(move || {
+                let picked = run_select_folder_panel(&title, &location, true);
+                Cx::post_action(match picked {
+                    Some(path) => FileDialogAction::FolderSelected(path),
+                    None => FileDialogAction::FolderCancelled,
+                });
+            });
+            let main_queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+            let block_operation: ObjcId =
+                msg_send![class!(NSBlockOperation), blockOperationWithBlock: &main_thread_block];
+            let () = msg_send![main_queue, addOperation: block_operation];
+        }
     }
 
-    pub fn open_select_folder_dialog(&mut self, _settings: FileDialog) {
-        println!("open select folder dialog!");
+    /// Native folder picker (`NSOpenPanel`, directories only).
+    ///
+    /// The panel is NOT opened inline: `runModal` spins its own run loop, and
+    /// this call runs from inside the platform-op drain, where the `Cx` is
+    /// already borrowed. Deferring onto the main queue (same trick as
+    /// [`MacosApp::defer_window_closed`]) puts the modal loop *between*
+    /// callbacks, where nothing holds the borrow. The answer comes back as a
+    /// [`FileDialogAction`], because by then the call that asked is long gone.
+    pub fn open_select_folder_dialog(&mut self, settings: FileDialog) {
+        let title = settings.title.clone().unwrap_or_default();
+        let location = settings
+            .location
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        unsafe {
+            let main_thread_block = objc_block!(move || {
+                let picked = run_select_folder_panel(&title, &location, false);
+                Cx::post_action(match picked {
+                    Some(path) => FileDialogAction::FolderSelected(path),
+                    None => FileDialogAction::FolderCancelled,
+                });
+            });
+            let main_queue: ObjcId = msg_send![class!(NSOperationQueue), mainQueue];
+            let block_operation: ObjcId =
+                msg_send![class!(NSBlockOperation), blockOperationWithBlock: &main_thread_block];
+            let () = msg_send![main_queue, addOperation: block_operation];
+        }
+    }
+}
+
+/// `NSModalResponseOK`. Cancel is 0; anything else is "not a choice".
+const NS_MODAL_RESPONSE_OK: i64 = 1;
+
+/// Every extension the dialog's filters name, flattened. A filter of `*`
+/// (the conventional "All Files" row) means "no restriction at all", and
+/// wins over every other filter — a panel with an empty allowed-types list
+/// accepts anything, which is exactly what that row promises.
+fn filter_extensions(settings: &FileDialog) -> Vec<String> {
+    let mut out = Vec::new();
+    for filter in &settings.filters {
+        for extension in &filter.extensions {
+            let cleaned = extension.trim().trim_start_matches('*').trim_start_matches('.');
+            if cleaned.is_empty() || extension.trim() == "*" {
+                return Vec::new();
+            }
+            if !out.iter().any(|e: &String| e.eq_ignore_ascii_case(cleaned)) {
+                out.push(cleaned.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Restrict a panel to a set of extensions.
+///
+/// `setAllowedFileTypes:` is deprecated in favour of UTType-based
+/// `allowedContentTypes` on macOS 12+, but it still works, it takes plain
+/// extension strings, and it needs no UniformTypeIdentifiers linkage. When
+/// the list is empty the panel is left unrestricted.
+unsafe fn set_allowed_types(panel: ObjcId, extensions: &[String]) {
+    if extensions.is_empty() {
+        return;
+    }
+    let array: ObjcId = msg_send![class!(NSMutableArray), array];
+    for extension in extensions {
+        let () = msg_send![array, addObject: str_to_nsstring(extension)];
+    }
+    let () = msg_send![panel, setAllowedFileTypes: array];
+}
+
+unsafe fn set_start_location(panel: ObjcId, location: &str) {
+    if location.is_empty() {
+        return;
+    }
+    let is_directory = std::path::Path::new(location).is_dir();
+    let url: ObjcId = msg_send![
+        class!(NSURL),
+        fileURLWithPath: str_to_nsstring(location)
+        isDirectory: if is_directory { YES } else { NO }
+    ];
+    if url != nil {
+        let () = msg_send![panel, setDirectoryURL: url];
+    }
+}
+
+unsafe fn url_to_path(url: ObjcId) -> Option<std::path::PathBuf> {
+    if url == nil {
+        return None;
+    }
+    let path: ObjcId = msg_send![url, path];
+    if path == nil {
+        return None;
+    }
+    let path = nsstring_to_string(path);
+    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+}
+
+/// Run the file open panel to completion on the main thread. An empty
+/// result means the user cancelled.
+fn run_open_panel(
+    title: &str,
+    location: &str,
+    extensions: &[String],
+    multiple: bool,
+) -> Vec<std::path::PathBuf> {
+    unsafe {
+        let panel: ObjcId = msg_send![class!(NSOpenPanel), openPanel];
+        if panel == nil {
+            return Vec::new();
+        }
+        let () = msg_send![panel, setCanChooseFiles: YES];
+        let () = msg_send![panel, setCanChooseDirectories: NO];
+        let () = msg_send![panel, setAllowsMultipleSelection: if multiple { YES } else { NO }];
+        let () = msg_send![panel, setCanCreateDirectories: NO];
+        if !title.is_empty() {
+            let () = msg_send![panel, setMessage: str_to_nsstring(title)];
+        }
+        set_start_location(panel, location);
+        set_allowed_types(panel, extensions);
+        let response: i64 = msg_send![panel, runModal];
+        if response != NS_MODAL_RESPONSE_OK {
+            return Vec::new();
+        }
+        // `URLs` covers both cases: a single-selection panel returns a
+        // one-element array.
+        let urls: ObjcId = msg_send![panel, URLs];
+        if urls == nil {
+            return Vec::new();
+        }
+        let count: usize = msg_send![urls, count];
+        let mut out = Vec::with_capacity(count);
+        for index in 0..count {
+            let url: ObjcId = msg_send![urls, objectAtIndex: index];
+            if let Some(path) = url_to_path(url) {
+                out.push(path);
+            }
+        }
+        out
+    }
+}
+
+/// Run the save panel to completion on the main thread. `None` = cancelled.
+/// The panel itself handles the "already exists, replace?" prompt.
+fn run_save_panel(
+    title: &str,
+    filename: &str,
+    location: &str,
+    extensions: &[String],
+) -> Option<std::path::PathBuf> {
+    unsafe {
+        let panel: ObjcId = msg_send![class!(NSSavePanel), savePanel];
+        if panel == nil {
+            return None;
+        }
+        let () = msg_send![panel, setCanCreateDirectories: YES];
+        if !title.is_empty() {
+            let () = msg_send![panel, setMessage: str_to_nsstring(title)];
+        }
+        if !filename.is_empty() {
+            let () = msg_send![panel, setNameFieldStringValue: str_to_nsstring(filename)];
+        }
+        set_start_location(panel, location);
+        set_allowed_types(panel, extensions);
+        let response: i64 = msg_send![panel, runModal];
+        if response != NS_MODAL_RESPONSE_OK {
+            return None;
+        }
+        let url: ObjcId = msg_send![panel, URL];
+        url_to_path(url)
+    }
+}
+
+/// Run the directory-only open panel to completion on the main thread.
+/// `None` = the user cancelled (or the panel returned nothing usable).
+fn run_select_folder_panel(
+    title: &str,
+    location: &str,
+    can_create: bool,
+) -> Option<std::path::PathBuf> {
+    unsafe {
+        let panel: ObjcId = msg_send![class!(NSOpenPanel), openPanel];
+        if panel == nil {
+            return None;
+        }
+        // Files AND folders: one panel serves both "import this clip" and
+        // "import this library" — the consumer's scan handles either.
+        let () = msg_send![panel, setCanChooseFiles: YES];
+        let () = msg_send![panel, setCanChooseDirectories: YES];
+        let () = msg_send![panel, setAllowsMultipleSelection: NO];
+        let () = msg_send![panel, setCanCreateDirectories: if can_create { YES } else { NO }];
+        if !title.is_empty() {
+            let () = msg_send![panel, setMessage: str_to_nsstring(title)];
+        }
+        if !location.is_empty() {
+            let url: ObjcId = msg_send![
+                class!(NSURL),
+                fileURLWithPath: str_to_nsstring(location)
+                isDirectory: YES
+            ];
+            if url != nil {
+                let () = msg_send![panel, setDirectoryURL: url];
+            }
+        }
+        let response: i64 = msg_send![panel, runModal];
+        if response != NS_MODAL_RESPONSE_OK {
+            return None;
+        }
+        let url: ObjcId = msg_send![panel, URL];
+        if url == nil {
+            return None;
+        }
+        let path: ObjcId = msg_send![url, path];
+        if path == nil {
+            return None;
+        }
+        let path = nsstring_to_string(path);
+        if path.is_empty() {
+            return None;
+        }
+        Some(std::path::PathBuf::from(path))
     }
 }

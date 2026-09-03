@@ -196,7 +196,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self, _metal_cx: &MetalCx) {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     let window = &mut self.windows[window_id];
@@ -254,6 +254,12 @@ impl Cx {
                 CxOsOp::UpdateSelectionHandles { .. } => {}
                 CxOsOp::HideSelectionHandles => {}
                 CxOsOp::AccessibilityUpdate(_) => {}
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on tvOS");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
                 }

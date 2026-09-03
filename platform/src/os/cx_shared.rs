@@ -57,6 +57,67 @@ impl Cx {
         false
     }
 
+    /// The window a pass ultimately presents into (through any chain of
+    /// offscreen parents); None for Xr/parentless passes.
+    ///
+    /// Shared by the per-window paced backends — the macOS display link and the
+    /// Windows DXGI frame-latency beat — to decide which passes belong to the
+    /// window whose flip is currently being serviced. The 64-step cap is a
+    /// cycle guard: a malformed parent chain must not hang the paint loop.
+    #[allow(dead_code)]
+    pub(crate) fn pass_root_window(&self, pass_id: DrawPassId) -> Option<crate::window::WindowId> {
+        let mut id = pass_id;
+        for _ in 0..64 {
+            match self.passes[id].parent.clone() {
+                CxDrawPassParent::Window(window_id) => return Some(window_id),
+                CxDrawPassParent::DrawPass(parent) => id = parent,
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Whether the time repaint (`demo_time_repaint`: some shader read
+    /// `draw_pass.time`, so repaint every frame) may re-dirty this pass.
+    ///
+    /// It used to re-dirty EVERY pass with a main draw list — including
+    /// passes their owner did not begin again on the latest redraw, which
+    /// still hold a stale draw list, parent and target. Re-running one of
+    /// those overwrites the fresh output of the pass that took its place:
+    /// the VJ's warp-only beat re-ran the previous beat's whole tween chain
+    /// and its stale warp stage (same depth, higher pool id) clobbered
+    /// `warp_out` with the old t (audit hazard (a); 999/2000 beats in the
+    /// timed alternation probe).
+    ///
+    /// "Begun on the latest redraw" is read off the draw lists: a pass's main
+    /// draw list is rebuilt (`clear_draw_items(redraw_id)`) every time the
+    /// pass is begun, so its `redraw_id` is the draw cycle that last began
+    /// the pass. The reference is the pass's root window's own main list —
+    /// not the global cycle — so a window that did not redraw this cycle
+    /// keeps its time-animated child passes alive (multi-window), while a
+    /// child left behind by a window that DID redraw is stale. Window passes
+    /// are always live; parentless passes compare against the current cycle.
+    /// Explicit `repaint_pass` users are untouched: this gates only the time
+    /// repaint, and dirty propagation to parents is unchanged.
+    fn pass_live_for_time_repaint(&self, pass_id: DrawPassId) -> bool {
+        let pass = &self.passes[pass_id];
+        let Some(list_id) = pass.main_draw_list_id else {
+            return false;
+        };
+        if matches!(pass.parent, CxDrawPassParent::Window(_)) {
+            return true;
+        }
+        let reference = match self.pass_root_window(pass_id) {
+            Some(window_id) if self.windows.is_valid(window_id) => self.windows[window_id]
+                .main_pass_id
+                .and_then(|main_pass_id| self.passes[main_pass_id].main_draw_list_id)
+                .map(|main_list_id| self.draw_lists[main_list_id].redraw_id)
+                .unwrap_or(self.redraw_id),
+            _ => self.redraw_id,
+        };
+        self.draw_lists[list_id].redraw_id >= reference
+    }
+
     pub(crate) fn compute_pass_repaint_order(&mut self, passes_todo: &mut Vec<DrawPassId>) {
         passes_todo.clear();
 
@@ -65,10 +126,8 @@ impl Cx {
             // loop untill we don't propagate anymore
             let mut altered = false;
             for draw_pass_id in self.passes.id_iter() {
-                if self.demo_time_repaint {
-                    if self.passes[draw_pass_id].main_draw_list_id.is_some() {
-                        self.passes[draw_pass_id].paint_dirty = true;
-                    }
+                if self.demo_time_repaint && self.pass_live_for_time_repaint(draw_pass_id) {
+                    self.passes[draw_pass_id].paint_dirty = true;
                 }
                 if self.passes[draw_pass_id].paint_dirty {
                     let other = match self.passes[draw_pass_id].parent {
@@ -83,39 +142,65 @@ impl Cx {
                     }
                 }
             }
+            // Liveness runs the OTHER way: a pass that declared itself
+            // live-with-parent re-encodes whenever its consumer repaints.
+            // The gauss chain rides this — realtime glass — while texture
+            // caches, which exist to NOT re-render, never opt in.
+            for draw_pass_id in self.passes.id_iter() {
+                if self.passes[draw_pass_id].live_with_parent && !self.passes[draw_pass_id].paint_dirty {
+                    if let CxDrawPassParent::DrawPass(parent_pass_id) = self.passes[draw_pass_id].parent {
+                        if self.passes[parent_pass_id].paint_dirty {
+                            self.passes[draw_pass_id].paint_dirty = true;
+                            altered = true;
+                        }
+                    }
+                }
+            }
             if !altered {
                 break;
             }
         }
 
+        // EXECUTION ORDER IS THE DEPENDENCY TREE, deepest first. A pass's
+        // parent is its CONSUMER — the pass that samples the texture it
+        // renders — so every dirty pass must execute before its parent.
+        // Distance-to-root gives exactly that: sort deepest first; the
+        // stable sort keeps pool-id order between passes at equal depth
+        // (siblings), which is the order this function always produced for
+        // them. The old scan inserted a child directly before its parent
+        // only when the parent was ALREADY in the list, so with three or
+        // more levels of texture passes and adverse (recycled) pool ids a
+        // grandchild could land AFTER the pass that consumes its output,
+        // which then read a stale texture (the VJ's post/sim pass chains
+        // hit exactly this). Parentless passes keep their old "run first"
+        // contract via the depth bias.
+        const ROOT_NONE_BIAS: u64 = 1 << 32;
         for draw_pass_id in self.passes.id_iter() {
             if self.passes[draw_pass_id].paint_dirty {
-                let mut inserted = false;
-                match self.passes[draw_pass_id].parent {
-                    CxDrawPassParent::Window(_) | CxDrawPassParent::Xr => {}
-                    CxDrawPassParent::DrawPass(dep_of_pass_id) => {
-                        if draw_pass_id == dep_of_pass_id {
-                            panic!()
-                        }
-                        for insert_before in 0..passes_todo.len() {
-                            if passes_todo[insert_before] == dep_of_pass_id {
-                                passes_todo.insert(insert_before, draw_pass_id);
-                                inserted = true;
-                                break;
-                            }
-                        }
-                    }
-                    CxDrawPassParent::None => {
-                        // we need to be first
-                        passes_todo.insert(0, draw_pass_id);
-                        inserted = true;
-                    }
-                }
-                if !inserted {
-                    passes_todo.push(draw_pass_id);
-                }
+                passes_todo.push(draw_pass_id);
             }
         }
+        let slot_cap = self.passes.id_iter().count();
+        let depth_of = |start: DrawPassId| -> u64 {
+            let mut depth = 0u64;
+            let mut walk = start;
+            loop {
+                match self.passes[walk].parent {
+                    CxDrawPassParent::DrawPass(parent_id) => {
+                        depth += 1;
+                        walk = parent_id;
+                        if depth as usize > slot_cap {
+                            // A cycle in stale parent links (recycled pass
+                            // slots): stop counting rather than hang.
+                            return depth;
+                        }
+                    }
+                    CxDrawPassParent::None => return depth + ROOT_NONE_BIAS,
+                    _ => return depth,
+                }
+            }
+        };
+        passes_todo.sort_by_key(|id| std::cmp::Reverse(depth_of(*id)));
         self.demo_time_repaint = false;
     }
 
@@ -165,7 +250,9 @@ impl Cx {
     /// routed to `SCREENSHOT_FILE_SINKS` instead of the studio connection.
     /// (Headless builds write frames to files on their own; this is for the
     /// live GPU-rendered app.)
-    pub fn capture_next_frame_to_file(&mut self, path: std::path::PathBuf) {
+    /// Returns the capture's request id, so the caller can later
+    /// [`cancel_frame_capture`](Self::cancel_frame_capture) it.
+    pub fn capture_next_frame_to_file(&mut self, path: std::path::PathBuf) -> u64 {
         let request_id = SCREENSHOT_FILE_NEXT_ID
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         screenshot_file_sinks().lock().unwrap().insert(request_id, path);
@@ -175,13 +262,53 @@ impl Cx {
                 kind_id: 0,
             });
         self.redraw_all();
+        request_id
+    }
+
+    /// Forget a pending [`capture_next_frame_to_file`]. The GPU readback
+    /// cannot be recalled once its frame presents, so a request that has
+    /// already been drained keeps its sink entry but with an EMPTY path —
+    /// the writer discards those bytes instead of writing a file the
+    /// caller has stopped watching (and never mistakes them for a studio
+    /// response). A request whose frame has not presented yet is dropped
+    /// outright.
+    pub fn cancel_frame_capture(&mut self, request_id: u64) {
+        let queued = self
+            .screenshot_requests
+            .iter()
+            .any(|request| request.request_id == request_id);
+        let mut sinks = screenshot_file_sinks().lock().unwrap();
+        if queued {
+            self.screenshot_requests.retain(|request| request.request_id != request_id);
+            sinks.remove(&request_id);
+        } else if sinks.contains_key(&request_id) {
+            sinks.insert(request_id, std::path::PathBuf::new());
+        }
     }
 
     #[allow(dead_code)]
     pub(crate) fn take_studio_screenshot_request_ids(&mut self, kind_id: u32) -> Vec<u64> {
+        self.take_studio_screenshot_request_ids_for_window(kind_id, None)
+    }
+
+    /// Drain the pending screenshot requests this pass can answer.
+    ///
+    /// `window_id` is the window the presenting pass belongs to (None for
+    /// offscreen/stdin passes). A `--remote` `/g?w=N` grab only matches its own
+    /// window, so a multi-window app can be captured window by window instead of
+    /// whichever pass happens to present first. Studio and file-sink requests
+    /// are untargeted and match any pass, exactly as before.
+    #[allow(dead_code)]
+    pub(crate) fn take_studio_screenshot_request_ids_for_window(
+        &mut self,
+        kind_id: u32,
+        window_id: Option<usize>,
+    ) -> Vec<u64> {
         let mut request_ids = Vec::new();
         self.screenshot_requests.retain(|request| {
-            if request.kind_id == kind_id {
+            if request.kind_id == kind_id
+                && crate::remote::grab_targets_window(request.request_id, window_id)
+            {
                 request_ids.push(request.request_id);
                 false
             } else {
@@ -201,6 +328,16 @@ impl Cx {
         if request_ids.is_empty() {
             return;
         }
+        // `--remote` grabs are answered on the requesting HTTP thread.
+        let request_ids = crate::remote::deliver_grabs(
+            request_ids,
+            width,
+            height,
+            &png,
+        );
+        if request_ids.is_empty() {
+            return;
+        }
         // Ids registered by capture_next_frame_to_file get written to disk;
         // the rest (if any) still go to studio.
         let mut studio_ids = Vec::new();
@@ -208,6 +345,10 @@ impl Cx {
             let mut sinks = screenshot_file_sinks().lock().unwrap();
             for id in request_ids {
                 if let Some(path) = sinks.remove(&id) {
+                    if path.as_os_str().is_empty() {
+                        // Cancelled after its frame was drained: discard.
+                        continue;
+                    }
                     if let Some(parent) = path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -483,6 +624,57 @@ impl Cx {
         }
     }
 
+    /// Hardware-faithful synthetic mouse move (remote `/m?hw=1`): the event
+    /// takes the SAME pointer-lock/pin transform hardware takes
+    /// (`locked_mouse_transform`), so a pinned scrub behaves identically
+    /// under injection. The ordinary injection path bypasses
+    /// send_mouse_move entirely — which is how every bridge verification
+    /// of the pin lied about the physical mouse.
+    pub fn dispatch_hw_mouse_move(
+        &mut self,
+        window_id: crate::window::WindowId,
+        raw: crate::makepad_math::DVec2,
+        delta: crate::makepad_math::DVec2,
+        seed: crate::makepad_math::DVec2,
+        modifiers: crate::event::KeyModifiers,
+        time: f64,
+    ) {
+        // `os::apple` does not exist in a headless build (see os/mod.rs), so
+        // the pointer-lock transform has to be gated on the module's own cfg,
+        // not on the target alone.
+        #[cfg(all(target_os = "macos", not(headless)))]
+        let (abs, lock_delta) = crate::os::apple::macos::macos_app::with_macos_app(|app| {
+            app.locked_mouse_transform(raw, delta, seed)
+        });
+        #[cfg(not(all(target_os = "macos", not(headless))))]
+        let (abs, lock_delta) = {
+            let _ = (delta, seed);
+            (raw, crate::makepad_math::DVec2::default())
+        };
+        self.call_event_handler(&Event::MouseMove(crate::event::MouseMoveEvent {
+            abs,
+            lock_delta,
+            window_id,
+            modifiers,
+            time,
+            handled: Cell::new(Area::Empty),
+        }));
+        self.fingers.cycle_hover_area(live_id!(mouse).into());
+        self.fingers.switch_captures();
+    }
+
+    /// Hardware-faithful synthetic mouse up, part 1: release an active
+    /// scrub pin at the platform layer first — exactly what
+    /// macos_window::send_mouse_up does for a physical up.
+    pub fn dispatch_hw_pin_release(&mut self) {
+        #[cfg(all(target_os = "macos", not(headless)))]
+        crate::os::apple::macos::macos_app::with_macos_app(|app| {
+            if app.pointer_pin_mode {
+                app.set_pointer_pin(false);
+            }
+        });
+    }
+
     /// Dispatch a StudioToApp message as an event. Handles input, clipboard,
     /// screenshot, widget dump, and kill. Returns true on Kill (caller should
     /// shut down). Callers handle stdin-specific variants (Swapchain,
@@ -495,6 +687,10 @@ impl Cx {
     ) -> bool {
         match msg {
             StudioToApp::MouseDown(e) => {
+                // Synthetic input must take the same activation path as a
+                // native click. In particular, an unfocused macOS window
+                // must become key before its drag starts.
+                self.activate_window_on_pointer_down(window_id);
                 let event = crate::event::MouseDownEvent {
                     abs: crate::makepad_math::dvec2(e.x - pos.x, e.y - pos.y),
                     button: crate::event::MouseButton::from_bits_retain(e.button_raw_bits),
@@ -506,9 +702,11 @@ impl Cx {
                 self.fingers.process_tap_count(event.abs, event.time);
                 self.fingers.mouse_down(event.button, window_id);
                 self.call_event_handler(&Event::MouseDown(event));
+                self.update_pointer_capture_pacing();
             }
             StudioToApp::MouseMove(e) => {
                 self.call_event_handler(&Event::MouseMove(crate::event::MouseMoveEvent {
+                lock_delta: Default::default(),
                     abs: crate::makepad_math::dvec2(e.x - pos.x, e.y - pos.y),
                     window_id,
                     modifiers: e.modifiers.into_key_modifiers(),
@@ -530,6 +728,7 @@ impl Cx {
                 self.call_event_handler(&Event::MouseUp(event));
                 self.fingers.mouse_up(button);
                 self.fingers.cycle_hover_area(live_id!(mouse).into());
+                self.update_pointer_capture_pacing();
                 self.send_studio_key_focus_rect_response();
             }
             StudioToApp::Scroll(e) => {
@@ -542,7 +741,13 @@ impl Cx {
                     handled_y: Cell::new(false),
                     is_mouse: e.is_mouse,
                     time: e.time,
+                    phase: crate::event::ScrollPhase::None,
                 }));
+            }
+            StudioToApp::GameInput(states) => {
+                // Replace wholesale rather than merge: Studio sends the whole
+                // set, so a pad that unplugs disappears by being absent.
+                self.game_input_remote = states.into_iter().map(|s| s.into()).collect();
             }
             StudioToApp::KeyDown(e) => {
                 self.keyboard.process_key_down(e.clone());
@@ -553,6 +758,8 @@ impl Cx {
                 self.call_event_handler(&Event::KeyUp(e));
             }
             StudioToApp::TextInput(e) => {
+                #[cfg(target_vendor = "apple")]
+                crate::os::apple::metal::note_input_event();
                 self.call_event_handler(&Event::TextInput(e));
             }
             StudioToApp::TextCopy => {
@@ -617,10 +824,13 @@ impl Cx {
 
     /// Drain the global control channel and dispatch each message as an event.
     /// Must be called from the event loop (not from inside an event handler).
+    /// Also services the `--remote` HTTP control surface, which every backend
+    /// therefore gets by calling this one function.
     pub fn poll_control_channel(&mut self) {
         use crate::makepad_math::dvec2;
         use crate::web_socket::CONTROL_CHANNEL;
         use crate::window::CxWindowPool;
+        crate::remote::poll(self);
         let msgs: Vec<StudioToApp> = {
             let lock = CONTROL_CHANNEL.lock().unwrap();
             if let Some(rx) = lock.as_ref() {
@@ -662,7 +872,7 @@ impl Cx {
         //    expressions). The DSL did NOT change; we skip
         //    `reset_for_live_reload` (no shader code changed), and we
         //    skip the immediate ScriptReapply follow-up — if the
-        //    LiveEdit handler set `pending_script_reapply` (e.g. robrix
+        //    LiveEdit handler set `pending_script_reapply` (e.g. an app
         //    re-broadcasting preferences), it lands on the next event-
         //    loop tick. Without this split, rotation incurred a visible
         //    1-2s lag from doing two full Apply walks per geom change.
@@ -691,9 +901,8 @@ impl Cx {
             LiveEditTrigger::Manual => {
                 // Clear `pending_script_reapply` defensively — LiveEdit's
                 // script_mod re-run clobbers heap overrides anyway, and an
-                // app-level handler that re-broadcasts (e.g. robrix's
-                // `broadcast_all`) sets a fresh flag that lands on the
-                // next tick.
+                // app-level handler that re-broadcasts sets a fresh flag
+                // that lands on the next tick.
                 self.pending_script_reapply = false;
                 self.call_event_handler(&Event::LiveEdit);
                 self.redraw_all();
@@ -855,7 +1064,47 @@ impl Cx {
         }
     }
 
+    /// Clears all widgets' hover/pressed visuals by dispatching one
+    /// `Event::ClearHover` once the current event and its actions finish,
+    /// for when an overlay kept the normal hover-outs from arriving.
+    pub fn clear_all_hovers(&mut self) {
+        self.clear_hover_queued = true;
+    }
+
+    pub(crate) fn handle_pending_clear_hover(&mut self) {
+        if self.clear_hover_queued {
+            self.clear_hover_queued = false;
+            self.inner_call_event_handler(&Event::ClearHover);
+            self.handle_actions();
+        }
+    }
+
     pub(crate) fn call_event_handler(&mut self, event: &Event) {
+        // A scrub pin listens for the button-up ITSELF: release must never
+        // depend on a widget hit path. Schedule the cursor release here,
+        // but do NOT clear the capture's pin flag yet — the flag must
+        // survive THIS dispatch so every suppression gate (hover, new
+        // captures, the tweak pick pass) still stands down while the owner
+        // receives its FingerUp; clearing early let the pick pass eat the
+        // up. The flag dies WITH the capture in fingers.mouse_up, which
+        // every platform calls right after this dispatch.
+        if let Event::MouseUp(e) = event {
+            if e.button.is_primary() && self.fingers.has_pinned_capture() {
+                self.platform_ops
+                    .push_back(crate::cx_api::CxOsOp::PinMousePointer(false));
+            }
+        }
+        // The F10 exploded z-layer view is LIVE: the intercept claims only
+        // its own keys and the orbit drag (on raw screen coordinates), then
+        // the router re-addresses every other pointer event to the plane
+        // its ray lands on so ordinary dispatch — hover, wheel scrolling,
+        // the tweaker's pick — works on the exploded app. (After the pin
+        // hook: a mid-drag F10 must never strand a hidden cursor.)
+        if self.sploded_intercept(event) {
+            return;
+        }
+        let routed = self.sploded_route(event);
+        let event = routed.as_ref().unwrap_or(event);
         if let Event::PermissionResult(result) = event {
             self.handle_camera_permission_result(result);
         }
@@ -875,6 +1124,7 @@ impl Cx {
         self.inner_key_focus_change();
         self.handle_triggers();
         self.handle_actions();
+        self.handle_pending_clear_hover();
     }
 
     #[allow(dead_code)]
@@ -907,6 +1157,12 @@ impl Cx {
 
         self.call_event_handler(&Event::Draw(draw_event));
         self.in_draw_event = false;
+        if let Some(mut hook) = self.post_draw_hook.take() {
+            hook(self);
+            if self.post_draw_hook.is_none() {
+                self.post_draw_hook = Some(hook);
+            }
+        }
 
         if Cx::has_studio_web_socket() {
             self.try_send_studio_widget_tree_dump_responses();

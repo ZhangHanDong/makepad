@@ -5,3 +5,10 @@ edition = "2021"
 
 [dependencies]
 makepad-widgets = { path = "../../widgets", version = "2.0.0", features = ["maps"] }
+makepad-map-nav = { path = "../../libs/map_nav" }
+makepad-geodata = { path = "../../libs/geodata" }
+makepad-mbtile-reader = { path = "../../libs/mbtile_reader" }
+makepad-fast-inflate = { path = "../../libs/fast_inflate" }
+
+[dev-dependencies]
+makepad-test = { path = "../../libs/makepad_test", version = "0.1.0" }

@@ -136,6 +136,8 @@ pub const TEXTURE_EXTERNAL_OES: GLenum = 0x8D65;
 pub const EXTENSIONS: GLenum = 0x1F03;
 pub const VENDOR: GLenum = 0x1F00;
 pub const RENDERER: GLenum = 0x1F01;
+pub const VERSION: GLenum = 0x1F02;
+pub const SHADING_LANGUAGE_VERSION: GLenum = 0x8B8C;
 pub const SCISSOR_TEST: GLenum = 0x0C11;
 pub const CULL_FACE: GLenum = 0x0B44;
 pub const BACK: GLenum = 0x0405;
@@ -292,6 +294,10 @@ pub type TglSamplerParameteri =
     unsafe extern "C" fn(sampler: GLuint, pname: GLenum, param: GLint) -> ();
 pub type TglFlush = unsafe extern "C" fn() -> ();
 pub type TglFinish = unsafe extern "C" fn() -> ();
+/// `glWaitSync` — wait on a share-group `GLsync` in the current context.
+pub type TglWaitSync =
+    unsafe extern "C" fn(sync: *const raw::c_void, flags: GLbitfield, timeout: u64) -> ();
+pub type TglIsTexture = unsafe extern "C" fn(texture: GLuint) -> GLboolean;
 pub type TglGetProgramBinary = unsafe extern "C" fn(
     program: GLuint,
     bufSize: GLsizei,
@@ -459,6 +465,8 @@ pub struct LibGl {
     pub glReadPixels: TglReadPixels,
     pub glFlush: TglFlush,
     pub glFinish: TglFinish,
+    pub glWaitSync: Option<TglWaitSync>,
+    pub glIsTexture: Option<TglIsTexture>,
     pub glGetProgramBinary: TglGetProgramBinary,
     pub glProgramBinary: TglProgramBinary,
     pub glDeleteTextures: TglDeleteTextures,
@@ -732,6 +740,8 @@ impl LibGl {
             glSamplerParameteri: load!(loadfn, TglSamplerParameteri, "glSamplerParameteri").ok(),
             glFlush: load!(loadfn, TglFlush, "glFlush")?,
             glFinish: load!(loadfn, TglFinish, "glFinish")?,
+            glWaitSync: load!(loadfn, TglWaitSync, "glWaitSync").ok(),
+            glIsTexture: load!(loadfn, TglIsTexture, "glIsTexture").ok(),
             glClearDepthf: load!(loadfn, TglClearDepthf, "glClearDepthf", "glClearDepthfOES")?,
             glGetProgramBinary: load!(
                 loadfn,

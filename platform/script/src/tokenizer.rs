@@ -220,6 +220,18 @@ impl ScriptToken {
 pub struct ScriptTokenPos {
     pub token: ScriptToken,
     pos: usize,
+    /// True if whitespace containing a newline separated this token from the
+    /// previous one. Lets the parser keep statements newline-delimited (a
+    /// continuation token on a new line begins a new statement, Go/Swift-style).
+    pub preceded_by_newline: bool,
+}
+
+/// One captured `/** ... */` doc annotation (see `ScriptTokenizer::docs`).
+#[derive(Clone, Debug)]
+pub struct ScriptTokDoc {
+    /// Index the NEXT token gets (`tokens.len()` at capture end).
+    pub next_token: u32,
+    pub text: String,
 }
 
 #[derive(Default, Eq, PartialEq)]
@@ -236,6 +248,15 @@ enum State {
     AsciiHexInString(bool),
     BlockComment(usize),
     MaybeEndBlock(usize),
+    /// Just entered `/*`; a following `*` may open a `/**name*/` doc.
+    BlockCommentStart,
+    /// Saw `/**`; the next char decides doc (`/**x`), empty (`/**/`) or
+    /// plain (`/***`, Rust convention).
+    BlockDocStart,
+    /// Inside `/**...*/`: text accumulates into `temp`.
+    BlockDoc,
+    /// Saw `*` inside a block doc; `/` closes it.
+    BlockDocMaybeEnd,
     LineComment,
     Number,
     Color,
@@ -244,7 +265,18 @@ enum State {
 #[derive(Default)]
 pub struct ScriptTokenizer {
     pos: usize,
+    /// Set when a newline is consumed; stamped onto (and cleared by) the next
+    /// emitted token as `preceded_by_newline`.
+    newline_pending: bool,
     pub tokens: Vec<ScriptTokenPos>,
+    /// Captured `/** ... */` doc annotations, keyed by the index the NEXT
+    /// token gets (`tokens.len()` at capture end). ONE form; position
+    /// determines meaning at resolution time (`docs::resolve_docs`):
+    /// before `key:` it documents the field, before an object literal it
+    /// documents the object, immediately before a value literal it names
+    /// that value (`/**glow tint*/ #8f0`). The parser never sees these;
+    /// `//` and `/* */` remain plain discarded comments.
+    pub docs: Vec<ScriptTokDoc>,
     pub original: String,
     unfinished: String,
     temp: String,
@@ -259,7 +291,9 @@ pub struct ScriptLoc {
 impl ScriptTokenizer {
     pub fn clear(&mut self) {
         self.pos = 0;
+        self.newline_pending = false;
         self.tokens.clear();
+        self.docs.clear();
         self.original.clear();
         self.unfinished.clear();
         self.temp.clear();
@@ -331,6 +365,20 @@ impl ScriptTokenizer {
         print!("\n");
     }
 
+    /// Emits a token, stamping whether a newline preceded it (and clearing the
+    /// pending flag). All token emission funnels through here.
+    fn push_tok(&mut self, pos: usize, token: ScriptToken) {
+        let preceded_by_newline = self.newline_pending;
+        self.newline_pending = false;
+        self.tokens.push(ScriptTokenPos { token, pos, preceded_by_newline });
+    }
+
+    /// Whether token `i` was preceded by a newline (see `preceded_by_newline`).
+    pub fn token_preceded_by_newline(&self, i: u32) -> bool {
+        self.tokens.get(i as usize).is_some_and(|t| t.preceded_by_newline)
+    }
+
+
     pub fn pos_to_loc(&self, pos: usize) -> Option<ScriptLoc> {
         let mut row = 0;
         let mut col = 0;
@@ -357,24 +405,21 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::RustValue(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::RustValue(number));
     }
 
     fn emit_f64(&mut self) {
+        // Measure before clearing: a float token's position was taken from
+        // an already-emptied `temp`, so it pointed one past its terminator —
+        // a float ending a line resolved to the NEXT line, column 0.
+        let len = self.temp.len();
         let number = if let Ok(v) = self.temp.parse::<f64>() {
             // allow the shader compiler to recognise the difference btween 1 and 1.
             if !(self.temp.contains('.') || self.temp.contains('e') || self.temp.contains('E'))
                 && v <= 0xFF_FFFF_FFFFu64 as f64
             {
-                let len = self.temp.len();
                 self.temp.clear();
-                self.tokens.push(ScriptTokenPos {
-                    pos: self.pos - len,
-                    token: ScriptToken::U40(v as u64),
-                });
+                self.push_tok(self.pos - len, ScriptToken::U40(v as u64));
                 return;
             }
             self.temp.clear();
@@ -382,27 +427,20 @@ impl ScriptTokenizer {
         } else {
             0.0
         };
-        let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::F64(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::F64(number));
     }
 
     fn emit_f32(&mut self) {
+        let len = self.temp.len();
         let number = if let Ok(v) = self.temp.parse::<f32>() {
             self.temp.clear();
             v
         } else {
             0.0
         };
-        let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::F32(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::F32(number));
     }
 
     fn emit_u32(&mut self) {
@@ -414,40 +452,31 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::U32(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::U32(number));
     }
 
     fn emit_i32(&mut self) {
+        let len = self.temp.len();
         let number = if let Ok(v) = self.temp.parse::<i32>() {
             self.temp.clear();
             v
         } else {
             0
         };
-        let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::I32(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::I32(number));
     }
 
     fn emit_f16(&mut self) {
+        let len = self.temp.len();
         let number = if let Ok(v) = self.temp.parse::<f32>() {
             self.temp.clear();
             v
         } else {
             0.0
         };
-        let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::F16(number),
-        });
+        self.push_tok(self.pos - len, ScriptToken::F16(number));
     }
 
     fn emit_identifier(&mut self) {
@@ -463,10 +492,7 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::Identifier(id),
-        });
+        self.push_tok(self.pos - len, ScriptToken::Identifier(id));
     }
 
     fn emit_operator(&mut self) {
@@ -485,10 +511,7 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::Operator(id),
-        });
+        self.push_tok(self.pos - len, ScriptToken::Operator(id));
     }
 
     fn emit_separator(&mut self, c: char) {
@@ -508,10 +531,7 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::Separator(id),
-        });
+        self.push_tok(self.pos - len, ScriptToken::Separator(id));
     }
 
     fn emit_color(&mut self) {
@@ -521,17 +541,11 @@ impl ScriptTokenizer {
         };
         let len = self.temp.len();
         self.temp.clear();
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos - len,
-            token: ScriptToken::Color(color),
-        });
+        self.push_tok(self.pos - len, ScriptToken::Color(color));
     }
 
     fn emit_token_here(&mut self, token: ScriptToken) {
-        self.tokens.push(ScriptTokenPos {
-            pos: self.pos,
-            token,
-        })
+        self.push_tok(self.pos, token)
     }
 
     fn append_unfinished_string(&mut self, c: char) {
@@ -544,10 +558,7 @@ impl ScriptTokenizer {
         } else {
             self.unfinished.clear();
             self.unfinished.push(c);
-            self.tokens.push(ScriptTokenPos {
-                pos: self.pos,
-                token: ScriptToken::StringUnfinished,
-            });
+            self.push_tok(self.pos, ScriptToken::StringUnfinished);
         }
     }
 
@@ -576,20 +587,15 @@ impl ScriptTokenizer {
             if let Some(ScriptTokenPos {
                 token: ScriptToken::StringUnfinished,
                 pos,
+                ..
             }) = self.tokens.pop()
             {
                 let v = heap.new_string_from_str(&self.unfinished);
                 self.unfinished.clear();
-                self.tokens.push(ScriptTokenPos {
-                    token: ScriptToken::String(v),
-                    pos,
-                })
+                self.push_tok(pos, ScriptToken::String(v))
             }
         } else {
-            self.tokens.push(ScriptTokenPos {
-                token: ScriptToken::String(ScriptValue::EMPTY_STRING),
-                pos: self.pos,
-            })
+            self.push_tok(self.pos, ScriptToken::String(ScriptValue::EMPTY_STRING))
         }
     }
 
@@ -808,7 +814,7 @@ impl ScriptTokenizer {
 
                     // Check for comment start
                     if self.temp == "/*" {
-                        self.state = State::BlockComment(0);
+                        self.state = State::BlockCommentStart;
                         self.temp.clear();
                     } else if self.temp == "//" {
                         self.state = State::LineComment;
@@ -924,6 +930,57 @@ impl ScriptTokenizer {
                     if c == '\n' {
                         // end line comment
                         self.state = State::Whitespace;
+                    }
+                }
+                State::BlockCommentStart => {
+                    if c == '*' {
+                        self.state = State::BlockDocStart;
+                    } else if c == '/' {
+                        // `/*/` : half-open plain comment, still open
+                        self.state = State::BlockComment(0);
+                    } else {
+                        self.state = State::BlockComment(0);
+                    }
+                }
+                State::BlockDocStart => {
+                    if c == '/' {
+                        // `/**/` : empty plain comment
+                        self.state = State::Whitespace;
+                    } else if c == '*' {
+                        // `/***` : plain comment, per Rust convention; the
+                        // `*` we saw may begin the closer
+                        self.state = State::MaybeEndBlock(0);
+                    } else {
+                        self.temp.clear();
+                        self.temp.push(c);
+                        self.state = State::BlockDoc;
+                    }
+                }
+                State::BlockDoc => {
+                    if c == '*' {
+                        self.state = State::BlockDocMaybeEnd;
+                    } else {
+                        self.temp.push(c);
+                    }
+                }
+                State::BlockDocMaybeEnd => {
+                    if c == '/' {
+                        let text = self.temp.trim().to_string();
+                        if !text.is_empty() {
+                            self.docs.push(ScriptTokDoc {
+                                next_token: self.tokens.len() as u32,
+                                text,
+                            });
+                        }
+                        self.temp.clear();
+                        self.state = State::Whitespace;
+                    } else if c == '*' {
+                        self.temp.push('*');
+                        // stay: this `*` may begin the closer
+                    } else {
+                        self.temp.push('*');
+                        self.temp.push(c);
+                        self.state = State::BlockDoc;
                     }
                 }
                 State::Number => {
@@ -1054,6 +1111,12 @@ impl ScriptTokenizer {
                         self.state = State::Whitespace;
                     }
                 }
+            }
+            // Register the newline AFTER this char's token emission, so a token
+            // terminated BY this newline keeps whatever preceded it, and the flag
+            // attaches to the NEXT token instead.
+            if c == '\n' {
+                self.newline_pending = true;
             }
         }
         &self.tokens[start..self.tokens.len()]

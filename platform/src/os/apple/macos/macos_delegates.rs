@@ -1,7 +1,10 @@
 use {
     crate::{
         cursor::MouseCursor,
-        event::{finger::MouseButton, DragEvent, DragItem, DragResponse, DropEvent},
+        event::{
+            finger::{MouseButton, ScrollPhase},
+            DragEvent, DragItem, DragResponse, DropEvent,
+        },
         makepad_live_id::LiveId,
         makepad_math::Vec2d,
         os::{
@@ -13,7 +16,7 @@ use {
             },
             cx_native::EventFlow,
             macos::{
-                macos_app::{with_macos_app, MacosApp},
+                macos_app::{try_with_macos_app, with_macos_app, MacosApp},
                 macos_event::MacosEvent,
                 macos_window::get_cocoa_window,
             },
@@ -22,13 +25,98 @@ use {
     std::{ffi::CStr, os::raw::c_void, sync::Arc, sync::Mutex},
 };
 
+/// AppKit's transparent-titlebar container still owns the top ~28pt of a
+/// caption-less window: clicks fall through to the app, but DRAGS move the
+/// window — so a slider the app draws in its own top bar loses every drag
+/// to AppKit. Swapped onto the container after window creation, this
+/// subclass keeps only AppKit's own controls hittable (the traffic lights
+/// are NSButtons); everything else falls through to the makepad view, and
+/// window dragging is decided solely by the app's WindowDragQuery answer.
+pub fn define_titlebar_container_class() -> *const Class {
+    let Some(container_class) = Class::get("NSTitlebarContainerView") else {
+        return std::ptr::null();
+    };
+    extern "C" fn hit_test(this: &Object, _: Sel, point: NSPoint) -> ObjcId {
+        unsafe {
+            let hit: ObjcId = msg_send![super(this, superclass(this)), hitTest: point];
+            let mut view = hit;
+            while view != nil {
+                let is_button: bool = msg_send![view, isKindOfClass: class!(NSButton)];
+                if is_button {
+                    return hit;
+                }
+                view = msg_send![view, superview];
+            }
+            nil
+        }
+    }
+    let mut decl = ClassDecl::new("MakepadTitlebarContainerView", container_class).unwrap();
+    unsafe {
+        decl.add_method(
+            sel!(hitTest:),
+            hit_test as extern "C" fn(&Object, Sel, NSPoint) -> ObjcId,
+        );
+    }
+    decl.register()
+}
+
 pub fn define_macos_timer_delegate() -> *const Class {
+    // A panic must NOT unwind across these ObjC boundaries: the unwind hits
+    // `panic_cannot_unwind` and aborts the whole app — and because the run
+    // loop re-enters the callback while app state is already poisoned from
+    // the FIRST panic, the readable message is followed by a hard SIGABRT
+    // that looks like a platform crash. Catch at the edge, shout to stderr,
+    // and keep the run loop alive: a live VJ set survives a bad effect
+    // parameter, and the author gets the real panic text instead of a
+    // crash report.
+    fn shielded(name: &str, call: impl FnOnce() + std::panic::UnwindSafe) {
+        static PANICS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if std::panic::catch_unwind(call).is_err() {
+            let count = PANICS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            // The panic hook already printed message + backtrace; this line
+            // names the boundary that contained it.
+            eprintln!(
+                "makepad: PANIC contained at the {name} callback boundary \
+                 (#{count}); recovering: paint clock re-armed, next frame redraws"
+            );
+            // The unwind skipped the tail of the event loop's timer branch —
+            // the part that re-arms timer 0. Without this the loop blocks
+            // in nextEvent for good: no paint, no bridge, an app that looks
+            // hung. Re-arm, and let the next tick run the recovery.
+            crate::os::apple::macos::macos::note_contained_panic();
+            crate::os::apple::macos::macos_app::try_with_macos_app(|app| {
+                app.start_timer(0, 0.2, true);
+            });
+        }
+    }
+
     extern "C" fn received_timer(_this: &Object, _: Sel, nstimer: ObjcId) {
-        MacosApp::send_timer_received(nstimer);
+        shielded("timer", std::panic::AssertUnwindSafe(|| {
+            MacosApp::send_timer_received(nstimer);
+        }));
     }
 
     extern "C" fn received_live_resize(_this: &Object, _: Sel, _nstimer: ObjcId) {
-        MacosApp::send_paint_event();
+        shielded("live-resize", std::panic::AssertUnwindSafe(|| {
+            MacosApp::send_paint_event();
+        }));
+    }
+
+    extern "C" fn received_display_link(_this: &Object, _: Sel, link: ObjcId) {
+        shielded("display-link", std::panic::AssertUnwindSafe(|| {
+            MacosApp::send_display_link_fired(link);
+        }));
+    }
+
+    extern "C" fn metal_display_link_needs_update(
+        _this: &Object,
+        _: Sel,
+        link: ObjcId,
+        update: ObjcId,
+    ) {
+        shielded("metal-display-link", std::panic::AssertUnwindSafe(|| {
+            MacosApp::send_metal_display_link_update(link, update);
+        }));
     }
 
     let superclass = class!(NSObject);
@@ -43,6 +131,15 @@ pub fn define_macos_timer_delegate() -> *const Class {
         decl.add_method(
             sel!(receivedLiveResize:),
             received_live_resize as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(receivedDisplayLink:),
+            received_display_link as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(metalDisplayLink:needsUpdate:),
+            metal_display_link_needs_update
+                as extern "C" fn(&Object, Sel, ObjcId, ObjcId),
         );
     }
 
@@ -214,11 +311,27 @@ pub fn define_macos_window_delegate() -> *const Class {
     }
 
     extern "C" fn window_did_become_key(this: &Object, _: Sel, _: ObjcId) {
+        // macOS re-associates the cursor whenever the app deactivates, so a
+        // logically-locked pointer must re-apply its physical lock on every
+        // focus gain — GLFW's disabled-cursor mode does exactly this.
+        with_macos_app(|app| {
+            if app.mouse_pointer_lock {
+                app.apply_pointer_lock_effects(true);
+            }
+        });
         let cw = get_cocoa_window(this);
         cw.send_got_focus_event();
     }
 
     extern "C" fn window_did_resign_key(this: &Object, _: Sel, _: ObjcId) {
+        // Suspend (never unset) the lock while unfocused: the cursor comes
+        // back for whatever app took over, and returns to the lock when we
+        // regain key.
+        with_macos_app(|app| {
+            if app.mouse_pointer_lock {
+                app.apply_pointer_lock_effects(false);
+            }
+        });
         let cw = get_cocoa_window(this);
         cw.send_lost_focus_event();
     }
@@ -311,11 +424,11 @@ pub fn define_macos_window_delegate() -> *const Class {
             window_did_move as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
-            sel!(windowChangedScreen:),
+            sel!(windowDidChangeScreen:),
             window_did_change_screen as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
-            sel!(windowChangedBackingProperties:),
+            sel!(windowDidChangeBackingProperties:),
             window_did_change_backing_properties as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
@@ -496,6 +609,35 @@ pub fn define_cocoa_view_class() -> *const Class {
         cw.send_mouse_up(MouseButton::SECONDARY, modifiers);
     }
 
+    extern "C" fn touches_began_with_event(this: &Object, _sel: Sel, event: ObjcId) {
+        // A raw finger contact on the trackpad. This is the only reliable signal for
+        // stopping kinetic scrolling on a tap: the tap's click can be suppressed by
+        // the system's tap rejection, and the OS momentum stream (whose cancellation
+        // would otherwise signal the touch) may have already ended while a widget's
+        // own deceleration tail is still gliding. Requires the view to have its
+        // allowedTouchTypes set to indirect.
+        let cw = get_cocoa_window(this);
+        let touching: ObjcId = unsafe {
+            // NSTouchPhaseTouching = Began | Moved | Stationary = 0b111.
+            msg_send![event, touchesMatchingPhase: 7u64 inView: nil]
+        };
+        let count: u64 = unsafe { msg_send![touching, count] };
+        cw.on_raw_touches_began(count == 1);
+        let modifiers = get_event_key_modifier(event);
+        cw.send_scroll(Vec2d::default(), modifiers, false, ScrollPhase::Touched);
+    }
+
+    extern "C" fn touches_ended_with_event(this: &Object, _sel: Sel, event: ObjcId) {
+        let cw = get_cocoa_window(this);
+        let modifiers = get_event_key_modifier(event);
+        cw.on_raw_touches_ended(modifiers);
+    }
+
+    extern "C" fn touches_cancelled_with_event(this: &Object, _sel: Sel, _event: ObjcId) {
+        let cw = get_cocoa_window(this);
+        cw.on_raw_touches_began(false);
+    }
+
     extern "C" fn other_mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
         let cw = get_cocoa_window(this);
         let modifiers = get_event_key_modifier(event);
@@ -565,25 +707,37 @@ pub fn define_cocoa_view_class() -> *const Class {
     }
 
     extern "C" fn reset_cursor_rects(this: &Object, _sel: Sel) {
-        unsafe {
-            let current_cursor = with_macos_app(|app| app.current_cursor.clone());
-            let cursor_id = with_macos_app(|app| {
-                *app.cursors
-                    .entry(current_cursor.clone())
-                    .or_insert_with(|| load_mouse_cursor(current_cursor.clone()))
-            });
+        // AppKit fires this from the display cycle (tracking-area update), often
+        // re-entrantly while our own handler holds the app borrow. Two hard rules:
+        // never panic across this ObjC frame (that is a nounwind abort — the
+        // 'crashed when clicking About' report), and never hand AppKit a cursor
+        // object we do not own — the cache holds retained ids for that reason.
+        let call = std::panic::AssertUnwindSafe(|| unsafe {
+            let Some(current_cursor) = try_with_macos_app(|app| app.current_cursor.clone()) else { return };
+            let Some(cursor_id) = try_with_macos_app(|app| {
+                *app.cursors.entry(current_cursor.clone()).or_insert_with(|| {
+                    let id = load_mouse_cursor(current_cursor.clone());
+                    if !id.is_null() {
+                        let _: ObjcId = msg_send![id, retain];
+                    }
+                    id
+                })
+            }) else { return };
+            if cursor_id.is_null() {
+                return;
+            }
             let bounds: NSRect = msg_send![this, bounds];
             if let MouseCursor::Hidden = current_cursor {
-                let _: () = msg_send![
-                    cursor_id,
-                    setHiddenUntilMouseMoves: true
-                ];
+                // +[NSCursor setHiddenUntilMouseMoves:] is a CLASS method. Sending it to
+                // the cursor instance raised NSInvalidArgumentException inside this
+                // callback, and a foreign exception crossing the shield below is a
+                // hard abort — every entry into walk mode died here.
+                let _: () = msg_send![class!(NSCursor), setHiddenUntilMouseMoves: true];
             }
-            let _: () = msg_send![
-                this,
-                addCursorRect: bounds
-                cursor: cursor_id
-            ];
+            let _: () = msg_send![this, addCursorRect: bounds cursor: cursor_id];
+        });
+        if std::panic::catch_unwind(call).is_err() {
+            eprintln!("makepad: PANIC contained at the resetCursorRects callback boundary; cursor rects skipped this round");
         }
     }
 
@@ -826,6 +980,18 @@ pub fn define_cocoa_view_class() -> *const Class {
         window.do_callback(MacosEvent::DragEnd);
     }
 
+    /// External file drags always copy. Generated/library payloads remain
+    /// owned by the source application; a destination such as Messages must
+    /// never be allowed to negotiate a move and remove the managed file.
+    extern "C" fn dragging_session_source_operation_mask_for_dragging_context(
+        _this: &Object,
+        _: Sel,
+        _session: ObjcId,
+        _context: i64,
+    ) -> NSDragOperation {
+        NSDragOperation::Copy
+    }
+
     extern "C" fn dragging_entered(this: &Object, _: Sel, sender: ObjcId) -> NSDragOperation {
         let window = get_cocoa_window(this);
         window.start_live_resize();
@@ -856,7 +1022,7 @@ pub fn define_cocoa_view_class() -> *const Class {
             get_event_key_modifier(ns_event)
         };
 
-        window.do_callback(MacosEvent::Drag(DragEvent {
+        window.do_callback(MacosEvent::Drag(window.window_id, DragEvent {
             modifiers,
             handled: Arc::new(Mutex::new(false)),
             abs: pos,
@@ -876,6 +1042,32 @@ pub fn define_cocoa_view_class() -> *const Class {
     extern "C" fn dragging_ended(this: &Object, _: Sel, _sender: ObjcId) {
         let window = get_cocoa_window(this);
         window.end_live_resize();
+    }
+
+    /// Decode %XX escapes into their bytes; the result is the UTF-8 path the
+    /// filesystem actually knows. Invalid escapes pass through untouched.
+    fn percent_decode_path(encoded: &str) -> String {
+        let bytes = encoded.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = |b: u8| match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                };
+                if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                    out.push(hi * 16 + lo);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8(out).unwrap_or_else(|_| encoded.to_string())
     }
 
     fn get_drag_items_from_pasteboard(
@@ -932,7 +1124,11 @@ pub fn define_cocoa_view_class() -> *const Class {
                         path: if path == "makepad_internal_empty" {
                             "".to_string()
                         } else {
-                            path
+                            // `absoluteString` is percent-ENCODED — a Finder
+                            // drop of "My File.png" arrived as My%20File.png
+                            // and every consumer then failed to find it. A
+                            // FilePath item carries a filesystem path.
+                            percent_decode_path(&path)
                         },
                     });
                 }
@@ -952,7 +1148,7 @@ pub fn define_cocoa_view_class() -> *const Class {
         let window = get_cocoa_window(this);
         let (items, pos) = get_drag_items_from_pasteboard(this, sender);
         let handled = Arc::new(Mutex::new(false));
-        window.do_callback(MacosEvent::Drop(DropEvent {
+        window.do_callback(MacosEvent::Drop(window.window_id, DropEvent {
             modifiers,
             handled: handled.clone(),
             abs: pos,
@@ -1045,6 +1241,18 @@ pub fn define_cocoa_view_class() -> *const Class {
         //decl.add_method(sel!(insertTab:), insert_tab as extern fn(&Object, Sel, id));
         //decl.add_method(sel!(insertBackTab:), insert_back_tab as extern fn(&Object, Sel, id));
         decl.add_method(
+            sel!(touchesBeganWithEvent:),
+            touches_began_with_event as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(touchesEndedWithEvent:),
+            touches_ended_with_event as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(touchesCancelledWithEvent:),
+            touches_cancelled_with_event as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
             sel!(mouseDown:),
             mouse_down as extern "C" fn(&Object, Sel, ObjcId),
         );
@@ -1113,6 +1321,11 @@ pub fn define_cocoa_view_class() -> *const Class {
         #[cfg(target_os = "macos")]
         {
             decl.add_method(
+                sel!(draggingSession: sourceOperationMaskForDraggingContext:),
+                dragging_session_source_operation_mask_for_dragging_context
+                    as extern "C" fn(&Object, Sel, ObjcId, i64) -> NSDragOperation,
+            );
+            decl.add_method(
                 sel!(draggingSession: endedAtPoint: operation:),
                 dragging_session_ended_at_point_operation
                     as extern "C" fn(&Object, Sel, ObjcId, NSPoint, NSDragOperation),
@@ -1143,5 +1356,7 @@ pub fn define_cocoa_view_class() -> *const Class {
     decl.add_ivar::<ObjcId>("markedText");
     decl.add_protocol(&Protocol::get("NSTextInputClient").unwrap());
     decl.add_protocol(&Protocol::get("CALayerDelegate").unwrap());
+    #[cfg(target_os = "macos")]
+    decl.add_protocol(&Protocol::get("NSDraggingSource").unwrap());
     return decl.register();
 }

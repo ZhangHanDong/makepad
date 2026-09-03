@@ -2614,7 +2614,12 @@ impl CxVulkan {
         }
         let screenshot_request_ids = cx.take_studio_screenshot_request_ids(0);
         let run_view_request = cx.take_studio_run_view_frame_request(0);
-        let capture_swapchain = !screenshot_request_ids.is_empty() || run_view_request.is_some();
+        // A continuous capture sink (the ScreenCap recorder) is standing
+        // permission rather than a queued request, so it is asked separately.
+        let capture_window_id = cx.get_pass_window_id(draw_pass_id).map(|w| w.id());
+        let wants_capture = crate::screen_capture::capture_wants_window(capture_window_id);
+        let capture_swapchain =
+            !screenshot_request_ids.is_empty() || run_view_request.is_some() || wants_capture;
         if capture_swapchain && self.swapchain_readback_buffer.is_none() {
             return Err(
                 "swapchain capture requested but readback buffer is unavailable".to_string(),
@@ -2835,6 +2840,8 @@ impl CxVulkan {
             let width = self.swapchain_extent.width.max(1);
             let height = self.swapchain_extent.height.max(1);
             let rgba = self.read_swapchain_color_image_rgba(image_index as usize)?;
+
+            crate::screen_capture::deliver_capture_frame(capture_window_id, width, height, &rgba);
 
             if !screenshot_request_ids.is_empty() {
                 let png = Cx::encode_rgba_as_png(width, height, &rgba)?;
@@ -3692,6 +3699,8 @@ impl CxVulkan {
                 data,
                 ..
             }
+            // VecMipBGRAu8_32: level 0 only for now (safe, no mip chain). Real mips
+            // (mip_levels>1 + vkCmdBlitImage) are a TODO for Vulkan.
             | TextureFormat::VecMipBGRAu8_32 {
                 width,
                 height,
@@ -3981,6 +3990,7 @@ impl CxVulkan {
             TexturePixel::BGRAu8 => Some(vk::Format::B8G8R8A8_UNORM),
             TexturePixel::RGBAf16 => Some(vk::Format::R16G16B16A16_SFLOAT),
             TexturePixel::RGBAf32 => Some(vk::Format::R32G32B32A32_SFLOAT),
+            TexturePixel::Rf32 => Some(vk::Format::R32_SFLOAT),
             _ => None,
         }
     }
@@ -4900,7 +4910,10 @@ impl CxVulkan {
                 enabled: true,
                 matrix: 0.0,
                 biplanar,
+                full_range: false,
                 rotation_steps: 0.0,
+            external: false,
+            array: false,
             });
         }
 
@@ -5151,7 +5164,10 @@ impl CxVulkan {
             enabled: true,
             matrix: 0.0,
             biplanar: plane_layout.biplanar,
+            full_range: false,
             rotation_steps: 0.0,
+        external: false,
+        array: false,
         })
     }
 
@@ -5421,6 +5437,8 @@ impl CxVulkan {
         xr_depth_view: vk::ImageView,
     ) -> Result<(), String> {
         let draw_order_len = cx.draw_lists[draw_list_id].draw_item_order_len();
+        // Exploded z-layer view: z is the call's nesting depth, not paint order.
+        let sploded = cx.passes[draw_pass_id].sploded.is_some();
         for order_index in 0..draw_order_len {
             let Some(draw_item_id) =
                 cx.draw_lists[draw_list_id].draw_item_id_at_order_index(order_index)
@@ -5435,17 +5453,21 @@ impl CxVulkan {
                 .sub_list()
             {
                 let child_resets_zbias = cx.draw_lists[sub_list_id].reset_zbias;
-                let mut child_zbias = 0.0f32;
+                let mut own_zbias = 0.0f32;
+                let child_zbias = if child_resets_zbias {
+                    &mut own_zbias
+                } else {
+                    &mut *zbias
+                };
+                // An overlay list carries a depth floor: this is what makes it
+                // composite above body content that uses `draw_depth`.
+                cx.draw_lists[sub_list_id].raise_zbias_to_floor(child_zbias);
                 self.record_draw_list(
                     cx,
                     draw_pass_id,
                     sub_list_id,
                     render_pass_key,
-                    if child_resets_zbias {
-                        &mut child_zbias
-                    } else {
-                        zbias
-                    },
+                    child_zbias,
                     zbias_step,
                     draw_stats,
                     xr_depth_view,
@@ -5514,7 +5536,7 @@ impl CxVulkan {
                     cx.demo_time_repaint = true;
                 }
 
-                draw_call.draw_call_uniforms.set_zbias(*zbias);
+                draw_call.resolve_zbias(*zbias, sploded);
                 *zbias += zbias_step;
                 draw_call.instance_dirty = false;
                 draw_call.uniforms_dirty = false;

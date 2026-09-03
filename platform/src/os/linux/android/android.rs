@@ -18,6 +18,7 @@ use {
         super::egl_sys::{self, LibEgl},
         super::libc_sys,
         android_camera_player::AndroidCameraPlayer,
+        android_file_dialog,
         android_jni::{self, *},
         android_keycodes::android_to_makepad_key_code,
         android_media::CxAndroidMedia,
@@ -1071,14 +1072,63 @@ impl Cx {
                         }
                     };
 
-                    self.call_event_handler(&Event::PermissionResult(
-                        crate::permission::PermissionResult {
-                            permission: perm,
-                            request_id,
-                            status: permission_status,
-                        },
-                    ));
+                    // Deferred start: StartLocationUpdates fired this dialog.
+                    if perm == crate::permission::Permission::Location
+                        && self.os.location_updates_wanted
+                    {
+                        match permission_status {
+                            crate::permission::PermissionStatus::Granted => unsafe {
+                                android_jni::to_java_start_location_updates(
+                                    LOCATION_MIN_INTERVAL_MS,
+                                    LOCATION_MIN_DISTANCE_M,
+                                );
+                            },
+                            _ => {
+                                self.call_event_handler(&Event::LocationError(
+                                    crate::event::LocationErrorEvent::PermissionDenied,
+                                ));
+                            }
+                        }
+                    }
+                    if request_id != LOCATION_INTERNAL_PERMISSION_REQUEST_ID {
+                        self.call_event_handler(&Event::PermissionResult(
+                            crate::permission::PermissionResult {
+                                permission: perm,
+                                request_id,
+                                status: permission_status,
+                            },
+                        ));
+                    }
                 }
+            }
+            FromJavaMessage::LocationUpdate {
+                lon,
+                lat,
+                accuracy_m,
+                altitude_m,
+                speed_mps,
+                heading_deg,
+                time_ms,
+            } => {
+                self.call_event_handler(&Event::LocationUpdate(
+                    crate::event::LocationUpdateEvent {
+                        lon,
+                        lat,
+                        accuracy_m: accuracy_m as f64,
+                        altitude_m,
+                        speed_mps: speed_mps.map(|v| v as f64),
+                        heading_deg: heading_deg.map(|v| v as f64),
+                        time: time_ms as f64 / 1000.0,
+                    },
+                ));
+            }
+            FromJavaMessage::LocationError { code, message } => {
+                let error = if code == 1 {
+                    crate::event::LocationErrorEvent::PermissionDenied
+                } else {
+                    crate::event::LocationErrorEvent::Unavailable(message)
+                };
+                self.call_event_handler(&Event::LocationError(error));
             }
             FromJavaMessage::VideoPlaybackPrepared {
                 video_id,
@@ -1122,6 +1172,16 @@ impl Cx {
                 }
                 if let Some(mut asp) = self.os.software_video_players.remove(&live_id) {
                     asp.player.cleanup();
+                    unsafe {
+                        let env = attach_jni_env();
+                        if let Some(surface) = asp.oes_surface.take() {
+                            crate::gpu_texture::clear_media_oes_surface(asp.oes_tex_id);
+                            (**env).DeleteGlobalRef.unwrap()(env, surface);
+                        }
+                        if let Some(bridge) = asp.oes_bridge.take() {
+                            android_jni::to_java_release_oes_decode_surface(env, bridge);
+                        }
+                    }
                 }
                 self.os.video_configs.remove(&live_id);
 
@@ -1136,11 +1196,20 @@ impl Cx {
                 let force_native = force_native_video();
                 if !force_native && !self.os.software_video_players.contains_key(&live_id) {
                     if let Some(config) = self.os.video_configs.get(&live_id).cloned() {
+                        if config.source.is_android_content_uri() {
+                            crate::log!(
+                                "VIDEO: Android native decode failed for content URI {}: {}",
+                                live_id.0,
+                                error
+                            );
+                        } else {
                         crate::log!(
                             "VIDEO: Android native decode failed for {}, falling back to software video: {}",
                             live_id.0,
                             error
                         );
+                        let (oes_bridge, oes_surface, oes_tex_id) =
+                            self.setup_mediacodec_oes_bridge(config.texture_id);
                         let asp = AndroidSoftwarePlayer {
                             player: PlaybackSessionHandle::new(
                                 live_id,
@@ -1152,11 +1221,16 @@ impl Cx {
                             tex_y_id: config.tex_y_id,
                             tex_u_id: config.tex_u_id,
                             tex_v_id: config.tex_v_id,
+                            texture_id: config.texture_id,
                             yuv_matrix: 0.0,
+                            oes_bridge,
+                            oes_surface,
+                            oes_tex_id,
                         };
                         self.os.software_video_players.insert(live_id, asp);
                         self.redraw_all();
                         return;
+                        }
                     }
                 }
 
@@ -1376,6 +1450,16 @@ impl Cx {
             }
 
             self.handle_repaint();
+
+            // Run script-VM garbage collection at a safe point after paint, matching
+            // the macOS backend, so the script object heap doesn't grow without bound:
+            // every `eval` / `script_apply_eval!` allocates script objects that are
+            // only reclaimed by `gc()`. `needs_gc()` gates the actual sweep.
+            self.with_vm(|vm| {
+                if vm.heap().needs_gc() {
+                    vm.gc();
+                }
+            });
         }
     }
 
@@ -1536,8 +1620,12 @@ impl Cx {
                     enabled: false,
                     matrix: 0.0,
                     biplanar: false,
+                    full_range: false,
                     rotation_steps: 0.0,
+                external: false,
+                array: false,
                 },
+            rgba_gl_2d: false,
             });
             self.call_event_handler(&e);
         }
@@ -1641,6 +1729,7 @@ impl Cx {
                                 video_id: player.video_id,
                                 current_position_ms: 0,
                                 yuv,
+                            rgba_gl_2d: false,
                             }));
                         }
                         Err(error) => {
@@ -1683,8 +1772,12 @@ impl Cx {
                         enabled: true,
                         matrix: 1.0,
                         biplanar: false,
+                        full_range: false,
                         rotation_steps: player.yuv_rotation_steps(),
+                    external: false,
+                    array: false,
                     },
+                rgba_gl_2d: false,
                 }));
             }
         }
@@ -1714,6 +1807,17 @@ impl Cx {
                     video_tracks,
                     audio_tracks,
                 })) => {
+                    if let Some(bridge) = asp.oes_bridge {
+                        unsafe {
+                            let env = attach_jni_env();
+                            android_jni::to_java_oes_decode_surface_set_default_buffer_size(
+                                env,
+                                bridge,
+                                width as i32,
+                                height as i32,
+                            );
+                        }
+                    }
                     events.push(Event::VideoPlaybackPrepared(VideoPlaybackPreparedEvent {
                         video_id: asp.player.video_id,
                         video_width: width,
@@ -1733,8 +1837,54 @@ impl Cx {
                 None => {}
             }
 
+            // OES present: SurfaceTexture.frameAvailable is async. Drain on the GL
+            // thread every poll; only emit VideoTextureUpdated when updateTexImage
+            // actually applied a frame (never present stale OES content).
+            let mut presented_oes = false;
+            if let Some(bridge) = asp.oes_bridge {
+                let (drained, st_matrix) = unsafe {
+                    let env = attach_jni_env();
+                    android_jni::to_java_oes_decode_surface_drain(env, bridge)
+                };
+                if drained > 0 {
+                    let tex_id = if asp.oes_tex_id != 0 {
+                        asp.oes_tex_id
+                    } else {
+                        self.textures[asp.texture_id]
+                            .os
+                            .gl_texture
+                            .unwrap_or(0)
+                    };
+                    if tex_id != 0 {
+                        let tex = &mut self.textures[asp.texture_id];
+                        tex.os.gl_texture = Some(tex_id);
+                        tex.os.gl_texture_owned = false;
+                        tex.os.oes_st_matrix = st_matrix;
+                        tex.format = TextureFormat::VideoExternal;
+                        events.push(Event::VideoTextureUpdated(VideoTextureUpdatedEvent {
+                            video_id: asp.player.video_id,
+                            current_position_ms: asp.player.current_position_ms(),
+                            yuv: crate::event::video_playback::VideoYuvMetadata {
+                                enabled: false,
+                                matrix: 0.0,
+                                biplanar: false,
+                                full_range: false,
+                                rotation_steps: 0.0,
+                            external: false,
+                            array: false,
+                            },
+                        rgba_gl_2d: false,
+                        }));
+                        presented_oes = true;
+                    }
+                }
+            }
+
             if asp.player.poll_frame() {
-                if let Some(planes) = asp.player.take_yuv_frame() {
+                if presented_oes {
+                    // Ack decoder-side OesFrame markers for the drained frames.
+                    while asp.player.take_oes_frame().is_some() {}
+                } else if let Some(planes) = asp.player.take_yuv_frame() {
                     asp.yuv_matrix = planes.matrix.as_f32();
                     upload_yuv_to_gl(
                         unsafe { &*gl },
@@ -1751,10 +1901,18 @@ impl Cx {
                             enabled: true,
                             matrix: asp.yuv_matrix,
                             biplanar: false,
+                            full_range: false,
                             rotation_steps: 0.0,
+                        external: false,
+                        array: false,
                         },
+                    rgba_gl_2d: false,
                     }));
                 }
+                // Pending take_oes_frame without a successful drain: leave markers
+                // in the queue until SurfaceTexture catches up on a later poll.
+            } else if presented_oes {
+                while asp.player.take_oes_frame().is_some() {}
             }
 
             if asp.player.check_eos() {
@@ -2116,7 +2274,7 @@ impl Cx {
 
         let draw_list_id = self.passes[draw_pass_id].main_draw_list_id.unwrap();
 
-        self.setup_render_pass(draw_pass_id);
+        self.setup_render_pass(draw_pass_id, false);
 
         // keep repainting in a loop
         self.passes[draw_pass_id].paint_dirty = false;
@@ -2243,7 +2401,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self) -> EventFlow {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             match op {
                 CxOsOp::CreateWindow(window_id) => {
                     let window = &mut self.windows[window_id];
@@ -2552,6 +2710,34 @@ impl Cx {
                 } => {
                     self.handle_permission_request(permission, request_id);
                 }
+                CxOsOp::StartLocationUpdates => {
+                    self.os.location_updates_wanted = true;
+                    match self
+                        .check_android_permission_status(crate::permission::Permission::Location)
+                    {
+                        crate::permission::PermissionStatus::Granted => unsafe {
+                            android_jni::to_java_start_location_updates(
+                                LOCATION_MIN_INTERVAL_MS,
+                                LOCATION_MIN_DISTANCE_M,
+                            );
+                        },
+                        // NotDetermined also covers "permanently denied" on
+                        // Android (indistinguishable at check time) — request
+                        // and let the result decide.
+                        _ => unsafe {
+                            android_jni::to_java_request_permission(
+                                to_android_permission(crate::permission::Permission::Location),
+                                LOCATION_INTERNAL_PERMISSION_REQUEST_ID,
+                            );
+                        },
+                    }
+                }
+                CxOsOp::StopLocationUpdates => {
+                    self.os.location_updates_wanted = false;
+                    unsafe {
+                        android_jni::to_java_stop_location_updates();
+                    }
+                }
                 CxOsOp::HttpRequest {
                     request_id,
                     request,
@@ -2655,12 +2841,7 @@ impl Cx {
                         );
                         self.os.camera_players.insert(video_id, player);
                         self.call_event_handler(&Event::VideoYuvTexturesReady(
-                            VideoYuvTexturesReady {
-                                video_id,
-                                tex_y,
-                                tex_u,
-                                tex_v,
-                            },
+                            VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v),
                         ));
                         continue;
                     }
@@ -2696,6 +2877,12 @@ impl Cx {
                         } else if source.is_session() {
                             crate::log!("VIDEO: session source uses software video decoder");
                         }
+
+                        // Ensure the VideoExternal OES texture exists, then wrap it in a
+                        // SurfaceTexture+Surface for MediaCodec zero-copy present.
+                        let (oes_bridge, oes_surface, oes_tex_id) =
+                            self.setup_mediacodec_oes_bridge(texture_id);
+
                         self.os.software_video_players.insert(
                             video_id,
                             AndroidSoftwarePlayer {
@@ -2709,28 +2896,22 @@ impl Cx {
                                 tex_y_id,
                                 tex_u_id,
                                 tex_v_id,
+                                texture_id,
                                 yuv_matrix: 0.0,
+                                oes_bridge,
+                                oes_surface,
+                                oes_tex_id,
                             },
                         );
                         // Notify widget so it can bind textures to shader slots
                         self.call_event_handler(&Event::VideoYuvTexturesReady(
-                            VideoYuvTexturesReady {
-                                video_id,
-                                tex_y,
-                                tex_u,
-                                tex_v,
-                            },
+                            VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v),
                         ));
                         continue;
                     }
                     // Notify widget so it can bind textures to shader slots
                     // (needed if native decode fails and we fall back to software)
-                    self.call_event_handler(&Event::VideoYuvTexturesReady(VideoYuvTexturesReady {
-                        video_id,
-                        tex_y,
-                        tex_u,
-                        tex_v,
-                    }));
+                    self.call_event_handler(&Event::VideoYuvTexturesReady(VideoYuvTexturesReady::planes(video_id, tex_y, tex_u, tex_v)));
 
                     unsafe {
                         let env = attach_jni_env();
@@ -2829,6 +3010,16 @@ impl Cx {
                     }
                     if let Some(mut asp) = self.os.software_video_players.remove(&video_id) {
                         asp.player.cleanup();
+                        unsafe {
+                            let env = attach_jni_env();
+                            if let Some(surface) = asp.oes_surface.take() {
+                                crate::gpu_texture::clear_media_oes_surface(asp.oes_tex_id);
+                                (**env).DeleteGlobalRef.unwrap()(env, surface);
+                            }
+                            if let Some(bridge) = asp.oes_bridge.take() {
+                                android_jni::to_java_release_oes_decode_surface(env, bridge);
+                            }
+                        }
                         self.call_event_handler(&Event::VideoPlaybackResourcesReleased(
                             VideoPlaybackResourcesReleasedEvent { video_id },
                         ));
@@ -2874,6 +3065,11 @@ impl Cx {
                     }
                     if let Some(asp) = self.os.software_video_players.get(&video_id) {
                         asp.player.set_playback_rate(rate);
+                    } else {
+                        unsafe {
+                            let env = attach_jni_env();
+                            android_jni::to_java_set_video_playback_rate(env, video_id, rate);
+                        }
                     }
                 }
                 CxOsOp::PrepareAudioPlayback(video_id, source, autoplay, should_loop) => {
@@ -2881,6 +3077,8 @@ impl Cx {
                     let _ = (video_id, source, autoplay, should_loop);
                     // TODO: implement via MediaPlayer when needed
                 }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 CxOsOp::XrStartPresenting => {
                     self.os.xr_buffer_scale_requested = self
                         .os
@@ -2969,6 +3167,22 @@ impl Cx {
                 }
                 CxOsOp::StartDragging(items) => {
                     self.os.internal_drag_items = Some(Arc::new(items));
+                }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on Android");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                CxOsOp::SelectFileDialog(settings) => {
+                    android_file_dialog::open_select_file_dialog(settings);
+                }
+                CxOsOp::SaveFileDialog(settings) => {
+                    android_file_dialog::open_save_file_dialog(settings);
+                }
+                CxOsOp::SelectFolderDialog(settings) => {
+                    android_file_dialog::open_select_folder_dialog(settings);
+                }
+                CxOsOp::SaveFolderDialog(settings) => {
+                    android_file_dialog::open_save_folder_dialog(settings);
                 }
                 e => {
                     crate::error!("Not implemented on this platform: CxOsOp::{:?}", e);
@@ -3069,8 +3283,16 @@ fn to_android_permission(permission: crate::permission::Permission) -> &'static 
         crate::permission::Permission::Camera => "android.permission.CAMERA",
         crate::permission::Permission::HeadsetCamera => "horizonos.permission.HEADSET_CAMERA",
         crate::permission::Permission::SceneAccess => "com.oculus.permission.USE_SCENE",
+        crate::permission::Permission::Location => "android.permission.ACCESS_FINE_LOCATION",
     }
 }
+
+/// Internal request id for the permission dialog fired by
+/// `CxOsOp::StartLocationUpdates` (distinct from app-issued ids, which
+/// count up from 1).
+const LOCATION_INTERNAL_PERMISSION_REQUEST_ID: i32 = i32::MAX;
+const LOCATION_MIN_INTERVAL_MS: i64 = 1000;
+const LOCATION_MIN_DISTANCE_M: f32 = 3.0;
 
 impl Cx {
     fn find_popup_to_dismiss_on_touch(
@@ -3210,6 +3432,7 @@ fn string_to_permission(permission_str: &str) -> Option<crate::permission::Permi
         "android.permission.CAMERA" => Some(crate::permission::Permission::Camera),
         "horizonos.permission.HEADSET_CAMERA" => Some(crate::permission::Permission::HeadsetCamera),
         "com.oculus.permission.USE_SCENE" => Some(crate::permission::Permission::SceneAccess),
+        "android.permission.ACCESS_FINE_LOCATION" => Some(crate::permission::Permission::Location),
         _ => None,
     }
 }
@@ -3217,6 +3440,7 @@ fn string_to_permission(permission_str: &str) -> Option<crate::permission::Permi
 impl Default for CxOs {
     fn default() -> Self {
         Self {
+            location_updates_wanted: false,
             start_time: Instant::now(),
             first_after_resize: true,
             needs_first_draw: true,
@@ -3285,10 +3509,58 @@ pub(crate) struct AndroidSoftwarePlayer {
     pub tex_y_id: TextureId,
     pub tex_u_id: TextureId,
     pub tex_v_id: TextureId,
+    pub texture_id: TextureId,
     pub yuv_matrix: f32,
+    /// JNI global ref to `OesDecodeSurface` when MediaCodec ZC is active.
+    pub oes_bridge: Option<jni_sys::jobject>,
+    /// JNI global ref to `android.view.Surface` published for the decoder.
+    pub oes_surface: Option<jni_sys::jobject>,
+    pub oes_tex_id: u32,
+}
+
+impl Cx {
+    /// Create VideoExternal OES tex + Java SurfaceTexture/Surface for MediaCodec ZC.
+    fn setup_mediacodec_oes_bridge(
+        &mut self,
+        texture_id: TextureId,
+    ) -> (Option<jni_sys::jobject>, Option<jni_sys::jobject>, u32) {
+        let gl = self.os.gl();
+        let cxtex = &mut self.textures[texture_id];
+        let _ = cxtex.setup_video_texture(gl);
+        let Some(tex) = cxtex.os.gl_texture else {
+            return (None, None, 0);
+        };
+        unsafe {
+            let env = attach_jni_env();
+            let Some(bridge) = android_jni::to_java_create_oes_decode_surface(env, tex) else {
+                return (None, None, tex);
+            };
+            let Some(surface_local) =
+                android_jni::to_java_oes_decode_surface_get_surface(env, bridge)
+            else {
+                android_jni::to_java_release_oes_decode_surface(env, bridge);
+                return (None, None, tex);
+            };
+            let surface_global = (**env).NewGlobalRef.unwrap()(env, surface_local);
+            (**env).DeleteLocalRef.unwrap()(env, surface_local);
+            if surface_global.is_null() {
+                android_jni::to_java_release_oes_decode_surface(env, bridge);
+                return (None, None, tex);
+            }
+            crate::gpu_texture::publish_media_oes_surface(
+                surface_global as *mut std::ffi::c_void,
+                tex,
+            );
+            crate::log!("VIDEO: MediaCodec OES surface ready tex={}", tex);
+            (Some(bridge), Some(surface_global), tex)
+        }
+    }
 }
 
 pub struct CxOs {
+    /// The app called `start_location_updates`; used to start streaming after
+    /// the runtime permission dialog resolves (and to re-arm on resume).
+    pub location_updates_wanted: bool,
     pub first_after_resize: bool,
     /// Set to `true` when a `RenderLoop` callback arrives but the surface is not
     /// yet drawable. When the surface later becomes ready, this flag triggers a

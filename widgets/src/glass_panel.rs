@@ -6,7 +6,7 @@ use crate::{
     makepad_script::ScriptFnRef,
     view::View,
     widget::*,
-    widget_async::CxWidgetToScriptCallExt,
+    widget_async::{CxWidgetToScriptCallExt, ScriptAsyncResult},
 };
 
 script_mod! {
@@ -225,7 +225,10 @@ script_mod! {
         height: 44
         padding: Inset{left: 22, right: 22, top: 0, bottom: 0}
         align: Align{x: 0.5, y: 0.5}
+        spacing: 7
         label_walk: Walk{width: Fit, height: Fit}
+        // No icon unless one is given; then it sizes to its own drawing.
+        icon_walk: Walk{width: Fit, height: Fit}
 
         draw_text +: {
             color: #xffffffff
@@ -503,6 +506,8 @@ script_mod! {
             sel_pos: uniform(0.0)
             count: uniform(1.0)
             hover: uniform(0.0)
+            pill_x: uniform(0.0)
+            pill_w: uniform(0.0)
 
             sample_blur: fn(uv: vec2) -> vec4 {
                 let source_uv = vec2(uv.x, mix(uv.y, 1.0 - uv.y, self.source_y_flip))
@@ -516,13 +521,12 @@ script_mod! {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
                 let w = self.rect_size.x
                 let h = self.rect_size.y
-                let seg_w = w / self.count
                 let pad = 3.0
-                // Gloop: stretch the pill horizontally as it travels (0 at rest, max at the
-                // midpoint between two segments), like the radio knob's squash/stretch.
-                let g = abs(self.sel_pos - floor(self.sel_pos + 0.5)) * 2.0
-                let pill_x = self.sel_pos * seg_w + pad - g * seg_w * 0.22
-                let pill_w = seg_w - pad * 2.0 + g * seg_w * 0.44
+                // The pill's x/width come from Rust: segments are sized to their
+                // own labels, so they can't be derived from a segment count here.
+                // The travelling "gloop" stretch is already folded in.
+                let pill_x = self.pill_x
+                let pill_w = self.pill_w
                 let pill_y = pad
                 let pill_h = h - pad * 2.0
                 let r = pill_h * 0.25
@@ -1551,6 +1555,14 @@ pub struct GlassButton {
     draw_glass: DrawQuad,
     #[live]
     draw_text: DrawText,
+    /// An optional glyph beside (or instead of) the label. It has to be the
+    /// button's own: the button draws itself into a self-managed overlay, so
+    /// anything a caller stacks on top of it from outside is painted over by
+    /// the glass.
+    #[live]
+    pub draw_icon: DrawSvg,
+    #[live]
+    icon_walk: Walk,
     #[live]
     label_walk: Walk,
     #[live]
@@ -1804,12 +1816,26 @@ impl Widget for GlassButton {
             laid.size_in_lpxs.height as f64 * self.draw_text.font_scale as f64,
         );
 
+        // The icon is measured with the label and reserved with it, so a
+        // Fit-width button sizes to both. With no icon set this is exactly
+        // the label on its own, as it always was.
+        let icon_walk = self.icon_walk;
+        let icon_size = self.draw_icon.measure(cx, icon_walk);
+        let icon_gap = match icon_size {
+            Some(_) if !text.is_empty() => self.layout.spacing,
+            _ => 0.0,
+        };
+        let content = dvec2(
+            icon_size.map(|s| s.x).unwrap_or(0.0) + icon_gap + text_size.x,
+            text_size.y.max(icon_size.map(|s| s.y).unwrap_or(0.0)),
+        );
+
         self.draw_bg.begin(cx, walk, self.layout);
         cx.walk_turtle(Walk {
             abs_pos: None,
             margin: Inset::default(),
-            width: Size::Fixed(text_size.x),
-            height: Size::Fixed(text_size.y),
+            width: Size::Fixed(content.x),
+            height: Size::Fixed(content.y),
             metrics: Metrics::default(),
         });
         self.draw_bg.end(cx);
@@ -1824,10 +1850,22 @@ impl Widget for GlassButton {
         // shift would skip the label and detach it. draw_abs keeps it in the shifted align range.
         let align = self.layout.align;
         let pos = dvec2(
-            rect.pos.x + (rect.size.x - text_size.x) * align.x,
-            rect.pos.y + (rect.size.y - text_size.y) * align.y,
+            rect.pos.x + (rect.size.x - content.x) * align.x,
+            rect.pos.y + (rect.size.y - content.y) * align.y,
         );
-        self.draw_text.draw_abs(cx, pos, text);
+        // Icon first, then the label beside it — both by draw_abs on top of
+        // the glass, for the same reason the label alone always was.
+        if let Some(size) = icon_size {
+            self.draw_icon.draw_abs(
+                cx,
+                Rect { pos: dvec2(pos.x, pos.y + (content.y - size.y) * 0.5), size },
+            );
+        }
+        let text_pos = dvec2(
+            pos.x + icon_size.map(|s| s.x).unwrap_or(0.0) + icon_gap,
+            pos.y + (content.y - text_size.y) * 0.5,
+        );
+        self.draw_text.draw_abs(cx, text_pos, text);
         self.draw_list.as_mut().unwrap().end(cx);
         cx.add_nav_stop(self.draw_bg.area(), NavRole::TextInput, Inset::default());
 
@@ -1841,6 +1879,39 @@ impl Widget for GlassButton {
     fn set_text(&mut self, cx: &mut Cx, v: &str) {
         self.text.set(v);
         self.redraw(cx);
+    }
+
+    // Scripts can read and change the button label (e.g. a play/pause toggle),
+    // mirroring Label's script surface.
+    fn script_call(
+        &mut self,
+        vm: &mut ScriptVm,
+        method: LiveId,
+        args: ScriptValue,
+    ) -> ScriptAsyncResult {
+        if method == live_id!(text) {
+            let str_val = vm.bx.heap.new_string_from_str(self.text.as_ref());
+            return ScriptAsyncResult::Return(str_val.into());
+        }
+        if method == live_id!(set_text) {
+            if let Some(args_obj) = args.as_object() {
+                let trap = vm.bx.threads.cur().trap.pass();
+                let value = vm.bx.heap.vec_value(args_obj, 0, trap);
+                if !value.is_err() {
+                    if let Some(new_text) = vm
+                        .bx
+                        .heap
+                        .cast_to_owned_string(value, "copying glass button text")
+                    {
+                        vm.with_cx_mut(|cx| {
+                            self.set_text(cx, &new_text);
+                        });
+                    }
+                }
+            }
+            return ScriptAsyncResult::Return(NIL);
+        }
+        ScriptAsyncResult::MethodNotFound
     }
 }
 
@@ -2101,6 +2172,12 @@ pub struct GlassSegmented {
     draw_list: Option<DrawList2d>,
     #[rust]
     sel_pos: f32,
+    /// Per-segment (x offset from the control's left edge, width), sized to
+    /// each label rather than `width / count`: "Default" and "Max" are very
+    /// different words and equal thirds crowd the long one while stranding the
+    /// short one. Filled during draw; hit-testing reads it back.
+    #[rust]
+    seg_geom: Vec<(f64, f64)>,
     #[rust]
     hover: f32,
     #[rust]
@@ -2127,7 +2204,68 @@ impl ScriptHook for GlassSegmented {
     }
 }
 
+/// Space either side of a label inside its segment. The whole point of
+/// measuring is that the pill never crowds the word.
+const SEG_PAD: f64 = 13.0;
+/// Never squeeze below this, however many segments there are — past it the
+/// text starts touching the pill's edge and looks broken rather than tight.
+const SEG_PAD_MIN: f64 = 5.0;
+
 impl GlassSegmented {
+    /// Sizes each segment to its own label, then spends whatever width is left
+    /// over evenly. If the labels don't fit at full padding the padding
+    /// shrinks (never the text) down to `SEG_PAD_MIN`.
+    fn measure_segments(&mut self, cx: &mut Cx2d, total: f64) {
+        let widths: Vec<f64> = self
+            .labels
+            .clone()
+            .iter()
+            .map(|label| {
+                self.draw_text
+                    .layout(cx.cx, 0.0, 0.0, None, false, Align::default(), label)
+                    .size_in_lpxs
+                    .width as f64
+            })
+            .collect();
+        let n = widths.len().max(1) as f64;
+        let text_total: f64 = widths.iter().sum();
+        let pad = (((total - text_total) / (2.0 * n)).min(SEG_PAD)).max(SEG_PAD_MIN);
+        let natural: f64 = text_total + pad * 2.0 * n;
+        // Slack is shared equally so every segment keeps the same margin; a
+        // proportional share would give the longest word the most air, which
+        // is the opposite of what crowding needs.
+        let slack = ((total - natural) / n).max(0.0);
+        let scale = if natural > total && natural > 0.0 { total / natural } else { 1.0 };
+        self.seg_geom.clear();
+        let mut x = 0.0;
+        for width in &widths {
+            let w = (width + pad * 2.0) * scale + slack;
+            self.seg_geom.push((x, w));
+            x += w;
+        }
+    }
+
+    /// Where the selection pill sits right now, in pixels from the control's
+    /// left edge, including the travelling squash-and-stretch.
+    fn pill_geometry(&self) -> (f64, f64) {
+        if self.seg_geom.is_empty() {
+            return (0.0, 0.0);
+        }
+        let last = self.seg_geom.len() - 1;
+        let pos = (self.sel_pos as f64).clamp(0.0, last as f64);
+        let i0 = pos.floor() as usize;
+        let i1 = (i0 + 1).min(last);
+        let t = pos - i0 as f64;
+        let (x0, w0) = self.seg_geom[i0];
+        let (x1, w1) = self.seg_geom[i1];
+        let x = x0 + (x1 - x0) * t;
+        let w = w0 + (w1 - w0) * t;
+        // 0 at rest, 1 at the midpoint of a move.
+        let gloop = (t - t.round()).abs() * 2.0;
+        const PAD: f64 = 3.0;
+        (x + PAD - gloop * w * 0.22, w - PAD * 2.0 + gloop * w * 0.44)
+    }
+
     fn bind_sel(&mut self, cx: &mut Cx2d, snapshot: Option<GaussBlurSnapshot>) {
         let draw = &mut self.draw_sel.draw_vars;
         if let Some(snapshot) = snapshot {
@@ -2182,6 +2320,21 @@ impl GlassSegmented {
         self.selected
     }
 
+    /// Selects `index` from code, keeping the DRAWN pill in step.
+    ///
+    /// `selected` is public but the pill is positioned from `sel_pos`, which
+    /// only follows it through `on_after_apply` or the click animation —
+    /// writing the field directly leaves the control showing one segment while
+    /// reporting another, and a click on the segment it is really on then does
+    /// nothing (the handler ignores a click on the current selection). Always
+    /// restore a saved value through here.
+    pub fn set_selected(&mut self, cx: &mut Cx, index: usize) {
+        let index = index.min(self.labels.len().saturating_sub(1));
+        self.selected = index;
+        self.sel_pos = index as f32;
+        self.redraw(cx);
+    }
+
     pub fn changed(&self, actions: &Actions) -> bool {
         if let Some(item) = actions.find_widget_action(self.widget_uid()) {
             matches!(item.cast(), GlassSegmentedAction::Selected)
@@ -2204,7 +2357,10 @@ impl Widget for GlassSegmented {
             if delta.abs() <= 0.004 {
                 self.sel_pos = target;
             } else {
-                self.sel_pos += delta * 0.30;
+                // Deliberately unhurried: the pill is the only thing that
+                // confirms the tap, and at 0.30 it arrived before the eye
+                // could follow it.
+                self.sel_pos += delta * 0.16;
                 self.next_frame = cx.new_next_frame();
             }
             self.redraw(cx);
@@ -2224,8 +2380,19 @@ impl Widget for GlassSegmented {
             Hit::FingerDown(fe) if fe.is_primary_hit() => {
                 let rect = self.draw_bg.area().rect(cx);
                 let n = self.labels.len().max(1);
-                let frac = ((fe.abs.x - rect.pos.x) / rect.size.x.max(1.0)).clamp(0.0, 0.999);
-                let idx = (frac * n as f64) as usize;
+                let local = fe.abs.x - rect.pos.x;
+                // Segments have their own widths, so the index is a lookup, not
+                // a division. Falls back to even thirds only before the first
+                // draw has measured anything.
+                let idx = if self.seg_geom.is_empty() {
+                    let frac = (local / rect.size.x.max(1.0)).clamp(0.0, 0.999);
+                    (frac * n as f64) as usize
+                } else {
+                    self.seg_geom
+                        .iter()
+                        .position(|(x, w)| local < x + w)
+                        .unwrap_or(n - 1)
+                };
                 if idx != self.selected {
                     self.selected = idx;
                     self.next_frame = cx.new_next_frame();
@@ -2255,23 +2422,28 @@ impl Widget for GlassSegmented {
         if self.draw_list.is_none() {
             self.draw_list = Some(DrawList2d::new(cx));
         }
+        self.measure_segments(cx, rect.size.x);
         self.draw_list.as_mut().unwrap().begin_overlay_reuse(cx);
         let snapshot = request_window_gauss(cx);
         self.bind_sel(cx, snapshot);
+        let (pill_x, pill_w) = self.pill_geometry();
+        self.draw_sel
+            .draw_vars
+            .set_uniform(cx, live_id!(pill_x), &[pill_x as f32]);
+        self.draw_sel
+            .draw_vars
+            .set_uniform(cx, live_id!(pill_w), &[pill_w as f32]);
         self.draw_sel.draw_abs(cx, rect);
-        // Place each label explicitly at the centre of its segment so it lines up exactly
-        // with the pill (both divide the width by the same segment count).
-        let n = self.labels.len().max(1) as f64;
-        let seg_w = rect.size.x / n;
-        for (i, label) in self.labels.clone().iter().enumerate() {
-            let seg_pos = Vec2d {
-                x: rect.pos.x + i as f64 * seg_w,
-                y: rect.pos.y,
-            };
+        // Place each label at the centre of ITS OWN segment. Segments are
+        // sized to their labels, so the pill always surrounds a word with the
+        // same breathing room whether it says "Max" or "Default".
+        let labels = self.labels.clone();
+        for (i, label) in labels.iter().enumerate() {
+            let (x, w) = self.seg_geom.get(i).copied().unwrap_or((0.0, 0.0));
             cx.begin_turtle(
                 Walk {
-                    abs_pos: Some(seg_pos),
-                    width: Size::Fixed(seg_w),
+                    abs_pos: Some(Vec2d { x: rect.pos.x + x, y: rect.pos.y }),
+                    width: Size::Fixed(w),
                     height: Size::Fixed(rect.size.y),
                     margin: Inset::default(),
                     metrics: Metrics::default(),
@@ -2297,5 +2469,12 @@ impl GlassSegmentedRef {
 
     pub fn changed(&self, actions: &Actions) -> bool {
         self.borrow().is_some_and(|inner| inner.changed(actions))
+    }
+
+    /// See [`GlassSegmented::set_selected`].
+    pub fn set_selected(&self, cx: &mut Cx, index: usize) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_selected(cx, index);
+        }
     }
 }

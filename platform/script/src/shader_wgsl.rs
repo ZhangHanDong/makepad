@@ -1035,6 +1035,9 @@ pub fn compile_draw_shader_wgsl_source(
     let mut output = ShaderOutput::default();
     output.backend = ShaderBackend::Wgsl;
     output.use_vulkan = false;
+    // Same table decision as the layout compile, so the WGSL side of a
+    // shader carries the same hot-patchable constants.
+    output.const_table = layout_source.const_table;
     output.pre_collect_rust_instance_io(vm, io_self);
     output.pre_collect_shader_io(vm, io_self);
 
@@ -1075,7 +1078,10 @@ pub fn compile_draw_shader_wgsl_source(
     }
 
     if output.has_errors {
-        return Err("WGSL lowering reported shader errors".to_string());
+        return Err(format!(
+            "WGSL lowering reported shader errors:\n{}",
+            output.error_report()
+        ));
     }
 
     // Keep Vulkan shader IO layout in lockstep with the draw mapping produced by the

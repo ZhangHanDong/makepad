@@ -28,8 +28,21 @@ fn parse_api_version(include_dir: &Path) -> Option<String> {
     None
 }
 
+/// `#define CEF_VERSION "138.0.59+g21d63d5+chromium-138.0.7204.306"` from the
+/// prebuilt's own header (authoritative for the binary we link).
+fn parse_cef_version(include_dir: &Path) -> Option<String> {
+    let header = fs::read_to_string(include_dir.join("cef_version.h")).ok()?;
+    for line in header.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("#define CEF_VERSION ") {
+            return Some(value.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
 fn run_download_script(workspace_root: &Path, platform: &str) {
-    let script = workspace_root.join("download_cef.sh");
+    let script = workspace_root.join("tools/download_cef.sh");
     let status = Command::new(&script)
         .arg("--platform")
         .arg(platform)
@@ -71,7 +84,7 @@ fn build_macos_helper(manifest_dir: &Path, dist_dir: &Path, include_dir: &Path) 
 
 fn main() {
     println!("cargo:rerun-if-env-changed=MAKEPAD_CEF_DIST_DIR");
-    println!("cargo:rerun-if-changed=../../download_cef.sh");
+    println!("cargo:rerun-if-changed=../../tools/download_cef.sh");
     println!("cargo:rerun-if-changed=helper_main_macos.c");
     println!("cargo:rustc-check-cfg=cfg(makepad_cef_api_ge_13800)");
     println!("cargo:rustc-check-cfg=cfg(makepad_cef_api_ge_14600)");
@@ -117,6 +130,9 @@ fn main() {
         "cargo:rustc-env=MAKEPAD_CEF_DIST_DIR={}",
         dist_dir.display()
     );
+    if let Some(cef_version) = parse_cef_version(&include_dir) {
+        println!("cargo:rustc-env=MAKEPAD_CEF_VERSION={cef_version}");
+    }
     if let Some(api_version) = parse_api_version(&include_dir) {
         println!("cargo:rustc-env=MAKEPAD_CEF_API_VERSION={api_version}");
         if let Ok(api_version_number) = api_version.parse::<u32>() {

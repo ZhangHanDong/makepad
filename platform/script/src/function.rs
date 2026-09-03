@@ -21,6 +21,12 @@ impl ScriptFnRef {
     pub fn as_object(&self) -> ScriptObject {
         self.0.as_object()
     }
+
+    /// See [`ScriptObjectRef::heap_key`]: identifies the heap that minted this fn ref,
+    /// so callers can route the call to the VM that owns it.
+    pub fn heap_key(&self) -> usize {
+        self.0.heap_key()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +43,14 @@ impl ScriptRefOptionExt for Option<ScriptFnRef> {
             None
         }
     }
+}
+
+/// The `index`-th DECLARED parameter of a fn/scope object: its named vec
+/// entries, in order. NIL-keyed entries are varargs (`unnamed_fn_arg`) — a
+/// closure captures the scope it was minted in, so those can appear ahead of
+/// real parameters and must never be mistaken for one.
+fn declared_arg(object: &ScriptObjectData, index: usize) -> Option<&ScriptVecValue> {
+    object.vec.iter().filter(|kv| !kv.key.is_nil()).nth(index)
 }
 
 impl ScriptHeap {
@@ -78,6 +92,10 @@ impl ScriptHeap {
         value: ScriptValue,
         trap: ScriptTrap,
     ) -> ScriptValue {
+        // Escape barrier at bind time: a closure created inside the call
+        // captures the scope via its proto chain, which retains bound arg
+        // values past the call — eager-freeing them must be a no-op then.
+        self.escape_value(value);
         let object = &self.objects[top_ptr];
 
         // which arg number?
@@ -85,9 +103,10 @@ impl ScriptHeap {
 
         if let Some(ptr) = object.proto.as_object() {
             let proto_object = &self.objects[ptr];
-            if let Some(kv) = proto_object.vec.get(index) {
+            // Declared parameters only, same reason as `push_all_fn_args`.
+            if let Some(kv) = declared_arg(proto_object, index) {
                 let key = kv.key;
-                if let Some(def) = object.vec.get(index) {
+                if let Some(def) = declared_arg(&self.objects[top_ptr], index) {
                     if !def.value.is_nil()
                         && def.value.value_type().to_redux() != value.value_type().to_redux()
                     {
@@ -100,11 +119,17 @@ impl ScriptHeap {
                         );
                     }
                 }
+                if !self.charge_object_map_entry(top_ptr, key, "binding a function argument") {
+                    return NIL;
+                }
                 self.objects[top_ptr].map_insert(key, value);
                 return NIL;
             }
         }
         // only allow if we are varargs
+        if !self.charge_object_vec_entries(1, "binding a variadic function argument") {
+            return NIL;
+        }
         self.objects[top_ptr]
             .vec
             .push(ScriptVecValue { key: NIL, value });
@@ -118,6 +143,8 @@ impl ScriptHeap {
         value: ScriptValue,
         trap: ScriptTrap,
     ) -> ScriptValue {
+        // see unnamed_fn_arg: closure capture retains bound args
+        self.escape_value(value);
         let object = &self.objects[top_ptr];
 
         if let Some(ptr) = object.proto.as_object() {
@@ -135,6 +162,13 @@ impl ScriptHeap {
                             format_value_type(self, value)
                         );
                     }
+                    if !self.charge_object_map_entry(
+                        top_ptr,
+                        key,
+                        "binding a named function argument",
+                    ) {
+                        return NIL;
+                    }
                     self.objects[top_ptr].map_insert(key, value);
                     return NIL;
                 }
@@ -150,29 +184,49 @@ impl ScriptHeap {
         args: &[ScriptValue],
         trap: ScriptTrap,
     ) -> ScriptValue {
+        // see unnamed_fn_arg: closure capture retains bound args
+        for value in args {
+            self.escape_value(*value);
+        }
         let object = &self.objects[top_ptr];
         if let Some(ptr) = object.proto.as_object() {
             for (index, value) in args.iter().enumerate() {
                 let object = &self.objects[ptr];
-                if let Some(v1) = object.vec.get(index) {
+                // Positional args bind to the DECLARED parameters in order.
+                // Skip NIL-keyed entries: those are varargs (see
+                // `unnamed_fn_arg`), and a closure minted inside a call
+                // captures its scope — including any varargs that call
+                // received. Indexing the raw vec let such a leftover shadow
+                // the closure's own first parameter, so a timer handing a
+                // time to a `||` closure broke every callback created in it
+                // (typecheck against the leftover, then a bind under its NIL
+                // key that left the real parameter unset).
+                if let Some(v1) = declared_arg(object, index) {
                     let key = v1.key;
-                    // typecheck against default arg
-                    if let Some(def) = object.vec.get(index) {
-                        if !def.value.is_nil()
-                            && def.value.value_type().to_redux() != value.value_type().to_redux()
-                        {
-                            return script_err_type_mismatch!(
-                                trap,
-                                "arg {} ({:?}) type mismatch: expected {}, got {}",
-                                index,
-                                key,
-                                format_value_type(self, def.value),
-                                format_value_type(self, *value)
-                            );
-                        }
+                    if !v1.value.is_nil()
+                        && v1.value.value_type().to_redux() != value.value_type().to_redux()
+                    {
+                        return script_err_type_mismatch!(
+                            trap,
+                            "arg {} ({:?}) type mismatch: expected {}, got {}",
+                            index,
+                            key,
+                            format_value_type(self, v1.value),
+                            format_value_type(self, *value)
+                        );
+                    }
+                    if !self.charge_object_map_entry(
+                        top_ptr,
+                        key,
+                        "binding function arguments",
+                    ) {
+                        return NIL;
                     }
                     self.objects[top_ptr].map_insert(key, *value);
                 } else {
+                    if !self.charge_object_vec_entries(1, "binding variadic function arguments") {
+                        return NIL;
+                    }
                     self.objects[top_ptr].vec.push(ScriptVecValue {
                         key: NIL,
                         value: *value,

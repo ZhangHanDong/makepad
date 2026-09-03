@@ -616,7 +616,7 @@ impl Cx {
     pub fn draw_pass_to_fullscreen(&mut self, draw_pass_id: DrawPassId) {
         let draw_list_id = self.passes[draw_pass_id].main_draw_list_id.unwrap();
 
-        self.setup_render_pass(draw_pass_id);
+        self.setup_render_pass(draw_pass_id, false);
 
         // keep repainting in a loop
         //self.passes[draw_pass_id].paint_dirty = false;
@@ -689,7 +689,7 @@ impl Cx {
 
     fn handle_platform_ops(&mut self) -> EventFlow {
         self.flush_native_mount_queue();
-        while let Some(op) = self.platform_ops.pop() {
+        while let Some(op) = self.platform_ops.pop_front() {
             //crate::log!("============ handle_platform_ops");
             match op {
                 CxOsOp::CreateWindow(window_id) => {
@@ -763,6 +763,12 @@ impl Cx {
                     //self.os.keyboard_visible = false;
                     //unsafe {android_jni::to_java_show_keyboard(false);}
                 }
+                CxOsOp::StartExternalDragging { .. } => {
+                    crate::error!("external file dragging is not implemented on OpenHarmony");
+                    self.call_event_handler(&Event::DragEnd);
+                }
+                // Track selection is currently implemented on Linux GStreamer only.
+                CxOsOp::SelectVideoTrack(_, _) | CxOsOp::SelectAudioTrack(_, _) => {}
                 CxOsOp::CreateNativeView { id, kind, props } => {
                     self.os.native_host_kinds.insert(id, kind);
                     self.os.native_host_layouts.remove(&id);

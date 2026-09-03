@@ -529,7 +529,7 @@ impl TestApp {
     }
 
     fn try_pump_ui(&self) -> TestResult<()> {
-        self.try_forward((0..PUMP_TICKS).map(|_| StudioToApp::Tick).collect())
+        self.try_forward((0..pump_ticks()).map(|_| StudioToApp::Tick).collect())
     }
 
     fn wait_for_reply<T, F>(&self, timeout: Duration, mut matcher: F) -> TestResult<T>
@@ -733,7 +733,7 @@ impl Locator {
 
     pub fn try_assert_text(&self, expected: impl AsRef<str>) -> TestResult<()> {
         let expected = expected.as_ref();
-        let widget = self.resolve_unique_visible()?;
+        let widget = self.resolve_unique_readable()?;
         match widget.text.as_deref() {
             Some(actual) if actual == expected => Ok(()),
             Some(actual) => Err(TestError::new(format!(
@@ -767,7 +767,7 @@ impl Locator {
 
     pub fn try_assert_value(&self, expected: impl AsRef<str>) -> TestResult<()> {
         let expected = expected.as_ref();
-        let widget = self.resolve_unique_visible()?;
+        let widget = self.resolve_unique_readable()?;
         match widget.value.as_deref() {
             Some(actual) if actual == expected => Ok(()),
             Some(actual) => Err(TestError::new(format!(
@@ -800,7 +800,7 @@ impl Locator {
     }
 
     pub fn try_assert_checked(&self, expected: bool) -> TestResult<()> {
-        let widget = self.resolve_unique_visible()?;
+        let widget = self.resolve_unique_readable()?;
         match widget.checked {
             Some(actual) if actual == expected => Ok(()),
             Some(actual) => Err(TestError::new(format!(
@@ -833,7 +833,7 @@ impl Locator {
     }
 
     pub fn try_assert_enabled(&self, expected: bool) -> TestResult<()> {
-        let widget = self.resolve_unique_visible()?;
+        let widget = self.resolve_unique_readable()?;
         if widget.enabled == expected {
             return Ok(());
         }
@@ -993,7 +993,7 @@ impl Locator {
         let deadline = Instant::now() + self.app.action_timeout();
         let mut last_seen = None::<String>;
         while Instant::now() < deadline {
-            let widget = match self.resolve_unique_visible() {
+            let widget = match self.resolve_unique_readable() {
                 Ok(widget) => widget,
                 Err(err) if selector_resolution_error(err.message()) => {
                     thread::sleep(self.app.poll_interval());
@@ -1035,7 +1035,7 @@ impl Locator {
         let deadline = Instant::now() + self.app.action_timeout();
         let mut last_seen = None::<bool>;
         while Instant::now() < deadline {
-            let widget = match self.resolve_unique_visible() {
+            let widget = match self.resolve_unique_readable() {
                 Ok(widget) => widget,
                 Err(err) if selector_resolution_error(err.message()) => {
                     thread::sleep(self.app.poll_interval());
@@ -1068,10 +1068,36 @@ impl Locator {
     fn resolve_unique_visible(&self) -> TestResult<WidgetSnapshot> {
         let query = self.selector.describe();
         let matches = self.app.query_widgets(&self.selector, true)?;
+        Self::unique(query, matches, "matched no visible widgets")
+    }
+
+    /// Resolution for state reads (`wait_text`, `assert_checked`, …) rather
+    /// than interaction.
+    ///
+    /// A widget the app has drawn but a container clips away — content below
+    /// the fold of a scrolling page, a status label under a long form — has no
+    /// on-screen rect, so there is nothing to click and `visible` is false.
+    /// Its *state* is still perfectly readable, though, and asserting on it is
+    /// a normal thing for a test to want. So prefer a visible match (identical
+    /// behaviour whenever one exists) and fall back to an off-screen one only
+    /// when nothing visible matches.
+    fn resolve_unique_readable(&self) -> TestResult<WidgetSnapshot> {
+        let query = self.selector.describe();
+        let visible = self.app.query_widgets(&self.selector, true)?;
+        if !visible.is_empty() {
+            return Self::unique(query, visible, "matched no visible widgets");
+        }
+        let all = self.app.query_widgets(&self.selector, false)?;
+        Self::unique(query, all, "matched no widgets")
+    }
+
+    fn unique(
+        query: String,
+        matches: Vec<WidgetSnapshot>,
+        empty_message: &str,
+    ) -> TestResult<WidgetSnapshot> {
         match matches.as_slice() {
-            [] => Err(TestError::new(format!(
-                "selector `{query}` matched no visible widgets"
-            ))),
+            [] => Err(TestError::new(format!("selector `{query}` {empty_message}"))),
             [single] => Ok(single.clone()),
             _ => Err(TestError::new(format!(
                 "selector `{query}` matched multiple widgets:\n{}",
@@ -1090,10 +1116,15 @@ where
     F: FnOnce(TestApp) -> R,
     R: IntoTestResult,
 {
-    let test_lock = TEST_MUTEX.get_or_init(|| Mutex::new(()));
-    let _guard = test_lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Tests are serialised by default: each one drives a whole app process, so
+    // running several at once oversubscribes the machine and makes timing-
+    // sensitive assertions flaky. A suite whose app is cheap enough can opt out.
+    let _guard = (!parallel_tests_enabled()).then(|| {
+        TEST_MUTEX
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    });
 
     let app = TestApp::start(config)?;
     let result = catch_unwind(AssertUnwindSafe(|| test(app.clone()).into_test_result()));
@@ -1453,6 +1484,20 @@ fn snapshot_summary(widget: &WidgetSnapshot) -> String {
         fields.push(format!("selected={selected:?}"));
     }
     fields.join(" ")
+}
+
+/// Ticks forwarded before each query. Every one of them costs the app a full
+/// rendered frame when anything is dirty, so this is the multiplier on the cost
+/// of a snapshot — worth lowering for a suite whose app renders slowly.
+fn pump_ticks() -> usize {
+    std::env::var("MAKEPAD_TEST_PUMP_TICKS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(PUMP_TICKS)
+}
+
+fn parallel_tests_enabled() -> bool {
+    env_truthy("MAKEPAD_TEST_PARALLEL")
 }
 
 fn visible_mode_enabled() -> bool {

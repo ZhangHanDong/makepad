@@ -1,0 +1,27 @@
+[package]
+name = "makepad-converse"
+version = "0.1.0"
+edition = "2021"
+description = "Conversational voice pipeline for Makepad apps: streamed agent replies spoken as they arrive, with a pluggable transcript filter between speech-to-text and the backend LLM."
+license = "MIT OR Apache-2.0"
+
+[features]
+# Speech synthesis (Kokoro). Default ON so existing consumers are unchanged,
+# but separable: the model plus its embedded pronunciation lexicon is ~10 MB of
+# binary and ~327 MB resident, which a build that can never speak should not
+# carry. With it off, SpeechOutput still exists and every non-audio path
+# behaves identically — the worker just drains its queue in silence.
+default = ["tts"]
+tts = ["dep:makepad-ai-speech"]
+# The local filtering LLM (QwenFilter) on makepad-ai-llm; heavy, so opt-in.
+local-llm = ["dep:makepad-ai-llm"]
+
+[dependencies]
+makepad-widgets = { path = "../../widgets" }
+makepad-ai-speech = { path = "../ai/models/speech", optional = true }
+makepad-ai-llm = { path = "../ai/llm", optional = true }
+
+[[bin]]
+name = "filter-repl"
+path = "src/bin/filter_repl.rs"
+required-features = ["local-llm"]

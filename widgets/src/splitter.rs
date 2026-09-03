@@ -41,13 +41,17 @@ script_mod! {
             color: uniform(theme.color_d_hidden)
             color_hover: uniform(theme.color_outset_hover)
             color_drag: uniform(theme.color_outset_drag)
+            // The strip's GROUND (the gutter the grip bar floats in).
+            // Overridable so a dark app is not forced to carry the theme's
+            // panel gray through every splitter.
+            color_bg: uniform(theme.color_bg_app)
 
             border_radius: uniform(1.0)
             splitter_pad: uniform(1.0)
 
             pixel: fn() {
                 let sdf = Sdf2d.viewport(self.pos * self.rect_size)
-                sdf.clear(theme.color_bg_app)
+                sdf.clear(self.color_bg)
 
                 if self.is_vertical > 0.5 {
                     sdf.box(
@@ -330,8 +334,17 @@ impl Widget for Splitter {
                         },
                     );
 
+                    // Redraw both panes' full subtrees. `a`/`b` only cover the
+                    // standalone-widget usage (they are empty in Dock usage, where
+                    // the dock draws the pane contents itself); the pane areas are
+                    // valid in both, and redrawing their children reaches nested
+                    // draw-list-optimized views whose own size-based dirty check
+                    // misses a pure height change (their non-fill sizes are compared
+                    // against the previous frame's measurement).
                     self.a.redraw(cx);
                     self.b.redraw(cx);
+                    cx.redraw_area_and_children(self.area_a);
+                    cx.redraw_area_and_children(self.area_b);
                 }
             }
             _ => {}

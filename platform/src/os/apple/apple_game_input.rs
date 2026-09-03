@@ -9,9 +9,11 @@ use crate::{
         runtime::{nil, Class, ObjcId, Sel, BOOL, YES},
         sel, sel_impl,
     },
-    os::apple::{apple_sys::*, apple_util::cfstring_ref_to_string},
+    os::apple::apple_sys::*,
 };
 
+#[cfg(target_os = "macos")]
+use crate::os::apple::apple_util::cfstring_ref_to_string;
 #[cfg(target_os = "macos")]
 use std::{
     ptr,
@@ -723,22 +725,11 @@ unsafe extern "C" fn raw_hid_report_callback(
     AppleRawHidInput::handle_report(context, sender, report_id, bytes);
 }
 
-#[cfg(not(target_os = "macos"))]
-struct AppleRawHidInput;
-
-#[cfg(not(target_os = "macos"))]
-impl AppleRawHidInput {
-    fn new() -> Self {
-        Self
-    }
-
-    fn snapshot(&self) -> Vec<(GameInputInfo, GameInputState)> {
-        Vec::new()
-    }
-}
-
 impl CxGameInputApi for Cx {
     fn game_input_state(&mut self, index: usize) -> Option<&GameInputState> {
+        if self.in_makepad_studio {
+            return self.game_input_remote.get(index);
+        }
         if let Some(game_input) = &self.os.apple_game_input {
             if index < game_input.states.len() {
                 return Some(&game_input.states[index]);
@@ -748,6 +739,11 @@ impl CxGameInputApi for Cx {
     }
 
     fn game_input_states(&mut self) -> &[GameInputState] {
+        // Hosted by Studio: this process has no window, so the OS never gave
+        // it the controllers. Studio forwards them instead.
+        if self.in_makepad_studio {
+            return &self.game_input_remote;
+        }
         if let Some(game_input) = &self.os.apple_game_input {
             return &game_input.states;
         }
@@ -755,6 +751,9 @@ impl CxGameInputApi for Cx {
     }
 
     fn game_input_state_mut(&mut self, index: usize) -> Option<&mut GameInputState> {
+        if self.in_makepad_studio {
+            return self.game_input_remote.get_mut(index);
+        }
         if let Some(game_input) = &mut self.os.apple_game_input {
             if index < game_input.states.len() {
                 return Some(&mut game_input.states[index]);
@@ -764,6 +763,9 @@ impl CxGameInputApi for Cx {
     }
 
     fn game_input_states_mut(&mut self) -> &mut [GameInputState] {
+        if self.in_makepad_studio {
+            return &mut self.game_input_remote;
+        }
         if let Some(game_input) = &mut self.os.apple_game_input {
             return &mut game_input.states;
         }

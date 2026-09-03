@@ -30,6 +30,81 @@ pub struct ImageBuffer {
     pub height: usize,
     pub data: Vec<u32>,
     pub animation: Option<TextureAnimation>,
+    /// `Some(n)` when `data` holds the full concatenated mip chain (level 0 first,
+    /// highest level `n`) instead of level 0 only. Set by
+    /// [`ImageBuffer::build_cpu_mip_chain_if_uploaded`].
+    max_level: Option<usize>,
+}
+
+/// Alpha-weighted average of up to four `0xAARRGGBB` texels (premultiplying RGB by alpha so
+/// transparent texels don't bleed their undefined color into the average).
+fn box_average_bgra(samples: &[u32]) -> u32 {
+    let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for &p in samples {
+        let pa = (p >> 24) & 0xFF;
+        b += (p & 0xFF) * pa;
+        g += ((p >> 8) & 0xFF) * pa;
+        r += ((p >> 16) & 0xFF) * pa;
+        a += pa;
+        n += 1;
+    }
+    if a == 0 {
+        return 0;
+    }
+    let out_a = a / n.max(1);
+    (out_a << 24) | ((r / a) << 16) | ((g / a) << 8) | (b / a)
+}
+
+/// Build a full mip chain (level 0 down to 1x1) for a BGRA-`u32` image via an alpha-weighted
+/// 2x2 box filter. Returns the concatenated level data (level 0 first) and the highest mip
+/// level index. Only backends that upload the chain level by level read past level 0, so the
+/// chain should only be built where [`backend_uploads_cpu_mip_chain`] is true.
+fn generate_bgra_mip_chain(width: usize, height: usize, level0: Vec<u32>) -> (Vec<u32>, usize) {
+    let mut out = level0;
+    let (mut w, mut h) = (width, height);
+    let mut level_start = 0usize;
+    let mut max_level = 0usize;
+    while w > 1 || h > 1 {
+        let nw = (w / 2).max(1);
+        let nh = (h / 2).max(1);
+        let mut next = Vec::with_capacity(nw * nh);
+        for y in 0..nh {
+            let sy0 = (y * 2).min(h - 1);
+            let sy1 = (y * 2 + 1).min(h - 1);
+            for x in 0..nw {
+                let sx0 = (x * 2).min(w - 1);
+                let sx1 = (x * 2 + 1).min(w - 1);
+                let at = |sx: usize, sy: usize| out[level_start + sy * w + sx];
+                next.push(box_average_bgra(&[
+                    at(sx0, sy0),
+                    at(sx1, sy0),
+                    at(sx0, sy1),
+                    at(sx1, sy1),
+                ]));
+            }
+        }
+        level_start = out.len();
+        out.extend_from_slice(&next);
+        w = nw;
+        h = nh;
+        max_level += 1;
+    }
+    (out, max_level)
+}
+
+/// Highest mip level index for a `width` x `height` image, matching the level count
+/// `generate_bgra_mip_chain` emits. Needed even without CPU-built levels: OpenGL sets
+/// it as `TEXTURE_MAX_LEVEL` while generating the chain itself on the GPU.
+fn mip_chain_max_level(width: usize, height: usize) -> usize {
+    width.max(height).max(1).ilog2() as usize
+}
+
+/// True when the active render backend uploads a CPU-built mip chain level by level
+/// (Metal). OpenGL generates mips on the GPU from level 0 via `glGenerateMipmap`, and
+/// the remaining backends upload level 0 only, so building the chain for them wastes
+/// CPU time and memory.
+fn backend_uploads_cpu_mip_chain() -> bool {
+    cfg!(any(target_os = "macos", target_os = "ios", target_os = "tvos"))
 }
 
 /// Hard upper bound on a decoded image's width or height (per side). Matches
@@ -157,21 +232,94 @@ impl ImageBuffer {
             height,
             data: out,
             animation: None,
+            max_level: None,
         })
     }
 
-    pub fn into_new_texture(self, cx: &mut Cx) -> Texture {
-        let texture = Texture::new_with_format(
-            cx,
+    /// Expands `data` from level 0 to the full concatenated mip chain when the current
+    /// configuration actually uploads CPU-built mips: a static image, with mipmaps
+    /// enabled, on a backend that reads levels past 0. Idempotent. Called from the
+    /// decode worker so the box-filter cost stays off the UI thread.
+    fn build_cpu_mip_chain_if_uploaded(&mut self) {
+        if self.max_level.is_some()
+            || self.animation.is_some()
+            || !backend_uploads_cpu_mip_chain()
+            || !image_cache_use_mipmaps()
+        {
+            return;
+        }
+        let level0 = std::mem::take(&mut self.data);
+        let (data, max_level) = generate_bgra_mip_chain(self.width, self.height, level0);
+        self.data = data;
+        self.max_level = Some(max_level);
+    }
+
+    pub fn into_new_texture(mut self, cx: &mut Cx) -> Texture {
+        // Mipmap static images (not animations — frames must not bleed across mip levels) to avoid aliasing when minified.
+        let format = if self.animation.is_none() && image_cache_use_mipmaps() {
+            self.build_cpu_mip_chain_if_uploaded();
+            let max_level = self
+                .max_level
+                .unwrap_or_else(|| mip_chain_max_level(self.width, self.height));
+            TextureFormat::VecMipBGRAu8_32 {
+                width: self.width,
+                height: self.height,
+                data: Some(self.data),
+                max_level: Some(max_level),
+                wrap: TextureWrap::ClampToEdge,
+                updated: TextureUpdated::Full,
+            }
+        } else {
             TextureFormat::VecBGRAu8_32 {
                 width: self.width,
                 height: self.height,
                 data: Some(self.data),
                 updated: TextureUpdated::Full,
-            },
-        );
+            }
+        };
+        let texture = Texture::new_with_format(cx, format);
         texture.set_animation(cx, self.animation);
         texture
+    }
+
+    /// Always upload a mip chain (unlike [`into_new_texture`], which is gated
+    /// by `MAKEPAD_IMAGE_MIPMAPS` / OpenGL-only). World / statue albedo uses
+    /// this so distant tiling surfaces trilinear-filter instead of sparkling.
+    pub fn into_new_mip_texture(self, cx: &mut Cx) -> Texture {
+        self.into_new_mip_texture_wrap(cx, TextureWrap::ClampToEdge)
+    }
+
+    /// Same as [`into_new_mip_texture`], with REPEAT wrap so UVs outside 0..1
+    /// tile. Pair with `sample_as_bgra_repeat` (not `fract(uv)`) so mip LOD
+    /// stays valid across wrap seams.
+    pub fn into_new_mip_repeat_texture(self, cx: &mut Cx) -> Texture {
+        self.into_new_mip_texture_wrap(cx, TextureWrap::Repeat)
+    }
+
+    fn into_new_mip_texture_wrap(mut self, cx: &mut Cx, wrap: TextureWrap) -> Texture {
+        if self.animation.is_some() {
+            return self.into_new_texture(cx);
+        }
+        if self.max_level.is_none() && backend_uploads_cpu_mip_chain() {
+            let level0 = std::mem::take(&mut self.data);
+            let (data, max_level) = generate_bgra_mip_chain(self.width, self.height, level0);
+            self.data = data;
+            self.max_level = Some(max_level);
+        }
+        let max_level = self
+            .max_level
+            .unwrap_or_else(|| mip_chain_max_level(self.width, self.height));
+        Texture::new_with_format(
+            cx,
+            TextureFormat::VecMipBGRAu8_32 {
+                width: self.width,
+                height: self.height,
+                data: Some(self.data),
+                max_level: Some(max_level),
+                wrap,
+                updated: TextureUpdated::Full,
+            },
+        )
     }
 
     pub fn from_png(data: &[u8]) -> Result<Self, ImageError> {
@@ -593,6 +741,18 @@ impl ImageCache {
         self.evict_loaded_if_oversized();
     }
 
+    /// Forget one path, returning the entry it held (`None` if it held none).
+    ///
+    /// The size cap below counts ENTRIES, not bytes: 512 thumbnails and 512
+    /// forty-megapixel photographs look the same to it, and the second costs
+    /// gigabytes. An app that knows it is done with an image — a viewer whose
+    /// panel just closed, say — hands it back here rather than waiting for a
+    /// cap that may never be reached. Prefer [`evict_image_from_cache`],
+    /// which also releases the pixels behind the entry.
+    pub fn evict(&mut self, image_path: &Path) -> Option<ImageCacheEntry> {
+        self.map.remove(image_path)
+    }
+
     /// Drop `Loaded` entries once the cache exceeds its cap. This is safe because widgets keep
     /// their own clone of any texture they're currently displaying (via `set_texture`), so
     /// eviction never affects a visible image — a later *fresh* request for an evicted path
@@ -984,7 +1144,7 @@ fn apply_exif_orientation(buf: ImageBuffer, orientation: u16) -> ImageBuffer {
             dst[dy * dw + dx] = buf.data[y * w + x];
         }
     }
-    ImageBuffer { width: dw, height: dh, data: dst, animation: buf.animation }
+    ImageBuffer { width: dw, height: dh, data: dst, animation: buf.animation, max_level: None }
 }
 
 /// Returns the `(width, height)` in pixels of an encoded image, auto-detecting
@@ -1228,6 +1388,64 @@ mod tests {
         }
         push_chunk(&mut png, b"IEND", &[]);
         png
+    }
+
+    #[test]
+    fn test_mip_chain_max_level_matches_generated_chain() {
+        for (w, h) in [(1, 1), (2, 1), (3, 2), (5, 9), (16, 16), (300, 200)] {
+            let (_, max_level) = generate_bgra_mip_chain(w, h, vec![0u32; w * h]);
+            assert_eq!(max_level, mip_chain_max_level(w, h), "dims {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn test_mip_chain_is_longer_than_level0() {
+        let (data, max_level) = generate_bgra_mip_chain(4, 4, vec![0xFF00_00FFu32; 16]);
+        assert_eq!(max_level, 2);
+        // 4x4 + 2x2 + 1x1
+        assert_eq!(data.len(), 16 + 4 + 1);
+    }
+
+    #[test]
+    fn evict_removes_one_path_and_leaves_the_rest() {
+        // `Loading` entries need no Cx, and eviction is the same map
+        // operation either way.
+        let mut cache = ImageCache::new();
+        for name in ["a.png", "b.png", "c.png"] {
+            cache
+                .map
+                .insert(PathBuf::from(name), ImageCacheEntry::Loading(4, 4));
+        }
+        assert!(cache.evict(Path::new("b.png")).is_some());
+        assert_eq!(cache.map.len(), 2);
+        assert!(cache.map.contains_key(Path::new("a.png")));
+        assert!(cache.map.contains_key(Path::new("c.png")));
+        // Evicting the same path twice, or one nobody cached, is not an
+        // error — a viewer hands its list back without bookkeeping.
+        assert!(cache.evict(Path::new("b.png")).is_none());
+        assert!(cache.evict(Path::new("never-loaded.png")).is_none());
+        assert_eq!(cache.map.len(), 2);
+    }
+
+    #[test]
+    fn the_entry_cap_still_only_bites_past_512() {
+        // The global behaviour is unchanged by eviction: nothing is shed
+        // until MAX_ENTRIES is exceeded, and then only `Loaded` entries.
+        let mut cache = ImageCache::new();
+        for i in 0..ImageCache::MAX_ENTRIES {
+            cache
+                .map
+                .insert(PathBuf::from(format!("{i}.png")), ImageCacheEntry::Loading(1, 1));
+        }
+        cache.evict_loaded_if_oversized();
+        assert_eq!(cache.map.len(), ImageCache::MAX_ENTRIES);
+        // Over the cap, but every entry is an in-flight decode: dropping
+        // those would orphan the work, so the map is left alone.
+        cache
+            .map
+            .insert(PathBuf::from("one-too-many.png"), ImageCacheEntry::Loading(1, 1));
+        cache.evict_loaded_if_oversized();
+        assert_eq!(cache.map.len(), ImageCache::MAX_ENTRIES + 1);
     }
 
     #[test]
@@ -1488,9 +1706,12 @@ fn ensure_thread_pool(cx: &mut Cx) {
     }
 }
 
-fn spawn_decode_job(cx: &mut Cx, image_path: PathBuf, data: Arc<Vec<u8>>) {
+fn spawn_decode_job<D>(cx: &mut Cx, image_path: PathBuf, data: Arc<D>)
+where
+    D: AsRef<[u8]> + Send + Sync + ?Sized + 'static,
+{
     ensure_thread_pool(cx);
-    let image_size_bytes = data.len();
+    let image_size_bytes = (*data).as_ref().len();
     cx.get_global::<ImageCache>()
         .thread_pool
         .as_mut()
@@ -1504,7 +1725,12 @@ fn spawn_decode_job(cx: &mut Cx, image_path: PathBuf, data: Arc<Vec<u8>>) {
                     image_size_bytes
                 );
             }
-            let result = decode_image_buffer(&image_path, &data);
+            let result = decode_image_buffer(&image_path, (*data).as_ref()).map(|mut buffer| {
+                // Mip-chain generation belongs with the decode: doing it here keeps the
+                // box-filter cost off the UI thread when the texture is committed.
+                buffer.build_cpu_mip_chain_if_uploaded();
+                buffer
+            });
             if image_decode_debug_enabled() {
                 let status = match &result {
                     Ok(buffer) => format!("ok {}x{}", buffer.width, buffer.height),
@@ -1578,6 +1804,48 @@ pub fn process_async_image_load(
     }
 }
 
+/// Hand one path's decoded image back: the cache forgets it AND the pixels
+/// behind it are released. True when there was something to evict.
+///
+/// Dropping the cache's `Texture` handle alone is not enough. A `Texture` is a
+/// refcounted slot in `Cx`'s texture pool; when the last handle goes the slot
+/// joins the free list, but the `CxTexture` in it — pixel buffer and all —
+/// stays put until some later allocation happens to reuse that slot. The
+/// decoded buffer is the expensive half (a 24-megapixel photo is 96 MB of it,
+/// kept as the upload source for the life of the slot), so this drops it
+/// outright and lets the freed slot be reused for the rest.
+///
+/// Call it only for a path the caller loaded and no longer shows: a widget
+/// still displaying that image holds its own clone of the `Texture`, which
+/// would survive here with nothing left to re-upload from.
+///
+/// "Released" means released to the allocator, which is not the same as
+/// released to the OS: on macOS a freed 96 MB block goes into libmalloc's
+/// large cache and `ps rss` does not move (a plain `vec![0u32; 24_000_000]`
+/// x5, touched then dropped, leaves RSS exactly where it was). What changes
+/// is what the process is still *holding*: the next decode reuses those
+/// pages instead of asking for more, so a viewer dialing through a folder
+/// stops climbing.
+pub fn evict_image_from_cache(cx: &mut Cx, image_path: &Path) -> bool {
+    if !cx.has_global::<ImageCache>() {
+        return false;
+    }
+    let Some(entry) = cx.get_global::<ImageCache>().evict(image_path) else {
+        return false;
+    };
+    if let ImageCacheEntry::Loaded(texture) = entry {
+        // The decoded pixels; the slot itself goes when `texture` drops.
+        match texture.get_format(cx) {
+            TextureFormat::VecBGRAu8_32 { data, .. }
+            | TextureFormat::VecMipBGRAu8_32 { data, .. } => {
+                *data = None;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 pub fn load_image_from_cache(cx: &mut Cx, image_path: &Path) -> Option<Texture> {
     ensure_image_cache_inner(cx);
     match cx.get_global::<ImageCache>().map.get(image_path) {
@@ -1610,20 +1878,24 @@ fn read_image_file_limited(image_path: &Path) -> Result<Vec<u8>, ImageError> {
     Ok(data)
 }
 
-pub fn load_image_from_data_async(
+pub fn load_image_from_data_async<D>(
     cx: &mut Cx,
     image_path: &Path,
-    data: Arc<Vec<u8>>,
-) -> Result<AsyncLoadResult, ImageError> {
+    data: Arc<D>,
+) -> Result<AsyncLoadResult, ImageError>
+where
+    D: AsRef<[u8]> + Send + Sync + ?Sized + 'static,
+{
     ensure_image_cache_inner(cx);
     match cx.get_global::<ImageCache>().map.get(image_path) {
         Some(ImageCacheEntry::Loaded(_)) => return Ok(AsyncLoadResult::Loaded),
         Some(ImageCacheEntry::Loading(w, h)) => return Ok(AsyncLoadResult::Loading(*w, *h)),
         None => {}
     }
-    if data.len() > MAX_IMAGE_DECODED_BYTES {
+    let bytes: &[u8] = (*data).as_ref();
+    if bytes.len() > MAX_IMAGE_DECODED_BYTES {
         return Err(ImageError::DataTooLarge {
-            bytes: data.len(),
+            bytes: bytes.len(),
             limit: MAX_IMAGE_DECODED_BYTES,
         });
     }
@@ -1637,19 +1909,19 @@ pub fn load_image_from_data_async(
     let force_sync = headless_mode_enabled();
 
     if force_sync {
-        let image = decode_image_buffer(image_path, &data)?;
+        let image = decode_image_buffer(image_path, bytes)?;
         let texture = image.into_new_texture(cx);
         cx.get_global::<ImageCache>()
             .insert_loaded(image_path.into(), texture);
         return Ok(AsyncLoadResult::Loaded);
     }
 
-    let (w, h) = image_size_by_data(&data, image_path)?;
+    let (w, h) = image_size_by_data(bytes, image_path)?;
     if image_decode_debug_enabled() {
         log!(
             "ImageCache: queue_decode key={} bytes={} size={}x{}",
             image_path.display(),
-            data.len(),
+            bytes.len(),
             w,
             h
         );
@@ -1881,13 +2153,17 @@ pub trait ImageCacheImpl {
         }
     }
 
-    fn load_image_from_data_async_impl(
+    fn load_image_from_data_async_impl<D>(
         &mut self,
         cx: &mut Cx,
         image_path: &Path,
-        data: Arc<Vec<u8>>,
+        data: Arc<D>,
         id: usize,
-    ) -> Result<AsyncLoadResult, ImageError> {
+    ) -> Result<AsyncLoadResult, ImageError>
+    where
+        D: AsRef<[u8]> + Send + Sync + ?Sized + 'static,
+        Self: Sized,
+    {
         let result = load_image_from_data_async(cx, image_path, data)?;
         if matches!(result, AsyncLoadResult::Loaded) {
             let _ = self.load_image_from_cache(cx, image_path, id);

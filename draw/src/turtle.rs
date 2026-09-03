@@ -358,6 +358,11 @@ pub enum Base {
     #[pick]
     Full,
     Unused,
+    /// The width available on the enclosing line for inline content,
+    /// accounting for the enclosing widget's own leading geometry and
+    /// trailing insets; see [`Cx2d::find_line_available_width`]. Widths
+    /// only: as a height base this resolves to nothing.
+    Line,
 }
 
 /// Specifies how walks should be laid out with respect to each other.
@@ -660,6 +665,20 @@ impl Turtle {
         self.layout.padding.right = right;
     }
 
+    /// Sets whether this turtle's `Flow::Right` layout wraps onto a new row,
+    /// leaving any other flow untouched.
+    ///
+    /// Turning wrapping off confines the following walks to the current row,
+    /// which is how a caller that has run out of rows to give keeps an
+    /// oversized walk from opening one anyway. Such a walk overruns the row's
+    /// width instead, exactly as unwrappable text does. Save the previous
+    /// setting via [`Turtle::layout`] and restore it when done.
+    pub fn set_flow_wrap(&mut self, wrap: bool) {
+        if let Flow::Right { wrap: flow_wrap, .. } = &mut self.layout.flow {
+            *flow_wrap = wrap;
+        }
+    }
+
     /// Returns the alignment of each walk of this turtle with respect to it's rectangle.
     pub fn align(&self) -> Align {
         self.layout.align
@@ -803,6 +822,9 @@ impl Turtle {
         match base {
             Base::Full => self.width(),
             Base::Unused => self.unused_width(),
+            // A line bound spans the whole turtle stack, not one turtle;
+            // it is resolved by `Cx2d::find_line_available_width`.
+            Base::Line => f64::NAN,
         }
     }
 
@@ -810,6 +832,7 @@ impl Turtle {
         match base {
             Base::Full => self.height(),
             Base::Unused => self.unused_height(),
+            Base::Line => f64::NAN,
         }
     }
 
@@ -1270,6 +1293,71 @@ pub struct FinishedWalk {
     outer_size: Vec2d,
 
     metrics: Metrics,
+
+    /// How row alignment may treat this walk (see [`RowAlignRole`]).
+    align_role: RowAlignRole,
+
+    /// Height to center by under `RowAlign::Center` instead of `outer_size.y`.
+    /// Text runs pass their line's height here so mixed-font runs on a row all
+    /// get the same shift and keep their relative baselines.
+    align_height: Option<f64>,
+}
+
+/// How row alignment may treat a finished walk.
+///
+/// A multi-row text run draws all of its glyphs in one instance batch, so no
+/// individual row of it can ever be repositioned; the run's per-row walks are
+/// therefore immovable and declare one of the non-`Shiftable` roles.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub enum RowAlignRole {
+    /// Row alignment may shift this walk's align range.
+    #[default]
+    Shiftable,
+    /// Immovable, and under `RowAlign::Center` the row's center line anchors
+    /// to this walk's own center instead of the tallest walk's, so every
+    /// shiftable walk on the row — including a taller one, which then shifts
+    /// UP — centers on it. Declared by a wrapped run's rows that hold visible
+    /// text.
+    Anchor,
+    /// Immovable and inert: neither shifted nor an anchor. Declared by a
+    /// wrapped run's first-row walk when that row holds no glyphs (the run
+    /// wrapped immediately), so a row of other content is not anchored to an
+    /// invisible line.
+    Fixed,
+}
+
+/// The horizontal shift that centers a `Flow::Right` row's actually-drawn content
+/// within its inner width, per `align.x`.
+///
+/// Deferred fills are given all the slack up front, so the normal align path skips
+/// align.x when any exist. But a fill that draws narrower than its slot (an image
+/// that aspect-fits, say) leaves genuine slack, and this reclaims it. Returns 0 when
+/// the content fills the row or the inner width is unknown.
+fn row_align_x_shift(turtle: &Turtle, walks: &[FinishedWalk]) -> f64 {
+    let align_x = turtle.align().x;
+    let inner_width = turtle.inner_width();
+    if align_x == 0.0 || walks.is_empty() || inner_width.is_nan() {
+        return 0.0;
+    }
+    let spacing = turtle.spacing() * walks.len().saturating_sub(1) as f64;
+    let used: f64 = walks.iter().map(|w| w.outer_size.x).sum::<f64>() + spacing;
+    align_x * (inner_width - used).max(0.0)
+}
+
+/// The vertical counterpart of [`row_align_x_shift`] for a `Flow::Down` column.
+///
+/// A `height: Fill` child that draws shorter than its slot leaves genuine slack;
+/// this reclaims it for `align.y`. Returns 0 when the column fills, `align.y` is 0,
+/// or the inner height is unknown.
+fn col_align_y_shift(turtle: &Turtle, walks: &[FinishedWalk]) -> f64 {
+    let align_y = turtle.align().y;
+    let inner_height = turtle.inner_height();
+    if align_y == 0.0 || walks.is_empty() || inner_height.is_nan() {
+        return 0.0;
+    }
+    let spacing = turtle.spacing() * walks.len().saturating_sub(1) as f64;
+    let used: f64 = walks.iter().map(|w| w.outer_size.y).sum::<f64>() + spacing;
+    align_y * (inner_height - used).max(0.0)
 }
 
 impl<'a, 'b> Cx2d<'a, 'b> {
@@ -1310,6 +1398,9 @@ impl<'a, 'b> Cx2d<'a, 'b> {
     }
 
     pub fn find_base_width(&self, base: Base) -> Option<f64> {
+        if let Base::Line = base {
+            return self.find_line_available_width();
+        }
         self.turtles
             .iter()
             .rev()
@@ -1319,12 +1410,74 @@ impl<'a, 'b> Cx2d<'a, 'b> {
     }
 
     pub fn find_base_height(&self, base: Base) -> Option<f64> {
+        if let Base::Line = base {
+            return None;
+        }
         self.turtles
             .iter()
             .rev()
             .skip(1)
             .map(|turtle| turtle.base_height(base))
             .find(|height| !height.is_nan())
+    }
+
+    /// Returns the width available on the enclosing line for the current
+    /// turtle's content, for a [`Base::Line`] bound.
+    ///
+    /// The line is the nearest enclosing turtle with a known width; the
+    /// unresolved `Fit` turtles between it and the current one (an inline
+    /// widget's nesting levels) contribute their leading geometry and
+    /// trailing insets. The line's flow selects between two measurements,
+    /// each of which is final at the moment it is taken:
+    ///
+    /// - A wrapping line can relocate the inline widget whole onto a fresh
+    ///   row, so the bound is what a fresh row offers: the line's inner
+    ///   width minus the widget-internal lead-in before this turtle and
+    ///   the trailing insets after it. Content sized to this bound either
+    ///   fits where it is, or fits the row the widget is relocated to.
+    /// - A non-wrapping line (including one held non-wrapping by an
+    ///   inline-content clamp on the last permitted row) keeps the widget
+    ///   where it is, so the bound is the remnant: the distance from the
+    ///   pen to the line's inner right edge, minus the trailing insets.
+    ///
+    /// The current turtle's own trailing margin is left for the consumer,
+    /// which resolves a `Fit` max bound against the walk's margin box. Its
+    /// leading margin is part of the measured lead-in (the turtle's origin
+    /// lies past it), so a consumer that subtracts the full margin width
+    /// counts the leading side twice — a deliberately conservative overlap
+    /// of a few pixels that keeps a remnant-fitted walk safely inside the
+    /// line's overrun tolerance.
+    pub fn find_line_available_width(&self) -> Option<f64> {
+        let (current, outer_turtles) = self.turtles.split_last()?;
+        // Measured from the current turtle's content origin, not its pen:
+        // the bound is evaluated both before the content is laid out and
+        // again when the turtle closes (the `Fit` max clamp), and the two
+        // must agree — the origin is the content's start either way.
+        let start_x = current.origin().x + current.padding().left;
+        let mut trailing = current.padding().right;
+        // The outermost unresolved turtle inside the line so far: the
+        // inline widget's root, whose origin marks where its lead-in
+        // (icons, padding, spacing before this content) begins.
+        let mut widget_origin_x = current.origin().x;
+        let mut widget_margin_left = 0.0;
+        for turtle in outer_turtles.iter().rev() {
+            if !turtle.width().is_nan() {
+                let inner = turtle.inner_rect();
+                let available = match turtle.layout().flow {
+                    Flow::Right { wrap: false, .. } => {
+                        inner.pos.x + inner.size.x - start_x - trailing
+                    }
+                    Flow::Right { wrap: true, .. } | Flow::Down | Flow::Overlay => {
+                        inner.size.x - widget_margin_left - (start_x - widget_origin_x) - trailing
+                    }
+                };
+                return Some(available.max(0.0));
+            }
+            trailing += turtle.padding().right + turtle.walk().margin.right;
+            widget_origin_x = turtle.origin().x;
+            widget_margin_left = turtle.walk().margin.left;
+        }
+        None
     }
 
     /// Starts a root turtle.
@@ -1468,7 +1621,11 @@ impl<'a, 'b> Cx2d<'a, 'b> {
     ///
     /// The current turtle should be finished with the same guard area that was used to start it.
     pub fn end_turtle_with_guard(&mut self, guard: Area) -> Rect {
-        self.finish_row(self.align_list.len());
+        // The final row's bottom forgiveness is deliberately discarded: the
+        // turtle's used height keeps that row's full physical extent, so
+        // up-centered walks on a last row stay inside the reported rect and
+        // its clip bottom.
+        let _ = self.finish_row(self.align_list.len());
         self.compute_final_size();
 
         let mut turtle = self.turtles.last_mut().unwrap();
@@ -1481,6 +1638,12 @@ impl<'a, 'b> Cx2d<'a, 'b> {
 
         let turtle_align_start = turtle.align_start;
         let turtle_walks_start = turtle.finished_walks_start;
+        // Captured before the alignment pass so the borrow of `turtle` can end
+        // in time for the exploded view's hairline emission below. The box
+        // itself is final after `compute_final_size`; alignment moves this
+        // turtle's CONTENTS, not the turtle.
+        let scope_rect = turtle.rect();
+        let turtle_rows_start = turtle.finished_rows_start;
 
         // Now that the current turtle's rectangle is known, we can align its finished walks.
         match turtle.flow() {
@@ -1518,14 +1681,23 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                     // vertical alignment is applied to each walk individually.
                     let inner_effective_height = turtle.inner_effective_height();
 
+                    // A fill normally eats all the horizontal slack, but one that draws
+                    // narrower than its slot (e.g. an image that aspect-fits) leaves real
+                    // slack. Honor align.x over whatever's genuinely left after drawing.
+                    let extra_dx = row_align_x_shift(
+                        turtle,
+                        &self.finished_walks[turtle_walks_start..],
+                    );
+
                     for finished_walk_index in turtle_walks_start..self.finished_walks.len() {
                         let finished_walk = &self.finished_walks[finished_walk_index];
 
                         let inner_unused_height =
                             (inner_effective_height - finished_walk.outer_size.y).max(0.0);
 
-                        let dx =
-                            turtle.total_resolved_length_to(finished_walk.deferred_before_count);
+                        let dx = turtle
+                            .total_resolved_length_to(finished_walk.deferred_before_count)
+                            + extra_dx;
                         let dy = turtle.align().y * inner_unused_height;
 
                         let align_list_start = finished_walk.align_list_start;
@@ -1577,7 +1749,6 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                                         0.0,
                                         false,
                                     );
-                                    turtle = self.turtles.last_mut().unwrap();
                                 }
                             }
 
@@ -1620,6 +1791,13 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                     // unused height is distributed over the deferred walks.
                     let inner_effective_width = turtle.effective_inner_width();
 
+                    // Mirror of the Flow::Right case: a height:Fill child that draws
+                    // shorter than its slot leaves slack that align.y should still honor.
+                    let extra_dy = col_align_y_shift(
+                        turtle,
+                        &self.finished_walks[turtle_walks_start..],
+                    );
+
                     for finished_walk_index in turtle_walks_start..self.finished_walks.len() {
                         let finished_walk = &self.finished_walks[finished_walk_index];
 
@@ -1627,8 +1805,9 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                             (inner_effective_width - finished_walk.outer_size.x).max(0.0);
 
                         let dx = turtle.align().x * inner_unused_width;
-                        let dy =
-                            turtle.total_resolved_length_to(finished_walk.deferred_before_count);
+                        let dy = turtle
+                            .total_resolved_length_to(finished_walk.deferred_before_count)
+                            + extra_dy;
 
                         let align_list_start = finished_walk.align_list_start;
                         let align_list_end = self.finished_walk_align_list_end(finished_walk_index);
@@ -1666,9 +1845,15 @@ impl<'a, 'b> Cx2d<'a, 'b> {
             }
         }
 
+        // Exploded z-layer view: give this scope a visible frame. Emitted here
+        // — after the scope's own contents are aligned, before the parent's
+        // pass — so it sits inside this turtle's align range and rides every
+        // shift the parent later applies to the whole walk.
+        self.draw_sploded_hairline(scope_rect);
+
         self.align_list.push(AlignEntry::EndClip);
-        self.finished_rows.truncate(turtle.finished_rows_start);
-        self.finished_walks.truncate(turtle.finished_walks_start);
+        self.finished_rows.truncate(turtle_rows_start);
+        self.finished_walks.truncate(turtle_walks_start);
         let turtle = self.turtles.pop().unwrap();
 
         if self.turtles.is_empty() {
@@ -1709,8 +1894,13 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                     turtle = self.turtles.last_mut().unwrap();
                     if let Some(max) = max {
                         // take the margin into account when calculating a Fit bound
-                        // with a relative-to-parent max value.
-                        turtle.width = turtle.width.min(max - turtle.walk.margin.width());
+                        // with a relative-to-parent max value. The floor keeps a
+                        // bound smaller than the margins (a near-zero line
+                        // remnant) from producing a negative width and an
+                        // inverted clip.
+                        turtle.width = turtle
+                            .width
+                            .min((max - turtle.walk.margin.width()).max(0.0));
                     }
                 }
             }
@@ -1747,6 +1937,7 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 clip_max.y = clip_min.y + turtle.height();
             }
         };
+
     }
 
     /// Computes the maximum available height for the current turtle by walking up
@@ -1878,6 +2069,8 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 deferred_before_count: 0,
                 outer_size: size + walk.margin.size(),
                 metrics: walk.metrics,
+                align_role: RowAlignRole::Shiftable,
+                align_height: None,
             });
 
             let origin = outer_origin + walk.margin.left_top();
@@ -1920,6 +2113,7 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 }
             };
 
+
             let defer_index = self.turtle().deferred_fills.len();
             self.turtle_mut().current_row_metrics =
                 self.turtle().current_row_metrics.max(walk.metrics);
@@ -1928,6 +2122,8 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 deferred_before_count: defer_index,
                 outer_size,
                 metrics: walk.metrics,
+                align_role: RowAlignRole::Shiftable,
+                align_height: None,
             });
 
             let origin = outer_origin + walk.margin.left_top();
@@ -2109,12 +2305,39 @@ impl<'a, 'b> Cx2d<'a, 'b> {
         align_list_start: usize,
         metrics: Metrics,
     ) {
+        self.emit_turtle_walk_with_align_height(rect, align_list_start, metrics, None)
+    }
+
+    /// Like [`emit_turtle_walk_with_metrics`] but also sets the walk's
+    /// centering height for `RowAlign::Center` (see `FinishedWalk::align_height`).
+    pub fn emit_turtle_walk_with_align_height(
+        &mut self,
+        rect: Rect,
+        align_list_start: usize,
+        metrics: Metrics,
+        align_height: Option<f64>,
+    ) {
+        self.emit_turtle_walk_with_role(rect, align_list_start, metrics, align_height, RowAlignRole::Shiftable)
+    }
+
+    /// Like [`emit_turtle_walk_with_align_height`] but with an explicit
+    /// [`RowAlignRole`].
+    pub fn emit_turtle_walk_with_role(
+        &mut self,
+        rect: Rect,
+        align_list_start: usize,
+        metrics: Metrics,
+        align_height: Option<f64>,
+        align_role: RowAlignRole,
+    ) {
         let turtle = self.turtles.last().unwrap();
         self.finished_walks.push(FinishedWalk {
             align_list_start,
             deferred_before_count: turtle.deferred_fills.len(),
             outer_size: rect.size,
             metrics,
+            align_role,
+            align_height,
         });
     }
 
@@ -2166,7 +2389,20 @@ impl<'a, 'b> Cx2d<'a, 'b> {
     }
 
     pub fn turtle_new_line_internal(&mut self, spacing: f64, align_list_start: usize) {
-        self.finish_row(align_list_start);
+        let row_bottom_forgiveness = self.finish_row(align_list_start);
+        if row_bottom_forgiveness > 0.0 {
+            // An anchored row's up-centered walks overhang the row's anchor
+            // symmetrically, and the top overhang already intrudes into the
+            // gap above the row; forgiving the same amount below it keeps the
+            // gaps on both sides of the row equal. The reduction happens only
+            // on the new-line path — a turtle's final row is finished by
+            // `end_turtle_with_guard`, which discards the forgiveness — so a
+            // turtle's reported height always covers its last row's full
+            // physical extent.
+            let used_width = self.turtle().used_width();
+            let reduced_used_height = self.turtle().used_height() - row_bottom_forgiveness;
+            self.turtle_mut().set_used(used_width, reduced_used_height);
+        }
         let new_pos = dvec2(
             self.turtle().origin.x + self.turtle().padding().left,
             self.turtle().origin.y + self.turtle().used_height() + spacing,
@@ -2175,28 +2411,34 @@ impl<'a, 'b> Cx2d<'a, 'b> {
         self.turtle_mut().allocate_height(0.0);
     }
 
-    fn finish_row(&mut self, align_list_start: usize) {
+    /// Finishes the current row: applies its row alignment and rolls the row
+    /// bookkeeping forward.
+    ///
+    /// Returns the row's bottom forgiveness (see [`Cx2d::finish_row_center`]);
+    /// rows under `RowAlign::Top` and `RowAlign::Bottom` always return zero.
+    fn finish_row(&mut self, align_list_start: usize) -> f64 {
         let row_align = if let Flow::Right { row_align, .. } = self.turtle().flow() {
             row_align
         } else {
             RowAlign::Top
         };
 
-        match row_align {
+        let row_bottom_forgiveness = match row_align {
             RowAlign::Top => {
                 // No per-walk shifts needed — items stay at the row top.
+                0.0
             }
             RowAlign::Bottom => {
                 self.finish_row_bottom(align_list_start);
+                0.0
             }
-            RowAlign::Center => {
-                self.finish_row_center(align_list_start);
-            }
-        }
+            RowAlign::Center => self.finish_row_center(align_list_start),
+        };
 
         self.turtle_mut().prev_row_metrics = self.turtle().current_row_metrics;
         self.turtle_mut().current_row_metrics = Metrics::default();
         self.finished_rows.push(self.finished_walks.len());
+        row_bottom_forgiveness
     }
 
     /// Baseline-aligns every finished walk in the current row so that its
@@ -2245,6 +2487,11 @@ impl<'a, 'b> Cx2d<'a, 'b> {
         let finished_walks_start = self.current_row_walks_start();
         let finished_walks_end = self.finished_walks.len();
         for finished_walk_index in finished_walks_start..finished_walks_end {
+            // Immovable walks (a wrapped run's rows — their glyphs live in one
+            // shared batch) cannot be baseline-shifted either.
+            if self.finished_walks[finished_walk_index].align_role != RowAlignRole::Shiftable {
+                continue;
+            }
             let finished_walk_height = self.finished_walks[finished_walk_index].outer_size.y;
             let finished_walk_metrics = self.finished_walks[finished_walk_index].metrics;
 
@@ -2258,6 +2505,7 @@ impl<'a, 'b> Cx2d<'a, 'b> {
 
             // The total amount by which we have to shift the current finished walk.
             let shift = descender_shift + baseline_shift + line_spacing_shift;
+
 
             let start = self.finished_walks[finished_walk_index].align_list_start;
             let end = if finished_walk_index + 1 < self.finished_walks.len() {
@@ -2292,28 +2540,93 @@ impl<'a, 'b> Cx2d<'a, 'b> {
     /// Vertically centers every finished walk in the current row on the row's
     /// vertical center line.
     ///
-    /// The row height is the max height of any walk on the row, so the tallest
-    /// walk (e.g. an inline pill widget) has a zero shift and stays put. Shorter
-    /// walks (e.g. surrounding text) are shifted down by half the difference,
-    /// so their vertical centers land on the same horizontal line as the tallest
-    /// walk's center. For symmetrically-padded pills this makes the pill's
-    /// internal text visually align with the surrounding text.
+    /// Without an anchor walk, the row centers on its tallest walk: shifts are
+    /// downward only and every walk stays entirely within the row's bounds, so
+    /// `used_height` is untouched. With an anchor walk (an immovable wrapped-run
+    /// row), every shiftable walk centers on the anchor's center line instead,
+    /// so a walk taller than the anchor shifts UP and overhangs the anchor's
+    /// box symmetrically — by equal amounts above and below it.
     ///
-    /// This alignment does not grow the row's `used_height` — every walk stays
-    /// entirely within the row's bounds because each shift is at most
-    /// `(row_height - walk_height) / 2` and each walk has height
-    /// `<= row_height`.
-    fn finish_row_center(&mut self, align_list_start: usize) {
+    /// An up-shift is clamped so that no walk's top rises above the turtle's
+    /// own rectangle top: that edge is also the turtle's clip top, and content
+    /// shifted above it renders with its top edge cut off. The clamp can only
+    /// restrict an up-shift; it never turns one into a downward shift.
+    ///
+    /// Returns the row's bottom forgiveness: how far the row's allocated
+    /// bottom extent hangs below the bottom of its anchor-centered content,
+    /// capped at twice the largest up-shift actually applied. The new-line
+    /// path subtracts this from the advance to the next row, so a centered
+    /// walk's symmetric overhang intrudes equally into the row gaps above and
+    /// below it instead of pushing the next row further down. Anchorless rows
+    /// return zero, which leaves the advance untouched.
+    fn finish_row_center(&mut self, align_list_start: usize) -> f64 {
         let current_row_height = self.turtle().row_height();
 
         let finished_walks_start = self.current_row_walks_start();
         let finished_walks_end = self.finished_walks.len();
 
+        // An anchor walk stands for content that cannot be shifted, so the
+        // row's center line is anchored to its center rather than the tallest
+        // walk's. Shiftable walks then move toward that line in either
+        // direction: a taller item (an inline pill beside a wrapped run's
+        // text row) moves UP to center on the text. Without an anchor, the
+        // row centers on its tallest walk and shifts are downward only.
+        let mut anchor_center: Option<f64> = None;
         for finished_walk_index in finished_walks_start..finished_walks_end {
-            let finished_walk_height = self.finished_walks[finished_walk_index].outer_size.y;
-            let shift = (current_row_height - finished_walk_height) * 0.5;
+            let finished_walk = &self.finished_walks[finished_walk_index];
+            if finished_walk.align_role == RowAlignRole::Anchor {
+                let center = finished_walk
+                    .align_height
+                    .unwrap_or(finished_walk.outer_size.y)
+                    * 0.5;
+                anchor_center = Some(anchor_center.map_or(center, |c: f64| c.max(center)));
+            }
+        }
 
-            if shift <= 0.0 {
+
+        // The largest post-shift "effective bottom" of any walk on this row,
+        // relative to the row top: the walk's own box displaced by the shift
+        // that was actually applied to it. An up-shifted walk's bottom rises
+        // by exactly its shift, so the row's visual extent ends that much
+        // above its allocation, and only that surplus may be forgiven.
+        let mut max_effective_bottom: f64 = 0.0;
+        // The largest upward shift actually applied on this row; it bounds
+        // the returned forgiveness so that allocations no walk accounts for
+        // (pre-allocated text row boxes, vertical margins) are never forgiven.
+        let mut max_up_overhang: f64 = 0.0;
+
+        for finished_walk_index in finished_walks_start..finished_walks_end {
+            let finished_walk = &self.finished_walks[finished_walk_index];
+            if finished_walk.align_role != RowAlignRole::Shiftable {
+                max_effective_bottom = max_effective_bottom.max(finished_walk.outer_size.y);
+                continue;
+            }
+            let finished_walk_height = finished_walk
+                .align_height
+                .unwrap_or(finished_walk.outer_size.y);
+            let shift = match anchor_center {
+                Some(center) => {
+                    // The row top is the turtle's position while the row
+                    // finishes; the walk's top after shifting is the row top
+                    // plus the shift. A negative bound keeps the walk's top at
+                    // or below the turtle's own rectangle top (its clip top);
+                    // the `min(0.0)` keeps the bound from ever forcing a
+                    // downward shift.
+                    let min_shift =
+                        (self.turtle().origin().y - self.turtle().pos().y).min(0.0);
+                    (center - finished_walk_height * 0.5).max(min_shift)
+                }
+                None => (current_row_height - finished_walk_height) * 0.5,
+            };
+
+            let applied = !((anchor_center.is_none() && shift <= 0.0) || shift == 0.0);
+            let applied_shift = if applied { shift } else { 0.0 };
+            max_up_overhang = max_up_overhang.max((-applied_shift).max(0.0));
+            max_effective_bottom =
+                max_effective_bottom.max(finished_walk.outer_size.y + applied_shift);
+
+
+            if !applied {
                 continue;
             }
 
@@ -2325,6 +2638,13 @@ impl<'a, 'b> Cx2d<'a, 'b> {
             };
             self.move_align_list(start, end, 0.0, shift, false);
         }
+
+        if anchor_center.is_none() {
+            return 0.0;
+        }
+        let row_bottom_forgiveness = (current_row_height - max_effective_bottom.max(0.0))
+            .clamp(0.0, max_up_overhang);
+        row_bottom_forgiveness
     }
 
     /// Shifts the rendered content in the align list range `[start, end)` by
@@ -2383,11 +2703,14 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 }
                 AlignEntry::Area(Area::Rect(ra)) => {
                     let draw_list = &mut self.cx.draw_lists[ra.draw_list_id];
-                    let rect_area = &mut draw_list.rect_areas[ra.rect_id];
-                    rect_area.rect.pos += d;
-                    if shift_clip {
-                        rect_area.draw_clip.0 += d;
-                        rect_area.draw_clip.1 += d;
+                    if draw_list.redraw_id == ra.redraw_id {
+                        if let Some(rect_area) = draw_list.rect_areas.get_mut(ra.rect_id) {
+                            rect_area.rect.pos += d;
+                            if shift_clip {
+                                rect_area.draw_clip.0 += d;
+                                rect_area.draw_clip.1 += d;
+                            }
+                        }
                     }
                 }
                 AlignEntry::BeginClip(clip0, clip1) => {
@@ -2470,9 +2793,12 @@ impl<'a, 'b> Cx2d<'a, 'b> {
                 AlignEntry::Area(Area::Rect(ra)) => {
                     if let Some((clip0, clip1)) = self.turtle_clips.last() {
                         let draw_list = &mut self.cx.draw_lists[ra.draw_list_id];
-                        let rect_area = &mut draw_list.rect_areas[ra.rect_id];
-                        rect_area.draw_clip.0 = *clip0;
-                        rect_area.draw_clip.1 = *clip1;
+                        if draw_list.redraw_id == ra.redraw_id {
+                            if let Some(rect_area) = draw_list.rect_areas.get_mut(ra.rect_id) {
+                                rect_area.draw_clip.0 = *clip0;
+                                rect_area.draw_clip.1 = *clip1;
+                            }
+                        }
                     }
                 }
                 AlignEntry::Unset => {}

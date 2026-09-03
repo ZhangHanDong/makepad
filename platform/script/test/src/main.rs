@@ -93,6 +93,50 @@ pub fn main() {
         dummy: f32,
     }
 
+    // Instance layout modeled on the game renderer's analytic sky
+    // (DrawSceneSkyAnalytic): many rust-instance vec3/vec4 fields read from
+    // the PIXEL stage. Used by the shader capacity tests below.
+    #[derive(Script, ScriptHook)]
+    #[repr(C)]
+    pub struct ShaderSkyCapacity {
+        #[live]
+        pub color: Vec4f,
+        #[live]
+        pub light_dir: Vec3f,
+        #[live]
+        pub transform: Mat4f,
+        #[live]
+        pub cube_size: Vec3f,
+        #[live]
+        pub cube_pos: Vec3f,
+        #[live(1.0)]
+        pub depth_clip: f32,
+        #[live(1.0)]
+        pub sky_mode: f32,
+        #[live]
+        pub sky_top: Vec3f,
+        #[live]
+        pub sky_horizon: Vec3f,
+        #[live]
+        pub sky_ground: Vec3f,
+        #[live]
+        pub sky_bottom: Vec3f,
+        #[live]
+        pub pz_y: Vec4f,
+        #[live]
+        pub pz_x: Vec4f,
+        #[live]
+        pub pz_yc: Vec4f,
+        #[live]
+        pub pz_e: Vec4f,
+        #[live]
+        pub pz_f0: Vec4f,
+        #[live]
+        pub zenith: Vec4f,
+        #[live]
+        pub sun_e: Vec4f,
+    }
+
     #[derive(Script, ScriptHook)]
     #[repr(C)]
     pub struct RustUniformBufferTest {
@@ -209,6 +253,14 @@ pub fn main() {
         assert(1 + 2 < 4) assert(!(1 + 2 < 2))
         assert(1 < 2 && 3 < 4) assert(!(1 > 2 && 3 < 4))
         assert(1 > 2 || 3 < 4) assert(!(1 > 2 || 3 > 4))
+        // unary on a field access followed by a looser binary op: the unary
+        // binds to the field, not to the whole expression (-(a.b - c) bug)
+        let uo = {x: 2.0, y: 4.0, f: false, t: true, inner: {z: 3.0}}
+        assert(-uo.x - 1.0 == -3.0) assert(-uo.x + 1.0 == -1.0)
+        assert(-uo.x * uo.y == -8.0) assert(-uo.inner.z - 1.0 == -4.0)
+        assert(-uo.x < 0.0) assert(!(-uo.x > 0.0))
+        assert(!uo.f && uo.t) assert(!uo.f || uo.f) assert(!uo.t == false)
+        assert(-uo.x == -2.0) assert(uo.y + -uo.x == 2.0)
         assert((1 & 3) == 1) assert((1 | 2) == 3) assert((3 ^ 1) == 2)
         assert(1 << 2 == 4) assert(8 >> 2 == 2)
 
@@ -3857,6 +3909,66 @@ pub fn main() {
         shader.test_compile_draw(gpu_stage_4l)
         assert(shader.test_compile_draw_rust_contains(gpu_stage_4l, "c.x, c.y, c.z"))
 
+        println("GPU stage 4m: transcendental vec builtins suffix on the Rust backend")
+        let gpu_stage_4m = #(GpuShaderStageTest::script_shader(vm)){
+            vertex_pos: shader.vertex_position(vec4f)
+            pixel: shader.fragment_output(0, vec4f)
+            v_uv: shader.varying(vec2f)
+            tint: shader.uniform(vec3f)
+
+            probe: fn() {
+                // The analytic-sky recipe: exp of a vec3, pow of a vec3 by a
+                // scalar. Unsuffixed these hit the scalar preamble fns and
+                // the whole shader fails the headless JIT (found live: a
+                // headless sweep died at the first game.sky).
+                let absorbed = exp(self.tint * -0.5)
+                let shaped = pow(absorbed, 0.75)
+                let leveled = log(absorbed + vec3(1.0, 1.0, 1.0))
+                return vec4(shaped + leveled, 1.0)
+            }
+
+            vertex: fn() {
+                self.v_uv = vec2(0.5, 0.5)
+                self.vertex_pos = vec4(0.0, 0.0, 0.0, 1.0)
+            }
+
+            fragment: fn() {
+                self.pixel = self.probe()
+            }
+        }
+        shader.test_compile_draw(gpu_stage_4m)
+        assert(shader.test_compile_draw_rust_contains(gpu_stage_4m, "exp_3f("))
+        assert(shader.test_compile_draw_rust_contains(gpu_stage_4m, "pow_3f("))
+        assert(shader.test_compile_draw_rust_contains(gpu_stage_4m, "log_3f("))
+
+        println("GPU stage 4n: an `if` body's last statement keeps its value")
+        let gpu_stage_4n = #(GpuShaderStageTest::script_shader(vm)){
+            vertex_pos: shader.vertex_position(vec4f)
+            pixel: shader.fragment_output(0, vec4f)
+            v_uv: shader.varying(vec2f)
+            cutoff: shader.uniform(0.5)
+
+            side_effect: fn(v) {
+                return v * 2.0
+            }
+
+            vertex: fn() {
+                self.v_uv = vec2(0.5, 0.5)
+                self.vertex_pos = vec4(0.0, 0.0, 0.0, 1.0)
+            }
+
+            fragment: fn() {
+                // A bare `if` statement whose last body statement is a non-void
+                // call: nothing consumes the value, but it must still be emitted.
+                if self.cutoff > 0.0 {
+                    self.side_effect(7.0)
+                }
+                self.pixel = vec4(self.v_uv, 0.0, 1.0)
+            }
+        }
+        shader.test_compile_draw(gpu_stage_4n)
+        assert(shader.test_compile_draw_contains(gpu_stage_4n, "side_effect(_io, _iof, 7.0)"))
+
         println("Runtime vector methods + lerp + TAU (value-level, not shader)")
         assert(vec3(3.0, 4.0, 0.0).length() == 5.0)
         let n = vec3(0.0, 2.0, 0.0).normalized()
@@ -4472,6 +4584,63 @@ pub fn main() {
         }
     }
 
+    // Loop iteration-scope reuse + range end/step caching parity tests
+    let code = script! {
+        use mod.std.assert
+
+        // a range stored in a variable is REFFED: mid-loop mutation of end
+        // must stay live (the un-REFFED literal fast path must not apply)
+        let r = 0..10
+        let c1 = 0
+        for i in r {
+            c1 += 1
+            if i == 2 { r.end = 5 }
+        }
+        assert(c1 == 5)
+
+        // mid-loop step mutation on a REFFED range stays live too
+        let r2 = 0..10
+        let c2 = 0
+        for i in r2 {
+            c2 += 1
+            if i == 1 { r2.step = 4 }
+        }
+        assert(c2 == 4)
+
+        // a closure capturing the loop variable pins that iteration's scope:
+        // each closure must see its own value, and the loop must still work
+        let fns = []
+        for i in 4 { fns.push(|| i) }
+        assert(fns[0]() == 0)
+        assert(fns[1]() == 1)
+        assert(fns[3]() == 3)
+
+        // same via range source
+        let fns2 = []
+        for i in 0..3 { fns2.push(|| i * 10) }
+        assert(fns2[0]() == 0)
+        assert(fns2[2]() == 20)
+
+        // capture only on SOME iterations: reuse fast path must not leak
+        // values across iterations
+        let fns3 = []
+        let acc3 = 0
+        for i in 6 {
+            let double = i * 2
+            if i == 2 || i == 4 { fns3.push(|| double) }
+            acc3 += double
+        }
+        assert(acc3 == 30)
+        assert(fns3[0]() == 4)
+        assert(fns3[1]() == 8)
+
+        // compound assign through the iteration scope into the fn scope
+        let deep = 0
+        for a in 3 { for b in 3 { deep += a * 3 + b } }
+        assert(deep == 36)
+    };
+    vm.eval(code);
+
     // Final GC to verify no issues
     vm.gc();
     let code = script! {
@@ -4488,6 +4657,694 @@ pub fn main() {
     };
     let runaway_value = vm.with_instruction_limit(1024, |vm| vm.eval(runaway));
     assert!(runaway_value.is_err());
+
+    // ========================================
+    // GC campaign: host transients, escape barrier, eager-free contract
+    // (game.md M0 — 60Hz hosts must not grow the heap per tick)
+    // ========================================
+    {
+        let mut std0 = 0usize;
+        let vm = &mut ScriptVm {
+            host: &mut 0,
+            std: &mut std0,
+            bx: Box::new(ScriptVmBase::new()),
+        };
+
+        // Host-side module with a native that returns its own args object —
+        // exercises the ret==args guard on the native eager-free site.
+        let host_mod = vm.heap_mut().new_object();
+        let _host_ref = vm.heap_mut().new_object_ref(host_mod);
+        vm.add_method(host_mod, id!(echo), &[], |_vm, args| args.into());
+        vm.set_injected_global(id!(host), host_mod.into());
+
+        let exports = vm.heap_mut().new_object();
+        let _exports_ref = vm.heap_mut().new_object_ref(exports);
+        vm.set_injected_global(id!(exports), exports.into());
+
+        vm.eval(script! {
+            let retained = []
+            exports.tick_scalar = |x| x + 1.0
+            exports.on_tick = |input| input.jump
+            exports.keep = |input| retained.push(input)
+            exports.read_kept = |i| retained[i].jump
+            exports.echo_res = host.echo(1.5)
+        });
+        let errs = vm.take_errors();
+        assert!(errs.is_empty(), "gc-campaign eval errors: {:?}", errs);
+
+        let tick_scalar = vm.heap_mut().value(exports, id!(tick_scalar).into(), NoTrap);
+        let on_tick = vm.heap_mut().value(exports, id!(on_tick).into(), NoTrap);
+        let keep = vm.heap_mut().value(exports, id!(keep).into(), NoTrap);
+        let read_kept = vm.heap_mut().value(exports, id!(read_kept).into(), NoTrap);
+        assert!(tick_scalar.as_object().is_some());
+
+        // ret==args guard: the native returned its args scope; storing it in
+        // exports escaped it, so it must still be a live, readable object.
+        let echo_res = vm.heap_mut().value(exports, id!(echo_res).into(), NoTrap);
+        let echo_obj = echo_res.as_object().expect("echo_res must be an object");
+        let echo_v0 = vm.heap_mut().vec_value(echo_obj, 0, NoTrap);
+        assert_eq!(echo_v0.as_f64(), Some(1.5));
+
+        // Escape barrier: storing an object value tags it REFFED.
+        let a = vm.heap_mut().new_object();
+        let b = vm.heap_mut().new_object();
+        assert!(!vm.heap().is_object_reffed(b));
+        vm.heap_mut().set_value(a, id!(x).into(), b.into(), NoTrap);
+        assert!(vm.heap().is_object_reffed(b), "escape barrier must tag stored objects");
+
+        // Flat heap at "60Hz": scalar args container, released each tick.
+        vm.gc();
+        let base = vm.heap().live_object_len();
+        for i in 0..5000 {
+            let args = vm.heap_mut().new_object();
+            vm.heap_mut().set_object_storage_vec2(args);
+            vm.heap_mut().clear_object_deep(args);
+            vm.heap_mut()
+                .vec_push_unchecked(args, NIL, ScriptValue::from_f64(i as f64));
+            let r = vm.call_with_args_object(tick_scalar, args);
+            assert!(!r.is_err());
+            assert!(!vm.thread().is_paused());
+            vm.release_transient(args.into());
+        }
+        let after = vm.heap().live_object_len();
+        assert_eq!(
+            after, base,
+            "released scalar-args ticks must keep the object heap flat ({} -> {})",
+            base, after
+        );
+
+        // Nested input object (the gamemaker input pattern): the bind-time
+        // escape barrier tags arg values REFFED (a closure could capture the
+        // call scope), so release_transient(input) is a designed NO-OP — the
+        // container is reclaimed eagerly, the inputs by GC. Bounded sawtooth,
+        // flat after gc.
+        vm.gc();
+        let base = vm.heap().live_object_len();
+        for i in 0..2000 {
+            let input = vm.heap_mut().new_object();
+            vm.heap_mut()
+                .set_value(input, id!(jump).into(), ScriptValue::from_f64(i as f64), NoTrap);
+            let args = vm.heap_mut().new_object();
+            vm.heap_mut().set_object_storage_vec2(args);
+            vm.heap_mut().clear_object_deep(args);
+            vm.heap_mut().vec_push_unchecked(args, NIL, input.into());
+            let r = vm.call_with_args_object(on_tick, args);
+            assert_eq!(r.as_f64(), Some(i as f64));
+            assert!(!vm.thread().is_paused());
+            vm.release_transient(args.into());
+            vm.release_transient(input.into()); // no-op: bind barrier tagged it
+        }
+        vm.gc();
+        let after = vm.heap().live_object_len();
+        assert_eq!(
+            after, base,
+            "input-object ticks must return to baseline after gc ({} -> {})",
+            base, after
+        );
+
+        // Closure-capture coverage (the release-vs-capture hazard): on_tick
+        // creates a closure that outlives the call and reads the bound input
+        // through the captured scope. release_transient on that input MUST
+        // no-op, and the read must still work after GC. Without the bind-time
+        // barrier this is a use-after-free.
+        vm.eval(script! {
+            exports.on_tick2 = |input| {
+                exports.later = || input.jump
+            }
+        });
+        let errs = vm.take_errors();
+        assert!(errs.is_empty(), "on_tick2 eval errors: {:?}", errs);
+        let on_tick2 = vm.heap_mut().value(exports, id!(on_tick2).into(), NoTrap);
+        {
+            let input = vm.heap_mut().new_object();
+            vm.heap_mut().set_value(
+                input,
+                id!(jump).into(),
+                ScriptValue::from_f64(777.0),
+                NoTrap,
+            );
+            let args = vm.heap_mut().new_object();
+            vm.heap_mut().set_object_storage_vec2(args);
+            vm.heap_mut().clear_object_deep(args);
+            vm.heap_mut().vec_push_unchecked(args, NIL, input.into());
+            let r = vm.call_with_args_object(on_tick2, args);
+            assert!(!r.is_err());
+            vm.release_transient(args.into());
+            vm.release_transient(input.into()); // must no-op: captured by closure
+            let later = vm.heap_mut().value(exports, id!(later).into(), NoTrap);
+            let v = vm.call(later, &[]);
+            assert_eq!(v.as_f64(), Some(777.0), "closure-captured input must survive release");
+            vm.gc();
+            let v = vm.call(later, &[]);
+            assert_eq!(v.as_f64(), Some(777.0), "closure-captured input must survive release + GC");
+        }
+
+        // Retained-by-script transients survive release + GC: keep() pushes
+        // the input into a script array (escape barrier fires), so release
+        // is a no-op and GC keeps it alive via the body scope.
+        for i in 0..100 {
+            let input = vm.heap_mut().new_object();
+            vm.heap_mut().set_value(
+                input,
+                id!(jump).into(),
+                ScriptValue::from_f64(1000.0 + i as f64),
+                NoTrap,
+            );
+            let args = vm.heap_mut().new_object();
+            vm.heap_mut().set_object_storage_vec2(args);
+            vm.heap_mut().clear_object_deep(args);
+            vm.heap_mut().vec_push_unchecked(args, NIL, input.into());
+            let r = vm.call_with_args_object(keep, args);
+            assert!(!r.is_err());
+            vm.release_transient(args.into());
+            vm.release_transient(input.into()); // must no-op: script retained it
+        }
+        vm.gc();
+        let v = vm.call(read_kept, &[ScriptValue::from_f64(50.0)]);
+        assert_eq!(
+            v.as_f64(),
+            Some(1050.0),
+            "script-retained transient must survive release + GC"
+        );
+        let errs = vm.take_errors();
+        assert!(errs.is_empty(), "gc-campaign call errors: {:?}", errs);
+
+        // Bare-VM mark/sweep (the isolate round-robin pass shape): a parked
+        // ScriptVmBase collects churned garbage without any Cx installed.
+        let mut bx2 = Box::new(ScriptVmBase::new());
+        // settle: collect module-init temporaries before taking the baseline
+        bx2.heap.mark(&bx2.threads, &bx2.code);
+        bx2.heap.sweep(false);
+        let base2 = bx2.heap.live_object_len();
+        for _ in 0..3000 {
+            bx2.heap.new_object();
+        }
+        assert!(bx2.heap.needs_gc(), "3000 garbage objects must trip needs_gc");
+        bx2.heap.mark(&bx2.threads, &bx2.code);
+        bx2.heap.sweep(false);
+        assert_eq!(
+            bx2.heap.live_object_len(),
+            base2,
+            "bare mark/sweep must reclaim unrooted churn"
+        );
+        assert!(!bx2.heap.needs_gc());
+
+        println!("GC campaign tests passed");
+    }
+
+    // ========================================
+    // Per-tick cumulative budget: last_limit_consumed accounting
+    // (game.md M0r — N callbacks share ONE tick pool host-side)
+    // ========================================
+    {
+        let mut std0 = 0usize;
+        let vm = &mut ScriptVm {
+            host: &mut 0,
+            std: &mut std0,
+            bx: Box::new(ScriptVmBase::new()),
+        };
+        let exports = vm.heap_mut().new_object();
+        let _exports_ref = vm.heap_mut().new_object_ref(exports);
+        vm.set_injected_global(id!(exports), exports.into());
+        vm.eval(script! {
+            exports.work = |n| {
+                let acc = 0.0
+                let i = 0.0
+                while i < n {
+                    acc = acc + i
+                    i = i + 1.0
+                }
+                acc
+            }
+        });
+        let errs = vm.take_errors();
+        assert!(errs.is_empty(), "budget eval errors: {:?}", errs);
+        let work = vm.heap_mut().value(exports, id!(work).into(), NoTrap);
+
+        fn call(vm: &mut ScriptVm, work: ScriptValue, n: f64, limit: usize) -> ScriptValue {
+            let args = vm.heap_mut().new_object();
+            vm.heap_mut().set_object_storage_vec2(args);
+            vm.heap_mut()
+                .vec_push_unchecked(args, NIL, ScriptValue::from_f64(n));
+            let r = vm.with_instruction_limit(limit, |vm| vm.call_with_args_object(work, args));
+            vm.release_transient(args.into());
+            r
+        }
+
+        // Warmup, then: a successful call charges a sane, repeatable amount.
+        let _ = call(vm, work, 100.0, 500_000);
+        let r = call(vm, work, 100.0, 500_000);
+        assert!(!r.is_err());
+        let used_100 = vm.last_limit_consumed();
+        assert!(
+            used_100 > 100 && used_100 < 500_000,
+            "used_100={used_100}"
+        );
+        let _ = call(vm, work, 100.0, 500_000);
+        assert_eq!(
+            vm.last_limit_consumed(),
+            used_100,
+            "same work must charge the same amount"
+        );
+
+        // A host pool decrements across calls (gamemaker's tick pattern).
+        let mut pool = 500_000usize;
+        let _ = call(vm, work, 100.0, pool);
+        pool -= vm.last_limit_consumed();
+        let _ = call(vm, work, 100.0, pool);
+        pool -= vm.last_limit_consumed();
+        assert_eq!(pool, 500_000 - 2 * used_100);
+
+        // Exceeding the limit errors AND charges the entire allowance.
+        let r = call(vm, work, 10_000_000.0, 2_000);
+        assert!(r.is_err(), "limit overrun must error");
+        assert_eq!(vm.last_limit_consumed(), 2_000);
+        let _ = vm.take_errors();
+
+        println!("tick budget accounting tests passed");
+    }
+
+    // ========================================
+    // Shader capacity + loud-failure tests
+    //
+    // History: the sandbox's combined Preetham sky pixel fn appeared to sit
+    // at a "capacity limit" where one more statement made the WHOLE shader
+    // silently render flat gray — no compile error, no log, the draw just
+    // stopped. The compiler has no such statement-count limit (verified by
+    // the size sweep below), but the failure mode it exposed was real:
+    // shader compile errors could set `has_errors` without any message ever
+    // reaching a log (entry points compile under NoTrap which discards
+    // script_err_*! messages; errors queued on a nested fn compiler's trap
+    // were never drained; the loc-less drain dropped messages), after which
+    // every backend silently skipped the pipeline and the draw disappeared.
+    //
+    // These tests pin down both halves:
+    //  1. big sky-shaped pixel fns (early-return branch + many rust-instance
+    //     vec4 reads) must compile COMPLETELY at any size;
+    //  2. a shader that does fail must REPORT — test_compile_draw_errors
+    //     must return a non-empty diagnostic (it returns "" when healthy).
+    // ========================================
+    println!("Running shader capacity + loud-failure tests...");
+    {
+        // Build the sky-shaped shader script with `pads` extra let
+        // statements inside the early-return branch (the exact shape that
+        // was reported to silently break the sandbox sky).
+        fn gen_sky_code(pads: usize, tail: &str) -> String {
+            let mut pad_lets = String::new();
+            for i in 0..pads {
+                let prev = if i == 0 {
+                    "hclip".to_string()
+                } else {
+                    format!("pad{}", i - 1)
+                };
+                pad_lets.push_str(&format!(
+                    "                let pad{} = clamp({} * {}.0 + v.x, 0.0, 1.0)\n",
+                    i,
+                    prev,
+                    (i % 7) + 1
+                ));
+            }
+            let last_pad = if pads == 0 {
+                "hclip".to_string()
+            } else {
+                format!("pad{}", pads - 1)
+            };
+            format!(
+                r#"
+        use mod.std.assert
+        use mod.shader
+        use mod.pod.*
+        use mod.math.*
+
+        let vertex_data = struct{{
+            geom_pos: vec3f,
+            geom_id: f32,
+            geom_normal: vec3f,
+            geom_uv: vec2f,
+        }}
+
+        let sky = #(0){{
+            vertex_pos: shader.vertex_position(vec4f)
+            fb0: shader.fragment_output(0, vec4f)
+            geom: shader.vertex_buffer(vertex_data)
+            v_dir: shader.varying(vec3f)
+            world: shader.varying(vec4f)
+
+            vertex: fn() {{
+                let pos = self.cube_size * self.geom.geom_pos + self.cube_pos
+                self.world = self.transform * vec4(pos.x, pos.y, pos.z, 1.0)
+                self.v_dir = self.geom.geom_pos
+                return self.world
+            }}
+
+            pixel: fn() {{
+                let v = normalize(self.v_dir)
+                if self.sky_mode > 0.5 {{
+                    let ct = max(v.y, 0.01)
+                    let cg = clamp(dot(v, self.sun_e.xyz), 0.0 - 1.0, 1.0)
+                    let g = acos(cg)
+                    let cg2 = cg * cg
+                    let fy = (1.0 + self.pz_y.x * exp(self.pz_y.y / ct))
+                        * (1.0 + self.pz_y.z * exp(self.pz_y.w * g) + self.pz_e.x * cg2)
+                    let fx = (1.0 + self.pz_x.x * exp(self.pz_x.y / ct))
+                        * (1.0 + self.pz_x.z * exp(self.pz_x.w * g) + self.pz_e.y * cg2)
+                    let fc = (1.0 + self.pz_yc.x * exp(self.pz_yc.y / ct))
+                        * (1.0 + self.pz_yc.z * exp(self.pz_yc.w * g) + self.pz_e.z * cg2)
+                    let yl = self.zenith.x * fy * self.pz_f0.x
+                    let xc = self.zenith.y * fx * self.pz_f0.y
+                    let yc = max(self.zenith.z * fc * self.pz_f0.z, 0.0001)
+                    var yt = max(yl * self.sun_e.w, 0.0)
+                    yt = yt / (1.0 + yt)
+                    let bx = xc * (yt / yc)
+                    let bz = (1.0 - xc - yc) * (yt / yc)
+                    let r = max(3.2406 * bx - 1.5372 * yt - 0.4986 * bz, 0.0)
+                    let gr = max((0.0 - 0.9689) * bx + 1.8758 * yt + 0.0415 * bz, 0.0)
+                    let b = max(0.0557 * bx - 0.204 * yt + 1.057 * bz, 0.0)
+                    let m = max(max(r, gr), max(b, 1.0))
+                    var day = pow(vec3(r / m, gr / m, b / m), vec3(0.4545, 0.4545, 0.4545))
+                    day = day * mix(1.0, 0.35, clamp((0.0 - v.y) * 3.0, 0.0, 1.0))
+                    let nb = self.zenith.w
+                    let hclip = clamp(v.y * 90.0 + 0.5, 0.0, 1.0)
+{pad_lets}
+                    let sfade = clamp(self.sun_e.y * 30.0 + 1.0, 0.0, 1.0)
+                    let disc = pow(max(cg, 0.0), 900.0) * 1.5 * {last_pad} * sfade
+                    day = day + vec3(1.0, 0.88, 0.62) * disc
+                    let nsky = mix(
+                        vec3(0.045, 0.055, 0.085),
+                        vec3(0.012, 0.016, 0.032),
+                        clamp(v.y * 1.4, 0.0, 1.0)
+                    )
+                    return vec4(mix(day, nsky, nb), 1.0)
+                }}
+                let y = v.y
+                let up = clamp(y * 2.2, 0.0, 1.0)
+                let down = clamp((0.0 - y) * 2.2, 0.0, 1.0)
+                let sky = mix(self.sky_horizon, self.sky_top, up)
+                let ground = mix(self.sky_ground, self.sky_bottom, down)
+                let color = mix(ground, sky, step(0.0, y))
+                return vec4(color, 1.0)
+            }}
+
+            fragment: fn() {{
+                self.fb0 = self.pixel()
+            }}
+        }}
+{tail}
+    "#,
+                pad_lets = pad_lets,
+                last_pad = last_pad,
+                tail = tail,
+            )
+        }
+
+        fn eval_generated(vm: &mut ScriptVm, code: String) -> ScriptValue {
+            let shader_obj = ShaderSkyCapacity::script_shader(vm);
+            let script_mod = ScriptMod {
+                cargo_manifest_path: env!("CARGO_MANIFEST_DIR").to_string(),
+                module_path: "shader_capacity_test".to_string(),
+                file: "shader_capacity_gen.rs".to_string(),
+                line: 1,
+                column: 1,
+                code,
+                values: vec![shader_obj],
+            };
+            vm.eval(script_mod)
+        }
+
+        fn eval_to_string(vm: &mut ScriptVm, code: String) -> String {
+            let v = eval_generated(vm, code);
+            assert!(!v.is_err(), "generated shader test script errored: {:?}", v);
+            vm.bx
+                .heap
+                .string_with(v, |_heap, s| s.to_string())
+                .unwrap_or_default()
+        }
+
+        // 1. Size sweep: the sky shape must compile COMPLETELY at every
+        // size — the last generated statement's local must appear in the
+        // emitted Metal source and the compile must report no errors.
+        for pads in [0usize, 2, 16, 64, 256] {
+            let last = if pads == 0 {
+                "l_hclip".to_string()
+            } else {
+                format!("l_pad{}", pads - 1)
+            };
+            let tail = format!(
+                r#"
+        assert(shader.test_compile_draw_contains(sky, "l_sfade"))
+        assert(shader.test_compile_draw_contains(sky, "{last}"))
+        shader.test_compile_draw_errors(sky)
+    "#
+            );
+            let errors = eval_to_string(vm, gen_sky_code(pads, &tail));
+            assert!(
+                errors.is_empty(),
+                "sky-shaped shader with {} extra statements reported: {}",
+                pads,
+                errors
+            );
+        }
+
+        // 2. A failing shader must REPORT. Entry points compile under
+        // NoTrap, which silently discards script_err_*! messages — this
+        // exact shape (an entry fn whose declared params can't be
+        // supplied) used to set has_errors with NO diagnostic anywhere,
+        // and the shader fell back to drawing nothing.
+        {
+            let bad = r#"
+        use mod.std.assert
+        use mod.shader
+        use mod.pod.*
+        use mod.math.*
+
+        let bad = #(0){
+            vertex_pos: shader.vertex_position(vec4f)
+            fb0: shader.fragment_output(0, vec4f)
+            v_dir: shader.varying(vec3f)
+
+            // Entry points take no script-level arguments: declaring one
+            // must fail LOUDLY, not silently.
+            vertex: fn(oops: f32) {
+                return vec4(oops, 0.0, 0.0, 1.0)
+            }
+
+            fragment: fn() {
+                self.fb0 = vec4(1.0, 0.0, 0.0, 1.0)
+            }
+        }
+        shader.test_compile_draw_errors(bad)
+    "#
+            .to_string();
+            let shader_obj = ShaderSkyCapacity::script_shader(vm);
+            let script_mod = ScriptMod {
+                cargo_manifest_path: env!("CARGO_MANIFEST_DIR").to_string(),
+                module_path: "shader_capacity_test".to_string(),
+                file: "shader_loud_failure_gen.rs".to_string(),
+                line: 1,
+                column: 1,
+                code: bad,
+                values: vec![shader_obj],
+            };
+            let v = vm.eval(script_mod);
+            assert!(!v.is_err(), "loud-failure test script errored: {:?}", v);
+            let errors = vm
+                .bx
+                .heap
+                .string_with(v, |_heap, s| s.to_string())
+                .unwrap_or_default();
+            assert!(
+                errors.contains("expects 1 argument"),
+                "entry-arity compile failure must surface a diagnostic, got: {:?}",
+                errors
+            );
+        }
+
+        // 2b. The constant table: a `/** name … */`-annotated float literal in
+        // a fn body compiles to a scope-uniform read (`ct0`) on EVERY backend
+        // when the table is on, folds to the literal when it is off, and an
+        // unannotated or int literal always folds. The table lists the entry
+        // with its doc and the literal's exact source line.
+        {
+            let base = r#"
+        use mod.shader
+        use mod.pod.*
+        use mod.math.*
+
+        let sh = #(0){
+            vertex_pos: shader.vertex_position(vec4f)
+            fb0: shader.fragment_output(0, vec4f)
+            vertex: fn() {
+                return vec4(0.0, 0.0, 0.0, 1.0)
+            }
+            fragment: fn() {
+                let radius = /** corner radius 0..24 step 0.5 */ 4.125
+                let plain = 3.375
+                let count = /** count */ 7
+                let steps = count + 1
+                let off = /** offset */ -1.5
+                // whole-number floats as binary-op operands and call args:
+                // the parser packs these into the opcode instead of pushing
+                // them, so the lifting path must catch them there too
+                let inset = radius + /** side inset */ 6.
+                let fit = radius - /** fit inset */ 2. - plain
+                let ridge = plain * /** ridge scale */ 4.
+                let arrow = radius - /** arrow inset */ 10.0
+                let boxed = max(/** box pad */ 8., inset)
+                self.fb0 = vec4(radius + plain + inset + fit + ridge + arrow + boxed, off, 0.0, 1.0)
+            }
+        }
+"#;
+            let literal_line = base
+                .lines()
+                .position(|l| l.contains("4.125"))
+                .expect("annotated literal line")
+                + 1;
+            for backend in ["metal", "hlsl", "glsl", "wgsl"] {
+                let on = eval_to_string(
+                    vm,
+                    format!("{base}\n        shader.test_compile_draw_source(sh, \"{backend}\", true)"),
+                );
+                assert!(
+                    !on.starts_with("ERRORS"),
+                    "{backend}: const-table compile reported: {on}"
+                );
+                assert!(
+                    on.contains("ct0"),
+                    "{backend}: annotated literal must read the table slot ct0, got:\n{on}"
+                );
+                assert!(
+                    !on.contains("4.125"),
+                    "{backend}: annotated literal must not be folded with the table on:\n{on}"
+                );
+                assert!(
+                    on.contains("3.375"),
+                    "{backend}: an unannotated literal still folds with the table on:\n{on}"
+                );
+                let off = eval_to_string(
+                    vm,
+                    format!("{base}\n        shader.test_compile_draw_source(sh, \"{backend}\", false)"),
+                );
+                assert!(
+                    off.contains("4.125") && !off.contains("ct0"),
+                    "{backend}: table off must fold the annotated literal and emit no table read:\n{off}"
+                );
+            }
+            let table = eval_to_string(
+                vm,
+                format!("{base}\n        shader.test_compile_draw_const_table(sh)"),
+            );
+            let lines: Vec<&str> = table.lines().collect();
+            assert_eq!(
+                lines.len(),
+                7,
+                "seven float literals are annotated (the int one folds), got:\n{table}"
+            );
+            for name in ["side inset", "fit inset", "ridge scale", "arrow inset", "box pad"] {
+                assert!(
+                    lines.iter().any(|l| l.contains(&format!("|{name}|"))),
+                    "packed whole-number literal `{name}` must lift, table:\n{table}"
+                );
+            }
+            assert!(
+                lines[0].starts_with("ct0|corner radius 0..24 step 0.5|4.125|shader_capacity_gen.rs:"),
+                "first table entry: {}",
+                lines[0]
+            );
+            let entry_line = |entry: &str| -> usize {
+                entry
+                    .rsplit(':')
+                    .nth(1)
+                    .and_then(|s| s.parse().ok())
+                    .expect("entry has file:line:col")
+            };
+            // `ScriptMod.line` is the line of the code's first row (here 1),
+            // so a literal on text line 13 reports line 13 — including a float
+            // that ends its line, which the tokenizer used to place on the
+            // next line.
+            assert_eq!(
+                entry_line(lines[0]),
+                literal_line,
+                "table entry names the literal's exact source line"
+            );
+            assert!(
+                lines[1].starts_with("ct1|offset|-1.5|"),
+                "the sign of `/**offset*/ -1.5` folds into the table value: {}",
+                lines[1]
+            );
+            assert_eq!(
+                entry_line(lines[1]),
+                entry_line(lines[0]) + 4,
+                "the second entry sits four rows below the first"
+            );
+            let hint = makepad_script::docs::parse_doc_hint("corner radius 0..24 step 0.5");
+            assert_eq!(hint.name, "corner radius");
+            assert_eq!((hint.min, hint.max, hint.step), (Some(0.0), Some(24.0), Some(0.5)));
+        }
+
+        // 3. The emitted-size ceiling (MAX_EMITTED_BYTES) must also REPORT.
+        // The overflow error was queued on a nested fn compiler's trap that
+        // nobody ever drained — has_errors with zero diagnostics, the
+        // "whole shader silently gray" failure. Build one pixel fn whose
+        // emitted source exceeds the 1MB ceiling.
+        {
+            let mut big = String::new();
+            big.push_str("                let a0 = v.x + 1.0\n");
+            // ~36 emitted bytes per statement; 40_000 clears the 1<<20 cap.
+            for i in 1..40_000usize {
+                big.push_str(&format!(
+                    "                let a{} = a{} + 1.0\n",
+                    i,
+                    i - 1
+                ));
+            }
+            let code = format!(
+                r#"
+        use mod.std.assert
+        use mod.shader
+        use mod.pod.*
+        use mod.math.*
+
+        let vertex_data = struct{{
+            geom_pos: vec3f,
+            geom_id: f32,
+            geom_normal: vec3f,
+            geom_uv: vec2f,
+        }}
+
+        let huge = #(0){{
+            vertex_pos: shader.vertex_position(vec4f)
+            fb0: shader.fragment_output(0, vec4f)
+            geom: shader.vertex_buffer(vertex_data)
+            v_dir: shader.varying(vec3f)
+
+            vertex: fn() {{
+                self.v_dir = self.geom.geom_pos
+                return vec4(0.0, 0.0, 0.0, 1.0)
+            }}
+
+            pixel: fn() {{
+                let v = normalize(self.v_dir)
+{big}
+                return vec4(a39999, 0.0, 0.0, 1.0)
+            }}
+
+            fragment: fn() {{
+                self.fb0 = self.pixel()
+            }}
+        }}
+        shader.test_compile_draw_errors(huge)
+    "#
+            );
+            let errors = eval_to_string(vm, code);
+            assert!(
+                errors.contains("shader too large"),
+                "emitted-size overflow must surface a diagnostic, got: {:?}",
+                &errors[..errors.len().min(200)]
+            );
+        }
+
+        println!("shader capacity + loud-failure tests passed");
+    }
 
     println!("Test done");
 

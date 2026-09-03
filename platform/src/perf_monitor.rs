@@ -6,9 +6,11 @@
 //! encode, drawable wait); apps register their own channels for anything
 //! else they want plotted (physics, script tick, audio…):
 //!
-//!     let ch = cx.perf_monitor_channel("physics", 0x6aa9ff);
-//!     ...
-//!     cx.perf_monitor_add(ch, t0.elapsed().as_micros() as u64);
+//! ```ignore
+//! let ch = cx.perf_monitor_channel("physics", 0x6aa9ff);
+//! // ...
+//! cx.perf_monitor_add(ch, t0.elapsed().as_micros() as u64);
+//! ```
 //!
 //! Collection is off until something (normally the PerfGraph widget) calls
 //! `set_enabled(true)`; disabled adds are a single branch.
@@ -74,6 +76,8 @@ pub struct PerfMonitor {
     /// Time app channels attributed while inside an event dispatch; deducted
     /// from the "event" channel so the stacked plot doesn't double-count.
     event_deduct: u32,
+    /// Window repaints seen since enabling (see `frames_painted`).
+    frames_painted: u64,
 }
 
 impl Default for PerfMonitor {
@@ -94,6 +98,7 @@ impl Default for PerfMonitor {
             last_frame_time: None,
             event_depth: 0,
             event_deduct: 0,
+            frames_painted: 0,
         }
     }
 }
@@ -112,6 +117,13 @@ impl PerfMonitor {
 
     pub fn enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// Number of window repaints (frame boundaries) recorded while enabled.
+    /// Lets a scripted driver pace itself to presented frames instead of
+    /// queueing pass renders faster than the GPU retires them.
+    pub fn frames_painted(&self) -> u64 {
+        self.frames_painted
     }
 
     /// Register (or find by name) an app channel. Indexes are stable for the
@@ -154,6 +166,7 @@ impl PerfMonitor {
         if !self.enabled {
             return;
         }
+        self.frames_painted += 1;
         if self.ring.is_empty() {
             self.ring.resize(PERF_MONITOR_HISTORY, Default::default());
         }

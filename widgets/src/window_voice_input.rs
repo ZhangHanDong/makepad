@@ -1,10 +1,10 @@
 use crate::makepad_draw::{
-    audio::{AudioBuffer, AudioDeviceId, AudioDevicesEvent},
+    audio::{AudioBuffer, AudioDeviceId, AudioDevicesEvent, AudioInputOptions},
     permission::{Permission, PermissionResult, PermissionStatus},
     thread::SignalToUI,
     Cx, CxMediaApi, Event, NextFrame,
 };
-use makepad_voice::{Segment, VoiceTranscribeParams, VoiceTranscriber};
+use makepad_voice::{Segment, SileroVad, VadStream, VoiceTranscribeParams, VoiceTranscriber};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -21,6 +21,10 @@ const VOICE_MAX_PENDING_SAMPLES: usize = 16_000 * 12; // 12.0s backlog cap
 const VOICE_SILENCE_RMS_THRESHOLD: f32 = 0.0026;
 const VOICE_PAUSE_RMS_THRESHOLD: f32 = 0.0024;
 const VOICE_SPEECH_RMS_THRESHOLD: f32 = 0.0030;
+// Silero VAD gate (preferred over the RMS thresholds when the model file is
+// present): silero's own defaults — enter speech at 0.5, leave below 0.35.
+const VOICE_VAD_SPEECH_PROB: f32 = 0.5;
+const VOICE_VAD_PAUSE_PROB: f32 = 0.35;
 const VOICE_PAUSE_PACKETS_TO_FLUSH: usize = 24; // ~480ms
 const VOICE_IDLE_TIMEOUT_TICKS_TO_FLUSH: usize = 40; // ~400ms at 10ms poll
 const VOICE_MIN_VOICED_SAMPLES_FOR_EARLY_FLUSH: usize = 16_000 / 2; // ~0.50s
@@ -53,10 +57,15 @@ pub enum VoiceInjectEvent {
 pub struct WindowVoiceInput {
     desired_enabled: bool,
     callback_installed: bool,
+    /// Worker spawn is LAZY (first ensure_audio_callback): every VoiceWave
+    /// in the tree (incl. the Window caption one) constructs this struct,
+    /// and eager spawns meant duplicate whisper workers/models.
+    worker_inputs: Option<(Receiver<Vec<f32>>, Receiver<VoiceControlMessage>, mpsc::Sender<String>, SyncSender<VoiceWaveEvent>)>,
     callback_index: Option<usize>,
     default_input: Option<AudioDeviceId>,
     pending_permission_request: Option<i32>,
     capture_enabled: Arc<AtomicBool>,
+    echo_cancellation: bool,
     callback_state: Arc<Mutex<CaptureCallbackState>>,
     control_tx: mpsc::Sender<VoiceControlMessage>,
     text_rx: Receiver<String>,
@@ -84,18 +93,19 @@ impl Default for WindowVoiceInput {
             text_signal.clone(),
         )));
         let capture_enabled = Arc::new(AtomicBool::new(false));
-        spawn_voice_worker(audio_rx, control_rx, text_tx, wave_tx, text_signal.clone());
-        // Keep the backend warm once per app lifetime: worker/model/threadpools stay alive
-        // and are not restarted on mic toggles.
-        let _ = control_tx.send(VoiceControlMessage::Preload);
 
         Self {
             desired_enabled: false,
             callback_installed: false,
+            worker_inputs: Some((audio_rx, control_rx, text_tx, wave_tx)),
             callback_index: None,
             default_input: None,
             pending_permission_request: None,
             capture_enabled,
+            // Constant AEC while capturing: swapping the unit mid-stream to
+            // dodge ducking glitches the assistant's own audio start, and
+            // standard+Min ducking is gentle enough to live with.
+            echo_cancellation: true,
             callback_state,
             control_tx,
             text_rx,
@@ -132,6 +142,12 @@ impl WindowVoiceInput {
     pub fn ensure_audio_callback(&mut self, cx: &mut Cx, callback_index: usize) {
         if self.callback_installed {
             return;
+        }
+        if let Some((audio_rx, control_rx, text_tx, wave_tx)) = self.worker_inputs.take() {
+            spawn_voice_worker(audio_rx, control_rx, text_tx, wave_tx, self.text_signal.clone());
+            // Keep the backend warm once per instance lifetime: worker/model/
+            // threadpools stay alive and are not restarted on mic toggles.
+            let _ = self.control_tx.send(VoiceControlMessage::Preload);
         }
         let callback_state = self.callback_state.clone();
         let capture_enabled = self.capture_enabled.clone();
@@ -233,12 +249,36 @@ impl WindowVoiceInput {
     fn start_capture(&mut self, cx: &mut Cx) {
         self.reset_pipeline();
         let _ = self.control_tx.send(VoiceControlMessage::Preload);
+        self.rearm_capture(cx);
+    }
+
+    /// (Re)apply device + options for the current capture state. Called on
+    /// start and whenever the echo-cancellation need flips.
+    fn rearm_capture(&mut self, cx: &mut Cx) {
         if let Some(device_id) = self.default_input {
             self.capture_enabled.store(true, Ordering::Relaxed);
-            cx.use_audio_inputs(&[device_id]);
+            cx.use_audio_inputs_with_options(
+                &[device_id],
+                AudioInputOptions {
+                    echo_cancellation: self.echo_cancellation,
+                },
+            );
         } else {
             self.capture_enabled.store(false, Ordering::Relaxed);
             cx.use_audio_inputs(&[]);
+        }
+    }
+
+    /// Half-duplex echo control: the app arms the OS voice-processing path
+    /// (which DUCKS all other audio) only while its own voice output plays —
+    /// idle listening stays on plain capture with music untouched.
+    pub fn set_echo_cancellation(&mut self, cx: &mut Cx, on: bool) {
+        if self.echo_cancellation == on {
+            return;
+        }
+        self.echo_cancellation = on;
+        if self.desired_enabled {
+            self.rearm_capture(cx);
         }
     }
 
@@ -588,6 +628,30 @@ fn spawn_voice_worker(
         let mut transcriber = VoiceTranscriber::from_makepad_env();
         let params = VoiceTranscribeParams::for_live_dictation();
         crate::log!("voice: backend {:?}", transcriber.kind());
+        // Eager weight load: otherwise the whisper model loads on the FIRST
+        // utterance, stalling the first transcription by seconds.
+        let t0 = std::time::Instant::now();
+        match transcriber.preload(&params) {
+            Ok(()) => crate::log!(
+                "voice: model preloaded in {:.1}s",
+                t0.elapsed().as_secs_f64()
+            ),
+            Err(err) => crate::log!("voice: model preload failed: {err:?}"),
+        }
+
+        // Learned gate when the Silero weights are present, RMS energy gate
+        // otherwise. The VAD stream carries its own 512-sample chunking, so it
+        // just eats the 320-sample packets as they come.
+        let mut vad = match SileroVad::from_makepad_env() {
+            Ok(vad) => {
+                crate::log!("voice: gate silero vad");
+                Some(VadStream::new(vad))
+            }
+            Err(err) => {
+                crate::log!("voice: gate rms (no silero model: {err:?})");
+                None
+            }
+        };
 
         let mut pending_samples = VecDeque::<f32>::new();
         let mut chunk = Vec::with_capacity(VOICE_MAX_PENDING_SAMPLES);
@@ -605,6 +669,9 @@ fn spawn_voice_worker(
                         saw_speech_since_flush = false;
                         voiced_samples_since_flush = 0;
                         idle_timeout_ticks = 0;
+                        if let Some(vad) = vad.as_mut() {
+                            vad.reset();
+                        }
                     }
                     VoiceControlMessage::Preload => {
                         let _ = transcriber.preload(&params);
@@ -616,8 +683,24 @@ fn spawn_voice_worker(
             match audio_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(audio_chunk) => {
                     idle_timeout_ticks = 0;
-                    let packet_rms = rms(&audio_chunk);
-                    if packet_rms >= VOICE_SPEECH_RMS_THRESHOLD {
+                    // Classify the packet as speech / undecided / pause. Silero
+                    // updates its probability every 512 samples, so between
+                    // chunk boundaries the newest probability carries over.
+                    let (is_speech, is_pause) = match vad.as_mut() {
+                        Some(vad) => {
+                            vad.push(&audio_chunk);
+                            let prob = vad.prob();
+                            (prob >= VOICE_VAD_SPEECH_PROB, prob < VOICE_VAD_PAUSE_PROB)
+                        }
+                        None => {
+                            let packet_rms = rms(&audio_chunk);
+                            (
+                                packet_rms >= VOICE_SPEECH_RMS_THRESHOLD,
+                                packet_rms < VOICE_PAUSE_RMS_THRESHOLD,
+                            )
+                        }
+                    };
+                    if is_speech {
                         if !saw_speech_since_flush {
                             trim_pending_to_recent(
                                 &mut pending_samples,
@@ -628,12 +711,13 @@ fn spawn_voice_worker(
                         saw_speech_since_flush = true;
                         voiced_samples_since_flush =
                             voiced_samples_since_flush.saturating_add(audio_chunk.len());
-                    } else if packet_rms < VOICE_PAUSE_RMS_THRESHOLD {
+                    } else if is_pause {
                         if saw_speech_since_flush {
                             silence_packet_run += 1;
                         }
                     } else {
-                        // Mid-band packet: keep phrase active if speech already started.
+                        // Undecided packet: keep the phrase active if speech
+                        // already started.
                         if saw_speech_since_flush {
                             silence_packet_run = 0;
                         }

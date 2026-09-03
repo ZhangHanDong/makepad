@@ -43,6 +43,7 @@ impl<'a> ScriptVm<'a> {
             self.bail("calls empty in handle_return");
             return;
         };
+        self.bx.threads.cur().slot_base = call.prev_slot_base;
         self.bx
             .threads
             .cur()
@@ -59,8 +60,7 @@ impl<'a> ScriptVm<'a> {
                 .threads
                 .cur()
                 .trap
-                .on
-                .set(Some(ScriptTrapOn::Return(value)));
+                .set_on(Some(ScriptTrapOn::Return(value)));
         }
     }
 
@@ -71,6 +71,7 @@ impl<'a> ScriptVm<'a> {
                 self.bail("calls empty in handle_return_if_err");
                 return true;
             };
+            self.bx.threads.cur().slot_base = call.prev_slot_base;
             self.bx
                 .threads
                 .cur()
@@ -86,8 +87,7 @@ impl<'a> ScriptVm<'a> {
                     .threads
                     .cur()
                     .trap
-                    .on
-                    .set(Some(ScriptTrapOn::Return(value)));
+                    .set_on(Some(ScriptTrapOn::Return(value)));
             }
             true
         } else {

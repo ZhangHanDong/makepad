@@ -16,7 +16,7 @@ use {
         makepad_script::{
             apply::Apply,
             shader::{
-                SamplerAddress, SamplerFilter, ShaderFnCompiler, ShaderMode, ShaderOutput,
+                ShaderFnCompiler, ShaderMode, ShaderOutput,
                 ShaderType,
             },
             shader_backend::ShaderBackend,
@@ -67,6 +67,7 @@ impl DrawVars {
 
             let mut output = ShaderOutput::default();
             output.backend = ShaderBackend::Glsl;
+            output.const_table = vm.host.cx().shader_const_table_mode();
             output.use_vulkan = cfg!(use_vulkan);
             output.pre_collect_rust_instance_io(vm, io_self);
             output.pre_collect_shader_io(vm, io_self);
@@ -107,6 +108,7 @@ impl DrawVars {
             }
 
             if output.has_errors {
+                DrawVars::log_shader_compile_failure(vm, io_self, &output);
                 return;
             }
 
@@ -277,6 +279,79 @@ impl DrawVars {
 }
 
 impl Cx {
+    /// Renderer-owned texture capture (see the metal backend): not
+    /// implemented here — callers fall back to `debug_read_render_texture`
+    /// (GL commands on one context are ordered, so the sync path is safe).
+    pub fn request_render_texture_capture(&mut self, _texture: &Texture) -> bool {
+        false
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn take_render_texture_captures(
+        &mut self,
+    ) -> Vec<(crate::texture::TextureId, usize, usize, Vec<u8>)> {
+        Vec::new()
+    }
+
+    /// CPU grab of a color render target (thumbnail icons). Temporary FBO +
+    /// `glReadPixels`. Returns packed BGRA8, origin top-left, matching Metal.
+    pub fn debug_read_render_texture(
+        &mut self,
+        texture: &Texture,
+    ) -> Option<(usize, usize, Vec<u8>)> {
+        let cxtexture = &self.textures[texture.texture_id()];
+        let alloc = cxtexture.alloc.as_ref()?;
+        let (width, height) = (alloc.width, alloc.height);
+        let gl_tex = cxtexture.os.gl_texture?;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let mut rgba = vec![0u8; width * height * 4];
+        let gl = self.os.gl();
+        unsafe {
+            let mut fbo = 0u32;
+            (gl.glGenFramebuffers)(1, &mut fbo);
+            (gl.glBindFramebuffer)(gl_sys::FRAMEBUFFER, fbo);
+            (gl.glFramebufferTexture2D)(
+                gl_sys::FRAMEBUFFER,
+                gl_sys::COLOR_ATTACHMENT0,
+                gl_sys::TEXTURE_2D,
+                gl_tex,
+                0,
+            );
+            (gl.glPixelStorei)(gl_sys::PACK_ALIGNMENT, 1);
+            (gl.glReadPixels)(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                gl_sys::RGBA,
+                gl_sys::UNSIGNED_BYTE,
+                rgba.as_mut_ptr() as *mut _,
+            );
+            (gl.glBindFramebuffer)(gl_sys::FRAMEBUFFER, 0);
+            (gl.glDeleteFramebuffers)(1, &fbo);
+        }
+        // Row order: a Y-inverted offscreen pass already stored top-left
+        // rows; a custom-camera target is classic GL bottom-up and gets
+        // swapped into the top-left BGRA the thumbnail encode expects.
+        let top_left = self.textures[texture.texture_id()].os.rendered_top_left;
+        let mut bgra = vec![0u8; rgba.len()];
+        for y in 0..height {
+            let src = (if top_left { y } else { height - 1 - y }) * width * 4;
+            let dst = y * width * 4;
+            for x in 0..width {
+                let i = src + x * 4;
+                let o = dst + x * 4;
+                bgra[o] = rgba[i + 2];
+                bgra[o + 1] = rgba[i + 1];
+                bgra[o + 2] = rgba[i];
+                bgra[o + 3] = rgba[i + 3];
+            }
+        }
+        Some((width, height, bgra))
+    }
+
     pub(crate) fn render_view(
         &mut self,
         draw_pass_id: DrawPassId,
@@ -288,6 +363,8 @@ impl Cx {
         //self.draw_lists[draw_list_id].draw_list_uniforms.view_transform = Mat4f::identity();
         // tad ugly otherwise the borrow checker locks 'self' and we can't recur
         let draw_order_len = self.draw_lists[draw_list_id].draw_item_order_len();
+        // Exploded z-layer view: z is the call's nesting depth, not paint order.
+        let sploded = self.passes[draw_pass_id].sploded.is_some();
 
         let draw_list = &mut self.draw_lists[draw_list_id];
         draw_list
@@ -306,17 +383,16 @@ impl Cx {
                 .sub_list()
             {
                 let child_resets_zbias = self.draw_lists[sub_list_id].reset_zbias;
-                let mut child_zbias = 0.0f32;
-                self.render_view(
-                    draw_pass_id,
-                    sub_list_id,
-                    if child_resets_zbias {
-                        &mut child_zbias
-                    } else {
-                        zbias
-                    },
-                    zbias_step,
-                );
+                let mut own_zbias = 0.0f32;
+                let child_zbias = if child_resets_zbias {
+                    &mut own_zbias
+                } else {
+                    &mut *zbias
+                };
+                // An overlay list carries a depth floor: this is what makes it
+                // composite above body content that uses `draw_depth`.
+                self.draw_lists[sub_list_id].raise_zbias_to_floor(child_zbias);
+                self.render_view(draw_pass_id, sub_list_id, child_zbias, zbias_step);
             } else {
                 let gl = self.os.gl();
 
@@ -339,6 +415,7 @@ impl Cx {
                 }
                 let shp = &mut self.draw_shaders.os_shaders[sh.os_shader_id.unwrap()];
                 shp.ensure_gl_shader_sources(self.os.gl(), &self.os_type);
+                shp.refresh_scope_uniforms(self.os.gl(), &sh.mapping);
 
                 let shader_variant = self.passes[draw_pass_id].os.shader_variant;
 
@@ -402,7 +479,7 @@ impl Cx {
                 }
 
                 // update the zbias uniform if we have it.
-                draw_call.draw_call_uniforms.set_zbias(*zbias);
+                draw_call.resolve_zbias(*zbias, sploded);
                 *zbias += zbias_step;
 
                 draw_item
@@ -686,7 +763,6 @@ impl Cx {
                             let texture_id = texture.texture_id();
                             let cxtexture = &mut self.textures[texture_id];
                             let bind_target = match cxtexture.format {
-                                #[cfg(target_os = "android")]
                                 TextureFormat::VideoExternal => gl_sys::TEXTURE_EXTERNAL_OES,
                                 TextureFormat::VecCubeBGRAu8_32 { .. }
                                 | TextureFormat::RenderCubeBGRAu8 { .. } => {
@@ -709,12 +785,11 @@ impl Cx {
                         if let Some(gl_bind_sampler) = gl.glBindSampler {
                             // Do not bind sampler objects for OES external textures;
                             // per GL ES spec, using sampler objects with external textures
-                            // is undefined behavior. Only applies on Android where we use OES.
-                            let is_oes = cfg!(target_os = "android")
-                                && matches!(
-                                    sh.mapping.textures[i].tex_type,
-                                    TextureType::TextureVideo
-                                );
+                            // is undefined behavior.
+                            let is_oes = matches!(
+                                sh.mapping.textures[i].tex_type,
+                                TextureType::TextureVideo
+                            );
                             let sampler = if is_oes {
                                 0
                             } else {
@@ -771,7 +846,11 @@ impl Cx {
         }
     }
 
-    pub fn setup_render_pass(&mut self, draw_pass_id: DrawPassId) -> Option<(Vec2d, f64)> {
+    pub fn setup_render_pass(
+        &mut self,
+        draw_pass_id: DrawPassId,
+        to_texture: bool,
+    ) -> Option<(Vec2d, f64)> {
         let dpi_factor = self.passes[draw_pass_id].dpi_factor.unwrap();
         let pass_rect = self.get_pass_rect(draw_pass_id, dpi_factor).unwrap();
         let pass = &mut self.passes[draw_pass_id];
@@ -784,6 +863,20 @@ impl Cx {
 
         if !pass.keep_camera_matrix {
             pass.set_ortho_matrix(pass_rect.pos, pass_rect.size);
+            if to_texture {
+                // OFFSCREEN passes render UPSIDE DOWN on GL: an FBO's rows
+                // are stored bottom-up, so inverting the projection's Y
+                // lands the texels in the same top-left order Metal/D3D
+                // produce. Every consumer then plain-samples — nobody
+                // flips a V coordinate in a pixel shader (the web backend
+                // has rendered offscreen this way all along; desktop GL
+                // used to compensate per-sample with sample_rt instead).
+                let m = &mut pass.pass_uniforms.camera_projection.v;
+                m[1] = -m[1];
+                m[5] = -m[5];
+                m[9] = -m[9];
+                m[13] = -m[13];
+            }
         }
         pass.set_dpi_factor(dpi_factor);
 
@@ -801,11 +894,16 @@ impl Cx {
     ) {
         let draw_list_id = self.passes[draw_pass_id].main_draw_list_id.unwrap();
 
-        let (pass_size, dpi_factor) = if let Some(pz) = self.setup_render_pass(draw_pass_id) {
+        let (pass_size, dpi_factor) = if let Some(pz) = self.setup_render_pass(draw_pass_id, true) {
             pz
         } else {
             return;
         };
+        // Whether this pass rendered with the inverted projection above:
+        // its color targets then hold TOP-LEFT rows (readback must not
+        // row-swap them). Custom-camera passes (XR, 3D) keep their own
+        // matrices and the classic GL bottom-up storage.
+        let rows_top_left = !self.passes[draw_pass_id].keep_camera_matrix;
 
         let mut clear_color = Vec4f::default();
         let mut clear_depth = 1.0;
@@ -858,6 +956,8 @@ impl Cx {
                     clear_flags |= gl_sys::COLOR_BUFFER_BIT;
                 }
             }
+            self.textures[color_texture.texture.texture_id()].os.rendered_top_left =
+                rows_top_left;
             if let Some(gl_texture) = self.textures[color_texture.texture.texture_id()]
                 .os
                 .gl_texture
@@ -1119,6 +1219,9 @@ pub struct GlShaderUniforms {
     pub live_uniforms_binding: OpenglUniformBlockBinding,
     pub const_table_uniform: OpenglUniform,
     pub live_uniforms: OpenglBuffer,
+    /// `CxDrawShaderMapping::scope_uniforms_gen` the `live_uniforms`
+    /// buffer was last uploaded from.
+    pub scope_uniforms_gen: u64,
 }
 
 pub enum GlShaderState {
@@ -1211,6 +1314,7 @@ impl GlShaderUniforms {
             ),
             const_table_uniform: GlShader::opengl_get_uniform(gl, program, "const_table"),
             live_uniforms,
+            scope_uniforms_gen: mapping.scope_uniforms_gen,
         }
     }
 }
@@ -1374,6 +1478,20 @@ impl GlShader {
         pixel: &str,
         _os_type: &OsType,
     ) -> PendingGlShader {
+        static GL_INFO_ONCE: std::sync::Once = std::sync::Once::new();
+        GL_INFO_ONCE.call_once(|| {
+            crate::log!(
+                "Makepad GL: vendor={:?} renderer={:?} version={:?} glsl={:?} sampler_objects={}",
+                get_gl_string(gl, gl_sys::VENDOR),
+                get_gl_string(gl, gl_sys::RENDERER),
+                get_gl_string(gl, gl_sys::VERSION),
+                get_gl_string(gl, gl_sys::SHADING_LANGUAGE_VERSION),
+                gl.glGenSamplers.is_some()
+                    && gl.glBindSampler.is_some()
+                    && gl.glSamplerParameteri.is_some(),
+            );
+        });
+
         let vertex_len = Self::shader_source_len(vertex);
         let pixel_len = Self::shader_source_len(pixel);
         #[cfg(target_os = "android")]
@@ -1897,60 +2015,10 @@ impl GlShader {
         gl_texture_slots
     }
 
-    pub fn opengl_create_samplers(gl: &LibGl, mapping: &CxDrawShaderMapping) -> Vec<OpenglSampler> {
-        let mut samplers = Vec::with_capacity(mapping.textures.len());
-        let Some(gl_gen_samplers) = gl.glGenSamplers else {
-            samplers.resize(mapping.textures.len(), OpenglSampler::default());
-            return samplers;
-        };
-        let Some(gl_sampler_parameteri) = gl.glSamplerParameteri else {
-            samplers.resize(mapping.textures.len(), OpenglSampler::default());
-            return samplers;
-        };
-
-        for texture_slot in 0..mapping.textures.len() {
-            let sampler_desc = mapping
-                .texture_sampler_indices
-                .get(texture_slot)
-                .and_then(|sampler_idx| mapping.samplers.get(*sampler_idx))
-                .copied()
-                .unwrap_or_default();
-
-            let mut sampler = 0u32;
-            unsafe {
-                gl_gen_samplers(1, &mut sampler);
-            }
-            if sampler == 0 {
-                samplers.push(OpenglSampler::default());
-                continue;
-            }
-
-            let filter = match sampler_desc.filter {
-                SamplerFilter::Nearest => gl_sys::NEAREST,
-                SamplerFilter::Linear => gl_sys::LINEAR,
-            };
-            let address = match sampler_desc.address {
-                SamplerAddress::Repeat => gl_sys::REPEAT,
-                SamplerAddress::ClampToEdge => gl_sys::CLAMP_TO_EDGE,
-                // CLAMP_TO_BORDER is not universally available on GLES3, keep it edge-safe.
-                SamplerAddress::ClampToZero => gl_sys::CLAMP_TO_EDGE,
-                SamplerAddress::MirroredRepeat => gl_sys::MIRRORED_REPEAT,
-            };
-
-            unsafe {
-                gl_sampler_parameteri(sampler, gl_sys::TEXTURE_MIN_FILTER, filter as i32);
-                gl_sampler_parameteri(sampler, gl_sys::TEXTURE_MAG_FILTER, filter as i32);
-                gl_sampler_parameteri(sampler, gl_sys::TEXTURE_WRAP_S, address as i32);
-                gl_sampler_parameteri(sampler, gl_sys::TEXTURE_WRAP_T, address as i32);
-                gl_sampler_parameteri(sampler, gl_sys::TEXTURE_WRAP_R, address as i32);
-            }
-
-            samplers.push(OpenglSampler {
-                sampler: Some(sampler),
-            });
-        }
-
-        samplers
+    pub fn opengl_create_samplers(_gl: &LibGl, mapping: &CxDrawShaderMapping) -> Vec<OpenglSampler> {
+        // Rely on per-texture filter+wrap (set in update_vec_texture) instead of GL sampler objects:
+        // some Mesa drivers ignore the sampler MIN_FILTER and point-sample minified textures.
+        vec![OpenglSampler::default(); mapping.textures.len()]
     }
 
     pub fn free_resources(self, gl: &LibGl) {
@@ -1968,6 +2036,25 @@ impl GlShader {
 }
 
 impl CxOsDrawShader {
+    /// A hot-patched table constant moved the mapping's scope-uniform
+    /// buffer: re-upload every compiled variant's copy once per generation.
+    fn refresh_scope_uniforms(&mut self, gl: &LibGl, mapping: &CxDrawShaderMapping) {
+        if mapping.scope_uniforms_buf.is_empty() {
+            return;
+        }
+        for state in self.gl_shader.iter_mut().flatten() {
+            if let GlShaderState::Ready(shader) = state {
+                if shader.uniforms.scope_uniforms_gen != mapping.scope_uniforms_gen {
+                    shader
+                        .uniforms
+                        .live_uniforms
+                        .update_uniform_buffer(gl, mapping.scope_uniforms_buf.as_ref());
+                    shader.uniforms.scope_uniforms_gen = mapping.scope_uniforms_gen;
+                }
+            }
+        }
+    }
+
     fn ensure_gl_shader_sources(&mut self, gl: &LibGl, os_type: &OsType) {
         let has_gl_sources = self.vertex.iter().all(|source| !source.is_empty())
             && self.pixel.iter().all(|source| !source.is_empty());
@@ -2062,36 +2149,67 @@ impl CxOsDrawShader {
     }
 
     pub fn new(gl: &LibGl, in_vertex: &str, in_pixel: &str, os_type: &OsType) -> Self {
-        // Check if GL_OES_EGL_image_external extension is available in the current device, otherwise do not attempt to use in the shaders.
-        let available_extensions = get_gl_string(gl, gl_sys::EXTENSIONS);
-        let is_external_texture_supported = available_extensions
-            .split_whitespace()
-            .any(|ext| ext == "GL_OES_EGL_image_external");
-
         // GL_OES_EGL_image_external is not well supported on Android emulators with macOS hosts.
-        // Because there's no bullet-proof way to check the emualtor host at runtime, we're currently disabling external texture support on all emulators.
+        // Because there's no bullet-proof way to check the emulator host at runtime, we're currently
+        // disabling external texture support on all emulators.
         let is_emulator = match os_type {
             OsType::Android(params) => params.is_emulator,
             OsType::OpenHarmony(_) => true, // TODO FIXME: detect whether we're running on an OHOS emulator
             _ => false,
         };
 
-        // Some Android devices running Adreno GPUs suddenly stopped compiling shaders when passing the samplerExternalOES sampler to texture2D functions.
-        // This seems like a driver bug (no confirmation from Qualcomm yet).
-        // Therefore we're disabling the external texture support for Adreno until this is fixed.
-        let is_vendor_adreno = get_gl_string(gl, gl_sys::RENDERER).contains("Adreno");
+        // GLES 3.0+ deprecates glGetString(GL_EXTENSIONS) (often returns null), so we cannot
+        // rely on that query alone. VideoExternal shaders always declare samplerExternalOES;
+        // without `#extension GL_OES_EGL_image_external_essl3` they panic on Adreno ES 3.2.
+        // Real Android devices expose OES external textures for SurfaceTexture/MediaCodec.
+        let listed_external = get_gl_string(gl, gl_sys::EXTENSIONS)
+            .split_whitespace()
+            .any(|ext| {
+                ext == "GL_OES_EGL_image_external"
+                    || ext == "GL_OES_EGL_image_external_essl3"
+            });
+        let is_external_texture_supported = listed_external
+            || matches!(os_type, OsType::Android(params) if !params.is_emulator)
+            || matches!(os_type, OsType::LinuxWindow(_) | OsType::LinuxDirect);
 
-        let (tex_ext_import, tex_ext_sampler) = if is_external_texture_supported
-            && !is_vendor_adreno
-            && !is_emulator
-        {
-            (
-            "#extension GL_OES_EGL_image_external_essl3 : require\n",
-            "vec4 sample2dOES(samplerExternalOES sampler, vec2 pos){ return texture(sampler, vec2(pos.x, pos.y));}"
-        )
-        } else {
-            ("", "")
+        // Only inject OES into shaders that actually reference external samplers.
+        // Blanket-injecting `#extension GL_OES_EGL_image_external_essl3` into every
+        // shader triggers Adreno ICEs ("array indexing out of boundary") on otherwise
+        // unrelated vertex programs (e.g. plain DrawQuad).
+        //
+        // Use ESSL3 `texture()` + essl3 extension. An older Adreno workaround disabled
+        // OES entirely for GLES2 `texture2D(samplerExternalOES)`; that does not apply
+        // here, but VideoExternal shaders still need the extension when they declare
+        // `samplerExternalOES`.
+        let oes_ok = is_external_texture_supported && !is_emulator;
+        let oes_prelude = |src: &str| -> (&'static str, &'static str) {
+            let needs = src.contains("samplerExternalOES") || src.contains("sample2dOES");
+            if !needs {
+                ("", "")
+            } else if oes_ok {
+                // Adreno ICE if samplerExternalOES is a *function* parameter
+                // ("array indexing out of boundary"). Use a macro instead (same
+                // workaround as Firefox/AVPro).
+                (
+                    "#extension GL_OES_EGL_image_external_essl3 : require\n",
+                    "#define sample2dOES(sampler, pos) (texture((sampler), vec2((pos).x, (pos).y)))\n",
+                )
+            } else {
+                // Emulator / missing OES: keep Video shaders compiling as sampler2D.
+                (
+                    "#define samplerExternalOES sampler2D\n",
+                    "#define sample2dOES(sampler, pos) (texture((sampler), vec2((pos).x, (pos).y)))\n",
+                )
+            }
         };
+        // Adreno ICE: `samplerExternalOES` + `foo[int(VIEW_ID)]` with `#define VIEW_ID 0`.
+        // Window path can use a literal index; XR keeps `int(gl_ViewID_OVR)`.
+        let in_vertex_window = in_vertex.replace("[int(VIEW_ID)]", "[0]");
+        let in_pixel_window = in_pixel.replace("[int(VIEW_ID)]", "[0]");
+        let (tex_ext_import_vw, tex_ext_sampler_vw) = oes_prelude(&in_vertex_window);
+        let (tex_ext_import_pw, tex_ext_sampler_pw) = oes_prelude(&in_pixel_window);
+        let (tex_ext_import_vx, tex_ext_sampler_vx) = oes_prelude(in_vertex);
+        let (tex_ext_import_px, tex_ext_sampler_px) = oes_prelude(in_pixel);
 
         // Currently, these shaders are only compatible with `#version 100` through `#version 300 es`.
         // Version 310 and later have removed/deprecated some features that we currently use:
@@ -2136,45 +2254,56 @@ impl CxOsDrawShader {
             vec4 sample2d(sampler2D sampler, vec2 pos){return texture(sampler, vec2(pos.x, pos.y));}
             vec4 sample2d_lod(sampler2D sampler, vec2 pos, float lod){return textureLod(sampler, vec2(pos.x, pos.y), lod);}
             vec4 sample2d_bgra(sampler2D sampler, vec2 pos){return texture(sampler, vec2(pos.x, pos.y));}
-            vec4 sample2d_rt(sampler2D sampler, vec2 pos){return texture(sampler, vec2(pos.x, 1.0 - pos.y));}
             vec4 samplecube(samplerCube sampler, vec3 dir){return texture(sampler, dir);}
             vec4 samplecube_lod(samplerCube sampler, vec3 dir, float lod){return textureLod(sampler, dir, lod);}
             vec4 samplecube_bgra(samplerCube sampler, vec3 dir){return texture(sampler, dir);}
             ";
+        // GLSL ES 3.00 does not give samplers a default precision. Desktop GL and
+        // some lenient GLES drivers accept bare `uniform sampler2DArray ...`, but
+        // Mesa/virgl (and other strict ES implementations) reject it with
+        // "No precision specified ... sampler2DArray". Video declares
+        // texture_2d_array slots for Windows ZC even on Linux, so every Video
+        // shader hits this on ES-only hosts.
+        let sampler_precision = "
+            precision highp sampler2D;
+            precision highp sampler2DArray;
+            precision highp samplerCube;
+            ";
 
+        // `#extension` must come immediately after `#version` (before `#define`).
         let vertex_window = format!(
             "#version 300 es
-            #define VIEW_ID 0
-            {tex_ext_import}
+            {tex_ext_import_vw}#define VIEW_ID 0
             precision highp float;
             precision highp int;
+            {sampler_precision}
             {sampler_helpers}
-            {tex_ext_sampler}
-            {in_vertex}\0",
+            {tex_ext_sampler_vw}
+            {in_vertex_window}\0",
         );
         let pixel_window = format!(
             "#version 300 es
+            {tex_ext_import_pw}#extension GL_OES_standard_derivatives : enable
             #define VIEW_ID 0
-            {tex_ext_import}
-            #extension GL_OES_standard_derivatives : enable
             precision highp float;
             precision highp int;
+            {sampler_precision}
             {sampler_helpers}
-            {tex_ext_sampler}
-            {in_pixel}
+            {tex_ext_sampler_pw}
+            {in_pixel_window}
             {nop_depth_clip}
             \0",
         );
         let vertex_xr = format!(
             "#version 300 es
+            {tex_ext_import_vx}#extension GL_OVR_multiview2 : require
             #define VIEW_ID gl_ViewID_OVR
-            #extension GL_OVR_multiview2 : require
             layout(num_views=2) in;
-            {tex_ext_import}
             precision highp float;
             precision highp int;
+            {sampler_precision}
             {sampler_helpers}
-            {tex_ext_sampler}
+            {tex_ext_sampler_vx}
             {in_vertex}\0",
         );
         #[cfg(all(target_os = "android", not(use_vulkan)))]
@@ -2183,14 +2312,14 @@ impl CxOsDrawShader {
         let xr_depth_clip = depth_clip;
         let pixel_xr = format!(
             "#version 300 es
-            #define VIEW_ID gl_ViewID_OVR
-            #extension GL_OVR_multiview2 : require
-            {tex_ext_import}
+            {tex_ext_import_px}#extension GL_OVR_multiview2 : require
             #extension GL_OES_standard_derivatives : enable
+            #define VIEW_ID gl_ViewID_OVR
             precision highp float;
             precision highp int;
+            {sampler_precision}
             {sampler_helpers}
-            {tex_ext_sampler}
+            {tex_ext_sampler_px}
             {in_pixel}
             {xr_depth_clip}
             \0",
@@ -2329,20 +2458,55 @@ pub struct CxOsUniformBuffer {
     pub buffer: OpenglBuffer,
 }
 
+/// Column-major identity 4x4 — default SurfaceTexture UV transform (Android OES).
+#[cfg(target_os = "android")]
+pub const OES_ST_IDENTITY: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+];
+
 #[derive(Clone)]
 pub struct CxOsTexture {
     pub gl_texture: Option<u32>,
+    /// This texture was last rendered by a Y-inverted offscreen pass, so
+    /// its rows are stored TOP-LEFT (Metal/D3D order) — readback must not
+    /// row-swap it. False for custom-camera (XR/3D) targets, which keep
+    /// classic GL bottom-up storage.
+    pub rendered_top_left: bool,
     /// True when Makepad owns the GL texture object and must delete it.
     pub gl_texture_owned: bool,
     pub gl_renderbuffer: Option<u32>,
+    /// Allocated GL storage `(width, height, internal_format)` of `gl_texture` for the append-only
+    /// SLUG glyph atlas (`VecRGBAf32`). The atlas is allocated with spare height capacity so that a
+    /// later height-growth append reuses the same texture via `glTexSubImage2D` instead of
+    /// recreating the (up to ~16 MB) texture with `glTexImage2D` on every change — the same win the
+    /// D3D11 backend gets from `UpdateSubresource`. `gl_cap_width == 0` means "not allocated".
+    gl_cap_width: usize,
+    gl_cap_height: usize,
+    gl_cap_internal_format: i32,
+    /// Number of rows already uploaded into `gl_texture`. In-place sub-rect reuse is only allowed
+    /// for pure appends (rows at/after this frontier), never overwriting rows an in-flight frame may
+    /// still be sampling — overwriting the SDF atlas mid-frame can tear the per-glyph curve data.
+    gl_uploaded_height: usize,
+    /// Latest SurfaceTexture `getTransformMatrix` for this OES texture (Android only).
+    /// Written after each successful `updateTexImage` drain; Video applies it via
+    /// `oes_st_c0..c3` before `sample_video`. Identity when not OES / not drained.
+    #[cfg(target_os = "android")]
+    pub oes_st_matrix: [f32; 16],
 }
 
 impl Default for CxOsTexture {
     fn default() -> Self {
         Self {
             gl_texture: None,
+            rendered_top_left: false,
             gl_texture_owned: true,
             gl_renderbuffer: None,
+            gl_cap_width: 0,
+            gl_cap_height: 0,
+            gl_cap_internal_format: 0,
+            gl_uploaded_height: 0,
+            #[cfg(target_os = "android")]
+            oes_st_matrix: OES_ST_IDENTITY,
         }
     }
 }
@@ -2481,15 +2645,19 @@ impl CxTexture {
 
         unsafe {
             (gl.glBindTexture)(gl_sys::TEXTURE_2D, self.os.gl_texture.unwrap());
+            let wrap = match self.format.wrap() {
+                crate::texture::TextureWrap::Repeat => gl_sys::REPEAT as i32,
+                crate::texture::TextureWrap::ClampToEdge => gl_sys::CLAMP_TO_EDGE as i32,
+            };
             (gl.glTexParameteri)(
                 gl_sys::TEXTURE_2D,
                 gl_sys::TEXTURE_WRAP_S,
-                gl_sys::CLAMP_TO_EDGE as i32,
+                wrap,
             );
             (gl.glTexParameteri)(
                 gl_sys::TEXTURE_2D,
                 gl_sys::TEXTURE_WRAP_T,
-                gl_sys::CLAMP_TO_EDGE as i32,
+                wrap,
             );
 
             // Set texture parameters based on the format
@@ -2630,76 +2798,118 @@ impl CxTexture {
             // partial client-texture updates are unreliable on its GLES drivers.
             const DO_PARTIAL_TEXTURE_UPDATES: bool = cfg!(not(ohos_sim));
             let is_open_harmony = matches!(os_type, OsType::OpenHarmony(_));
-            let allow_partial_texture_updates = DO_PARTIAL_TEXTURE_UPDATES
+            // The append-only SLUG glyph atlas (`VecRGBAf32`). Unlike the bitmap atlases and images
+            // (sampled by normalized UV, so they must be exact-sized), this one is addressed by
+            // absolute texel index and only ever grows by appending rows, so on desktop Linux GL we
+            // keep spare height capacity and reuse the texture across growth — mirroring the D3D11
+            // `UpdateSubresource` path. `gl.glTexSubImage2D` updates the existing texture in place
+            // instead of recreating and re-uploading the whole (up to ~16 MB) atlas on every change,
+            // which was a per-change scroll hitch.
+            //
+            // This is gated to desktop Linux (X11/Wayland/direct): on Android/OHOS GLES the
+            // float-atlas `glTexSubImage2D` path is unreliable (see the note above about emoji
+            // rendering as black boxes), so those keep the conservative full `glTexImage2D` upload by
+            // excluding the atlas from partial updates entirely.
+            const ATLAS_INPLACE_UPDATES: bool =
+                cfg!(not(any(target_env = "ohos", target_os = "android")));
+            let is_append_atlas = matches!(self.format, TextureFormat::VecRGBAf32 { .. });            let allow_partial_texture_updates = DO_PARTIAL_TEXTURE_UPDATES
                 && !is_open_harmony
-                && !matches!(self.format, TextureFormat::VecRGBAf32 { .. });
+                && (!is_append_atlas || ATLAS_INPLACE_UPDATES);
             let unpack_alignment = gl_unpack_alignment(bytes_per_pixel);
 
             match updated {
-                TextureUpdated::Partial(rect) if allow_partial_texture_updates => {
-                    if needs_realloc {
+                TextureUpdated::Partial(rect)
+                    if allow_partial_texture_updates && is_append_atlas =>
+                {
+                    // ~3x height headroom with a floor, rounded up to a 128-row boundary, so a long
+                    // flick-scroll's worth of glyph-atlas growth reuses this storage instead of
+                    // recreating it (mirrors D3D11's `cap_height`). Rows `height..cap_height` stay
+                    // undefined — the glyph shader addresses by absolute texel index and never
+                    // samples them.
+                    let cap_height = {
+                        let want = (height * 3).max(512);
+                        ((want + 127) / 128) * 128
+                    };
+                    // Only a pure append (the dirty rect's top row is at/after the upload frontier)
+                    // is safe to write in place: overwriting rows an in-flight frame may still be
+                    // sampling can tear the per-glyph curve data and hang the GPU. `slug_atlas` only
+                    // ever reports growth as appended rows, so this holds; the check is defensive.
+                    let safe_append = rect.origin.y + 1 >= self.os.gl_uploaded_height;
+                    // (Re)allocate GL storage only when the texture is new, the width/format changed,
+                    // or the needed height exceeds capacity — NOT merely because the logical alloc
+                    // size grew (that fires on every height append).
+                    let need_storage = self.os.gl_cap_width != width
+                        || self.os.gl_cap_internal_format != internal_format as i32
+                        || self.os.gl_cap_height < height;
+                    if need_storage || !safe_append {
+                        // Allocate (orphaning any old storage) at `cap_height` and upload the full
+                        // logical region `0..height`; the dirty rect alone is insufficient after a
+                        // realloc since the rest of the texture is undefined. The full atlas data is
+                        // retained in `data`, so this is a complete, correct re-upload.
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, 0);
                         (gl.glTexImage2D)(
                             gl_sys::TEXTURE_2D,
                             0,
                             internal_format as i32,
                             width as i32,
-                            height as i32,
+                            cap_height as i32,
                             0,
                             format,
                             data_type,
                             0 as *const _,
                         );
-                    }
-
-                    (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, rect.origin.x as i32);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, rect.origin.y as i32);
-                    (gl.glTexSubImage2D)(
-                        gl_sys::TEXTURE_2D,
-                        0,
-                        rect.origin.x as i32,
-                        rect.origin.y as i32,
-                        rect.size.width as i32,
-                        rect.size.height as i32,
-                        format,
-                        data_type,
-                        data,
-                    );
-                }
-                // Note: this `Partial(_)` case will only match if `DO_PARTIAL_TEXTURE_UPDATES` is false.
-                TextureUpdated::Partial(_) | TextureUpdated::Full => {
-                    (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
-                    (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
-                    if is_open_harmony && is_bgra {
-                        // Maleoon GLES does not reliably accept client BGRA atlas uploads.
-                        // Preserve the logical channel order by converting BGRA bytes to RGBA.
-                        let pixels = std::slice::from_raw_parts(
-                            data as *const u32,
-                            width.saturating_mul(height),
-                        );
-                        let rgba_pixels = pixels
-                            .iter()
-                            .map(|pixel| {
-                                (pixel & 0xff00_ff00)
-                                    | ((pixel & 0x00ff_0000) >> 16)
-                                    | ((pixel & 0x0000_00ff) << 16)
-                            })
-                            .collect::<Vec<_>>();
-                        (gl.glTexImage2D)(
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
+                        (gl.glTexSubImage2D)(
                             gl_sys::TEXTURE_2D,
                             0,
-                            gl_sys::RGBA as i32,
+                            0,
+                            0,
                             width as i32,
                             height as i32,
-                            0,
-                            gl_sys::RGBA,
-                            gl_sys::UNSIGNED_BYTE,
-                            rgba_pixels.as_ptr() as *const _,
+                            format,
+                            data_type,
+                            data,
                         );
+                        self.os.gl_cap_width = width;
+                        self.os.gl_cap_height = cap_height;
+                        self.os.gl_cap_internal_format = internal_format as i32;
+                        self.os.gl_uploaded_height = height;
                     } else {
+                        // In-place sub-rect append into the existing (capacity-sufficient) storage —
+                        // the common case while scrolling brings new glyphs into the atlas.
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, rect.origin.x as i32);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, rect.origin.y as i32);
+                        (gl.glTexSubImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            rect.origin.x as i32,
+                            rect.origin.y as i32,
+                            rect.size.width as i32,
+                            rect.size.height as i32,
+                            format,
+                            data_type,
+                            data,
+                        );
+                        self.os.gl_uploaded_height =
+                            (rect.origin.y + rect.size.height).max(self.os.gl_uploaded_height);
+                    }
+                }
+                TextureUpdated::Partial(rect) if allow_partial_texture_updates => {
+                    if needs_realloc {
+                        // Fresh storage holds nothing: the dirty rect describes a change
+                        // relative to a GPU copy that no longer exists, so the whole image
+                        // goes up (the same law as the append-atlas branch above and
+                        // Metal's `vec_fresh`); uploading only the rect would leave every
+                        // other texel undefined for as long as the texture lives.
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, 0);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
                         (gl.glTexImage2D)(
                             gl_sys::TEXTURE_2D,
                             0,
@@ -2711,6 +2921,110 @@ impl CxTexture {
                             data_type,
                             data,
                         );
+                    } else {
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, rect.origin.x as i32);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, rect.origin.y as i32);
+                        (gl.glTexSubImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            rect.origin.x as i32,
+                            rect.origin.y as i32,
+                            rect.size.width as i32,
+                            rect.size.height as i32,
+                            format,
+                            data_type,
+                            data,
+                        );
+                    }
+                }
+                // A `Full` update (and any `Partial` when partial updates are disabled, e.g.
+                // ohos_sim) recreates the texture at its exact logical size.
+                TextureUpdated::Partial(_) | TextureUpdated::Full => {
+                    if is_append_atlas && allow_partial_texture_updates {
+                        // Keep the append-only atlas allocated with height headroom (and its
+                        // capacity tracking in sync) even when the triggering update is `Full`
+                        // (first upload / width change / reset), so the following appends reuse it.
+                        let cap_height = {
+                            let want = (height * 3).max(512);
+                            ((want + 127) / 128) * 128
+                        };
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, 0);
+                        (gl.glTexImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            internal_format as i32,
+                            width as i32,
+                            cap_height as i32,
+                            0,
+                            format,
+                            data_type,
+                            0 as *const _,
+                        );
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
+                        (gl.glTexSubImage2D)(
+                            gl_sys::TEXTURE_2D,
+                            0,
+                            0,
+                            0,
+                            width as i32,
+                            height as i32,
+                            format,
+                            data_type,
+                            data,
+                        );
+                        self.os.gl_cap_width = width;
+                        self.os.gl_cap_height = cap_height;
+                        self.os.gl_cap_internal_format = internal_format as i32;
+                        self.os.gl_uploaded_height = height;
+                    } else {
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ALIGNMENT, unpack_alignment);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_ROW_LENGTH, width as _);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_PIXELS, 0);
+                        (gl.glPixelStorei)(gl_sys::UNPACK_SKIP_ROWS, 0);
+                        if is_open_harmony && is_bgra {
+                            // Maleoon GLES does not reliably accept client BGRA atlas uploads.
+                            // Preserve the logical channel order by converting BGRA bytes to RGBA.
+                            let pixels = std::slice::from_raw_parts(
+                                data as *const u32,
+                                width.saturating_mul(height),
+                            );
+                            let rgba_pixels = pixels
+                                .iter()
+                                .map(|pixel| {
+                                    (pixel & 0xff00_ff00)
+                                        | ((pixel & 0x00ff_0000) >> 16)
+                                        | ((pixel & 0x0000_00ff) << 16)
+                                })
+                                .collect::<Vec<_>>();
+                            (gl.glTexImage2D)(
+                                gl_sys::TEXTURE_2D,
+                                0,
+                                gl_sys::RGBA as i32,
+                                width as i32,
+                                height as i32,
+                                0,
+                                gl_sys::RGBA,
+                                gl_sys::UNSIGNED_BYTE,
+                                rgba_pixels.as_ptr() as *const _,
+                            );
+                        } else {
+                            (gl.glTexImage2D)(
+                                gl_sys::TEXTURE_2D,
+                                0,
+                                internal_format as i32,
+                                width as i32,
+                                height as i32,
+                                0,
+                                format,
+                                data_type,
+                                data,
+                            );
+                        }
                     }
                 }
                 TextureUpdated::Empty => panic!("already asserted that updated is not empty"),
@@ -2750,7 +3064,26 @@ impl CxTexture {
                         gl_sys::TEXTURE_MAX_LEVEL,
                         max_level.unwrap_or(1000) as i32,
                     );
+                    // On GLES 3, glGenerateMipmap on the unsized BGRA internal format is
+                    // driver-dependent (modern Mesa allows it; stricter implementations
+                    // raise INVALID_OPERATION and generate nothing). A mipmap-incomplete
+                    // texture samples opaque black, so verify and fall back to plain
+                    // linear filtering if generation failed. Drain any earlier error
+                    // first so it isn't misattributed to glGenerateMipmap.
+                    while (gl.glGetError)() != gl_sys::NO_ERROR {}
                     (gl.glGenerateMipmap)(gl_sys::TEXTURE_2D);
+                    if (gl.glGetError)() != gl_sys::NO_ERROR {
+                        crate::warning!(
+                            "glGenerateMipmap failed for a BGRA image texture; \
+                             falling back to non-mipmapped filtering"
+                        );
+                        (gl.glTexParameteri)(
+                            gl_sys::TEXTURE_2D,
+                            gl_sys::TEXTURE_MIN_FILTER,
+                            gl_sys::LINEAR as i32,
+                        );
+                        (gl.glTexParameteri)(gl_sys::TEXTURE_2D, gl_sys::TEXTURE_MAX_LEVEL, 0);
+                    }
                 }
             }
 
@@ -2774,13 +3107,6 @@ impl CxTexture {
 
             #[cfg(target_os = "android")]
             unsafe {
-                let gpu_renderer = get_gl_string(gl, gl_sys::RENDERER);
-                if gpu_renderer.contains("Adreno") {
-                    crate::warning!("WARNING: This device is using {gpu_renderer} renderer.
-                    OpenGL external textures (GL_OES_EGL_image_external extension) are currently not working on makepad for most Adreno GPUs.
-                    This is likely due to a driver bug. External texture support is being disabled, which means you won't be able to use the Video widget on this device.");
-                }
-
                 (gl.glBindTexture)(gl_sys::TEXTURE_EXTERNAL_OES, self.os.gl_texture.unwrap());
 
                 (gl.glTexParameteri)(
@@ -2817,31 +3143,38 @@ impl CxTexture {
 
             #[cfg(not(target_os = "android"))]
             unsafe {
-                (gl.glBindTexture)(gl_sys::TEXTURE_2D, self.os.gl_texture.unwrap());
+                // Desktop GLES: VideoExternal may be DMA-Buf EGLImage (OES) or RGBA upload.
+                // Prefer EXTERNAL_OES so NV12 plane zero-copy works; RGBA upload paths
+                // should use non-VideoExternal formats or I420.
+                let target = match self.format {
+                    TextureFormat::VideoExternal => gl_sys::TEXTURE_EXTERNAL_OES,
+                    _ => gl_sys::TEXTURE_2D,
+                };
+                (gl.glBindTexture)(target, self.os.gl_texture.unwrap());
 
                 (gl.glTexParameteri)(
-                    gl_sys::TEXTURE_2D,
+                    target,
                     gl_sys::TEXTURE_WRAP_S,
                     gl_sys::CLAMP_TO_EDGE as i32,
                 );
                 (gl.glTexParameteri)(
-                    gl_sys::TEXTURE_2D,
+                    target,
                     gl_sys::TEXTURE_WRAP_T,
                     gl_sys::CLAMP_TO_EDGE as i32,
                 );
 
                 (gl.glTexParameteri)(
-                    gl_sys::TEXTURE_2D,
+                    target,
                     gl_sys::TEXTURE_MIN_FILTER,
                     gl_sys::LINEAR as i32,
                 );
                 (gl.glTexParameteri)(
-                    gl_sys::TEXTURE_2D,
+                    target,
                     gl_sys::TEXTURE_MAG_FILTER,
                     gl_sys::LINEAR as i32,
                 );
 
-                (gl.glBindTexture)(gl_sys::TEXTURE_2D, 0);
+                (gl.glBindTexture)(target, 0);
 
                 assert_eq!(
                     (gl.glGetError)(),
@@ -2876,15 +3209,18 @@ impl CxTexture {
             unsafe { (gl.glBindTexture)(texture_target, self.os.gl_texture.unwrap()) };
             match &alloc.pixel {
                 TexturePixel::BGRAu8 | TexturePixel::RGBAf16 | TexturePixel::RGBAf32 => unsafe {
+                    // LINEAR: render targets are sampled with sample/sample_as_bgra (Linear), e.g. the
+                    // Gaussian blur and CachedView. Since we no longer bind sampler objects, the texture
+                    // object must carry that filter (it was previously supplied by the sampler object).
                     (gl.glTexParameteri)(
                         texture_target,
                         gl_sys::TEXTURE_MIN_FILTER,
-                        gl_sys::NEAREST as i32,
+                        gl_sys::LINEAR as i32,
                     );
                     (gl.glTexParameteri)(
                         texture_target,
                         gl_sys::TEXTURE_MAG_FILTER,
-                        gl_sys::NEAREST as i32,
+                        gl_sys::LINEAR as i32,
                     );
                     (gl.glTexParameteri)(
                         texture_target,
@@ -2943,6 +3279,43 @@ impl CxTexture {
                             ptr::null(),
                         );
                     }
+                },
+                TexturePixel::Rf32 => unsafe {
+                    // Float data target (RenderRf32): NEAREST — float
+                    // filtering needs an extension and its consumers sample
+                    // with sample_nearest anyway. Requires
+                    // EXT_color_buffer_float on GLES3/WebGL2.
+                    (gl.glTexParameteri)(
+                        texture_target,
+                        gl_sys::TEXTURE_MIN_FILTER,
+                        gl_sys::NEAREST as i32,
+                    );
+                    (gl.glTexParameteri)(
+                        texture_target,
+                        gl_sys::TEXTURE_MAG_FILTER,
+                        gl_sys::NEAREST as i32,
+                    );
+                    (gl.glTexParameteri)(
+                        texture_target,
+                        gl_sys::TEXTURE_WRAP_S,
+                        gl_sys::CLAMP_TO_EDGE as i32,
+                    );
+                    (gl.glTexParameteri)(
+                        texture_target,
+                        gl_sys::TEXTURE_WRAP_T,
+                        gl_sys::CLAMP_TO_EDGE as i32,
+                    );
+                    (gl.glTexImage2D)(
+                        gl_sys::TEXTURE_2D,
+                        0,
+                        gl_sys::R32F as i32,
+                        width as i32,
+                        height as i32,
+                        0,
+                        gl_sys::RED,
+                        gl_sys::FLOAT,
+                        ptr::null(),
+                    );
                 },
                 _ => crate::error!(
                     "Unsupported texture pixel format for OpenGL render target allocation"

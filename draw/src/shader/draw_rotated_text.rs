@@ -17,16 +17,117 @@ script_mod! {
 
         rotated_pos: varying(vec2f)
 
+        // Camera-delta transform (best-effort label tracking while the
+        // map rotates/tilts between re-places): a full 2x2 matrix about
+        // the view pivot — tilt does NOT commute with rotation, so the
+        // exact delta S(t1)*R(d)*S(1/t0) is a general matrix. The async
+        // re-place trues up with identity.
+        cam_a: uniform(1.0)
+        cam_b: uniform(0.0)
+        cam_c: uniform(0.0)
+        cam_d: uniform(1.0)
+        cam_pivot: uniform(vec2(0.0, 0.0))
+        // Pan/zoom delta applied BEFORE the camera matrix: glyphs are
+        // emitted in CACHED placement space and ride these uniforms every
+        // frame, exactly like tile geometry rides map_offset — no CPU
+        // re-transform between frames, so labels can never trail the map.
+        cam_scale: uniform(1.0)
+        cam_shift: uniform(vec2(0.0, 0.0))
+        // The Inception fold, in LOCKSTEP with DrawMapVector's vertex
+        // branch (map view.rs) and SpaceWarp on the CPU (map overlay.rs) —
+        // labels are emitted UNWARPED (plain tilt projection) and fold
+        // here per frame, which is what keeps them glued to the tiles
+        // while the camera rotates instead of trailing a CPU re-place.
+        // space_warp: x = tween amount, y = fold start r0 (pre-tilt ground
+        // px), z = curl radius, w = sin(tilt). space_warp2: x = kappa
+        // (perspective 1/D), y = unused here (labels carry lift in screen
+        // px), z = bend cap angle, w = cos(tilt).
+        space_warp: uniform(vec4(0.0, 0.0, 0.0, 0.0))
+        space_warp2: uniform(vec4(0.0, 0.0, 0.0, 1.0))
+
+        // Fold one camera-delta'd GROUND position (lift already removed)
+        // and re-apply `lift` scaled by the local perspective factor —
+        // exactly how the CPU placement used to treat lifts (vertical
+        // screen shifts × w), so the at-rest picture is unchanged.
+        warp_ground: fn(ground: vec2, lift: float) -> vec2 {
+            let cos_t = max(self.space_warp2.w, 0.05)
+            let sin_t = self.space_warp.w
+            let wg = (self.cam_pivot.y - ground.y) / cos_t
+            var wf = wg
+            var wu = 0.0
+            let wa = wg - self.space_warp.y
+            if wa > 0.0 {
+                let wr = max(self.space_warp.z, 1.0)
+                let cap = self.space_warp2.z
+                let th = min(wa / wr, cap)
+                let sth = sin(th)
+                let cth = cos(th)
+                wf = self.space_warp.y + wr * sth
+                wu = wr * (1.0 - cth)
+                let we = wa - wr * cap
+                if we > 0.0 {
+                    wf = wf + we * cos_t
+                    wu = wu + we * sin_t
+                }
+            }
+            let bf = wg + (wf - wg) * self.space_warp.x
+            let bu = wu * self.space_warp.x
+            let zrel = bf * sin_t - bu * cos_t
+            let pw = 1.0 / max(1.0 + self.space_warp2.x * zrel, 0.12)
+            return vec2(
+                self.cam_pivot.x + (ground.x - self.cam_pivot.x) * pw,
+                self.cam_pivot.y - (bf * cos_t + bu * sin_t) * pw - lift * pw
+            )
+        }
+        // self.upright (instance from the Rust struct): 1.0 = screen-upright
+        // label (place names, pin/brand text) — its ANCHOR tracks the camera
+        // delta but its orientation must not; the re-place keeps such labels
+        // horizontal, so rotating them live would snap back on regen.
+
         vertex: fn() {
             let p = mix(self.rect_pos, self.rect_pos + self.rect_size, self.geom.pos)
             let origin = self.rotation_origin
             let scaled = (p - origin) * self.label_scale
             let cs = cos(self.rotation)
             let sn = sin(self.rotation)
-            let rotated = vec2(
+            var rotated = vec2(
                 scaled.x * cs - scaled.y * sn,
                 scaled.x * sn + scaled.y * cs
             ) + origin
+            if self.upright > 0.5 {
+                let anchor2 = origin * self.cam_scale + self.cam_shift
+                let anchor_rel = anchor2 + vec2(0.0, self.lift) - self.cam_pivot
+                let cam_ground = vec2(
+                    anchor_rel.x * self.cam_a + anchor_rel.y * self.cam_b,
+                    anchor_rel.x * self.cam_c + anchor_rel.y * self.cam_d
+                ) + self.cam_pivot
+                var cam_anchor = cam_ground - vec2(0.0, self.lift)
+                if self.space_warp.x > 0.0001 {
+                    // The anchor folds with the ground; the glyph offsets
+                    // stay rigid screen px (upright text never bends).
+                    cam_anchor = self.warp_ground(cam_ground, self.lift)
+                }
+                var offs = rotated - origin
+                if self.billboard < 0.5 {
+                    // Street-cap/city names scale with the gesture; text
+                    // inside zoom-constant pins keeps its pixel size.
+                    offs = offs * self.cam_scale
+                }
+                rotated = offs + cam_anchor
+            } else {
+                let q = rotated * self.cam_scale + self.cam_shift
+                let cam_rel = q + vec2(0.0, self.lift) - self.cam_pivot
+                let cam_ground = vec2(
+                    cam_rel.x * self.cam_a + cam_rel.y * self.cam_b,
+                    cam_rel.x * self.cam_c + cam_rel.y * self.cam_d
+                ) + self.cam_pivot
+                rotated = cam_ground - vec2(0.0, self.lift)
+                if self.space_warp.x > 0.0001 {
+                    // Per-vertex like the tiles: a street name crossing
+                    // the fold bends glyph by glyph with the road.
+                    rotated = self.warp_ground(cam_ground, self.lift)
+                }
+            }
 
             self.pos = self.geom.pos
             self.t = mix(self.t_min, self.t_max, self.geom.pos.xy)
@@ -84,6 +185,53 @@ pub struct DrawRotatedText {
     pub label_scale: f32,
     #[live(vec2(0.0, 0.0))]
     pub rotation_origin: Vec2f,
+    #[live(0.0)]
+    pub upright: f32,
+    /// Screen-px lift already baked into this label's placement (terrain
+    /// ground + marker stalk). The camera delta re-projects the GROUND
+    /// anchor and re-applies the lift, so lifted labels track rotation.
+    #[live(0.0)]
+    pub lift: f32,
+    /// 1.0 = pin-interior text: anchor tracks the pan/zoom delta but glyph
+    /// offsets and size stay constant screen px (like the pin mesh).
+    #[live(0.0)]
+    pub billboard: f32,
+}
+
+impl DrawRotatedText {
+    /// Camera-delta uniforms: rotate placed glyphs about `pivot` by the
+    /// given cos/sin and compress y by `tilt_ratio` — identity when the
+    /// placement is fresh.
+    pub fn set_camera_delta(&mut self, cx: &mut Cx, m: [f32; 4], pivot: Vec2f) {
+        self.draw_vars.set_uniform(cx, live_id!(cam_a), &[m[0]]);
+        self.draw_vars.set_uniform(cx, live_id!(cam_b), &[m[1]]);
+        self.draw_vars.set_uniform(cx, live_id!(cam_c), &[m[2]]);
+        self.draw_vars.set_uniform(cx, live_id!(cam_d), &[m[3]]);
+        self.draw_vars
+            .set_uniform(cx, live_id!(cam_pivot), &[pivot.x, pivot.y]);
+    }
+
+    /// Pan/zoom delta uniforms applied before the camera matrix: cached
+    /// glyphs render at `p * scale + shift` per frame, GPU-side.
+    pub fn set_pan_delta(&mut self, cx: &mut Cx, scale: f32, shift: Vec2f) {
+        self.draw_vars.set_uniform(cx, live_id!(cam_scale), &[scale]);
+        self.draw_vars
+            .set_uniform(cx, live_id!(cam_shift), &[shift.x, shift.y]);
+    }
+
+    /// The Inception-fold uniforms, stamped every frame with the SAME
+    /// values the tile shader gets (`warp` = amount/start/radius/sin_t,
+    /// `warp2` = kappa/unused/cap and `cos_t` packed in w). Labels are
+    /// emitted unwarped and fold in the vertex shader, so they track the
+    /// camera exactly like tiles instead of waiting for a CPU re-place.
+    pub fn set_space_warp(&mut self, cx: &mut Cx, warp: [f32; 4], warp2: [f32; 3], cos_t: f32) {
+        self.draw_vars.set_uniform(cx, live_id!(space_warp), &warp);
+        self.draw_vars.set_uniform(
+            cx,
+            live_id!(space_warp2),
+            &[warp2[0], warp2[1], warp2[2], cos_t],
+        );
+    }
 }
 
 /// A single glyph positioned along a path, ready to draw.
@@ -107,6 +255,25 @@ pub struct PathTextPlacement {
 }
 
 impl DrawRotatedText {
+    /// Open one shared instance batch so many draw_path_glyphs* calls append
+    /// to a single draw call instead of one begin/finish per glyph.
+    pub fn begin_glyph_batch(&mut self, cx: &mut Cx2d) {
+        if self.draw_super.many_instances.is_some() {
+            return;
+        }
+        self.draw_super.update_draw_vars(cx);
+        self.draw_super.many_instances =
+            cx.begin_many_aligned_instances(&self.draw_super.draw_vars);
+    }
+
+    pub fn end_glyph_batch(&mut self, cx: &mut Cx2d) {
+        if let Some(instances) = self.draw_super.many_instances.take() {
+            let new_area = cx.end_many_instances(instances);
+            let old_area = self.draw_super.draw_vars.area;
+            self.draw_super.draw_vars.area = cx.update_area_refs(old_area, new_area);
+        }
+    }
+
     /// Draw a single glyph at an arbitrary position with rotation.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_glyph_at(
@@ -133,17 +300,131 @@ impl DrawRotatedText {
 
     /// Draw a sequence of pre-placed glyphs from a buffer slice.
     pub fn draw_path_glyphs(&mut self, cx: &mut Cx2d, glyphs: &[PathGlyphInstance]) {
+        self.draw_path_glyphs_offset(cx, glyphs, Vec2f { x: 0.0, y: 0.0 });
+    }
+
+    /// Draw pre-placed glyphs shifted by a screen-space offset (used for
+    /// halo/outline underdraws).
+    pub fn draw_path_glyphs_offset(
+        &mut self,
+        cx: &mut Cx2d,
+        glyphs: &[PathGlyphInstance],
+        offset: Vec2f,
+    ) {
+        self.draw_path_glyphs_scaled(cx, glyphs, 1.0, offset);
+    }
+
+    /// Draw pre-placed glyphs through an affine screen transform
+    /// (p*scale + offset, glyph size scaled too) — lets a cached label
+    /// placement track the map during a zoom gesture.
+    pub fn draw_path_glyphs_scaled(
+        &mut self,
+        cx: &mut Cx2d,
+        glyphs: &[PathGlyphInstance],
+        scale: f32,
+        offset: Vec2f,
+    ) {
+        // Instances bake their font_scale into font_size_in_lpxs at placement
+        // time; the ambient font_scale (left over from whatever run was shaped
+        // last) must not rescale them here or glyphs shrink under their pen
+        // advances and labels render letter-spaced.
+        let saved_font_scale = self.draw_super.font_scale;
+        self.draw_super.font_scale = 1.0;
+        self.upright = 0.0;
+        self.billboard = 0.0;
         for glyph in glyphs {
             self.draw_glyph_at(
                 cx,
-                glyph.glyph_origin,
-                glyph.rotation_origin,
+                Point::new(
+                    glyph.glyph_origin.x * scale + offset.x,
+                    glyph.glyph_origin.y * scale + offset.y,
+                ),
+                Point::new(
+                    glyph.rotation_origin.x * scale + offset.x,
+                    glyph.rotation_origin.y * scale + offset.y,
+                ),
+                glyph.font_size_in_lpxs * scale,
+                glyph.rasterized,
+                glyph.angle,
+                1.0,
+            );
+        }
+        self.draw_super.font_scale = saved_font_scale;
+    }
+
+    /// Billboard variant for text INSIDE zoom-constant pins: the shared
+    /// anchor scales/translates with the map (tracking the pin's baked
+    /// anchor exactly), but glyph offsets and size stay in constant screen
+    /// px — so the text is rigid on the pin at every gesture zoom, like
+    /// the pin mesh itself.
+    pub fn draw_path_glyphs_billboard(
+        &mut self,
+        cx: &mut Cx2d,
+        glyphs: &[PathGlyphInstance],
+        scale: f32,
+        offset: Vec2f,
+        anchor: Vec2f,
+    ) {
+        let saved_font_scale = self.draw_super.font_scale;
+        self.draw_super.font_scale = 1.0;
+        self.upright = 1.0;
+        self.billboard = 1.0;
+        let scaled_anchor =
+            Point::new(anchor.x * scale + offset.x, anchor.y * scale + offset.y);
+        for glyph in glyphs {
+            self.draw_glyph_at(
+                cx,
+                Point::new(
+                    scaled_anchor.x + (glyph.glyph_origin.x - anchor.x),
+                    scaled_anchor.y + (glyph.glyph_origin.y - anchor.y),
+                ),
+                scaled_anchor,
                 glyph.font_size_in_lpxs,
                 glyph.rasterized,
                 glyph.angle,
                 1.0,
             );
         }
+        self.upright = 0.0;
+        self.billboard = 0.0;
+        self.draw_super.font_scale = saved_font_scale;
+    }
+
+    /// Draw a straightened (screen-upright) label: every glyph carries the
+    /// SAME anchor (the label's world-anchor in cached screen space) so the
+    /// camera-delta shader translates the string rigidly to where the next
+    /// re-place will put it, without rotating the glyphs. Straightened
+    /// glyphs have angle 0, so hijacking rotation_origin as the anchor is
+    /// free.
+    pub fn draw_path_glyphs_upright(
+        &mut self,
+        cx: &mut Cx2d,
+        glyphs: &[PathGlyphInstance],
+        scale: f32,
+        offset: Vec2f,
+        anchor: Vec2f,
+    ) {
+        let saved_font_scale = self.draw_super.font_scale;
+        self.draw_super.font_scale = 1.0;
+        self.upright = 1.0;
+        self.billboard = 0.0;
+        let anchor = Point::new(anchor.x * scale + offset.x, anchor.y * scale + offset.y);
+        for glyph in glyphs {
+            self.draw_glyph_at(
+                cx,
+                Point::new(
+                    glyph.glyph_origin.x * scale + offset.x,
+                    glyph.glyph_origin.y * scale + offset.y,
+                ),
+                anchor,
+                glyph.font_size_in_lpxs * scale,
+                glyph.rasterized,
+                glyph.angle,
+                1.0,
+            );
+        }
+        self.upright = 0.0;
+        self.draw_super.font_scale = saved_font_scale;
     }
 
     /// Place glyphs from a `PreparedTextRun` along a polyline path.

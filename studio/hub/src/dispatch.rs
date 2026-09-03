@@ -37,6 +37,22 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Wall-clock seconds since the UNIX epoch, for stamping synthesized input events.
+///
+/// Widgets arbitrate a press against recent scroll motion by comparing event
+/// timestamps — `PortalList`, for example, treats a press landing within 0.15s of a
+/// scroll as a gesture that stops that scroll rather than a click on a child. A zero
+/// timestamp therefore reads as "scrolling right now" and the press gets swallowed,
+/// so synthesized input has to carry a real time. This is the same base `makepad_test`
+/// stamps its scroll and drag events with, which keeps every event in a session on one
+/// clock.
+fn now_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireFormat {
     Binary,
@@ -1580,7 +1596,7 @@ impl HubCore {
                     key_code: KeyCode::ReturnKey,
                     is_repeat: false,
                     modifiers: KeyModifiers::default(),
-                    time: 0.0,
+                    time: now_seconds(),
                 };
                 if let Err(err) = self.send_app_msgs(
                     build_id,
@@ -1600,18 +1616,19 @@ impl HubCore {
                 }
             }
             ClientToHub::Click { build_id, x, y } => {
+                let time = now_seconds();
                 let mouse_down = RemoteMouseDown {
                     button_raw_bits: MouseButton::PRIMARY.bits(),
                     x: x as f64,
                     y: y as f64,
-                    time: 0.0,
+                    time,
                     modifiers: RemoteKeyModifiers::default(),
                 };
                 let mouse_up = RemoteMouseUp {
                     button_raw_bits: MouseButton::PRIMARY.bits(),
                     x: x as f64,
                     y: y as f64,
-                    time: 0.0,
+                    time,
                     modifiers: RemoteKeyModifiers::default(),
                 };
                 if let Err(err) = self.send_app_msgs(
@@ -2303,10 +2320,14 @@ impl HubCore {
         let Some(rest) = virtual_path.strip_prefix(&prefix) else {
             return false;
         };
-        rest == ".git"
-            || rest.starts_with(".git/")
-            || rest == ".makepad"
-            || rest.starts_with(".makepad/")
+        if rest == ".makepad" || rest.starts_with(".makepad/") {
+            return true;
+        }
+        // Same bulk-dir set the tree scan skips (virtual_fs
+        // heavy_nonproject_dir): events from bake/build churn under these
+        // must not reach the reload path at all.
+        let top = rest.split('/').next().unwrap_or(rest);
+        crate::virtual_fs::heavy_nonproject_dir(top)
     }
 
     fn should_ignore_virtual_path(&self, mount: &str, virtual_path: &str) -> bool {
@@ -3555,12 +3576,20 @@ impl HubCore {
             .vfs
             .resolve_mount(&mount)
             .map_err(|err| err.to_string())?;
-        let history = self
+        // Replay only the TAIL of the persisted history: a weekend of bake
+        // logs left a 208MB .term file and feeding it whole through the VT
+        // parser hung studio at boot for minutes. The parser resyncs after
+        // at most one mangled line at the cut point.
+        const TERM_HISTORY_REPLAY_CAP: usize = 2 * 1024 * 1024;
+        let mut history = self
             .vfs
             .resolve_path(path)
             .ok()
             .and_then(|disk_path| fs::read(disk_path).ok())
             .unwrap_or_default();
+        if history.len() > TERM_HISTORY_REPLAY_CAP {
+            history.drain(..history.len() - TERM_HISTORY_REPLAY_CAP);
+        }
         self.terminal_manager.open_terminal(
             path.to_string(),
             mount,
@@ -4770,6 +4799,10 @@ fn mount_from_virtual_path(path: &str) -> Option<&str> {
 }
 
 fn append_terminal_history_bytes(vfs: &VirtualFs, path: &str, data: &[u8]) -> Result<(), String> {
+    // Rotation: past 4MB the file rewrites to its last 2MB. Keeps boot
+    // replay and disk bounded no matter how chatty a build gets.
+    const TERM_HISTORY_FILE_CAP: u64 = 4 * 1024 * 1024;
+    const TERM_HISTORY_KEEP: usize = 2 * 1024 * 1024;
     let disk_path = vfs
         .resolve_path(path)
         .map_err(|err| format!("failed to resolve terminal path {}: {}", path, err))?;
@@ -4783,6 +4816,12 @@ fn append_terminal_history_bytes(vfs: &VirtualFs, path: &str, data: &[u8]) -> Re
         })?;
     }
     use std::io::Write;
+    if fs::metadata(&disk_path).map_or(false, |meta| meta.len() > TERM_HISTORY_FILE_CAP) {
+        if let Ok(mut existing) = fs::read(&disk_path) {
+            existing.drain(..existing.len().saturating_sub(TERM_HISTORY_KEEP));
+            let _ = fs::write(&disk_path, &existing);
+        }
+    }
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)

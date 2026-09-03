@@ -270,7 +270,13 @@ fn derive_script_impl_inner(
 
         tb.add("    }");
 
-        // Generate script_source if there's a #[source] field
+        // Generate script_source. A struct with its own #[source] field reports
+        // that object directly. Otherwise, if it derefs to a base class (e.g. a
+        // custom widget wrapping `#[deref] view: View`), forward to the base's
+        // source so that `script_apply_eval!` on the custom widget can resolve
+        // `__script_source__` (and thus the proto scope, type names, etc.) just
+        // like it would on the bare base. Without this a custom widget's source
+        // falls back to ZERO and every eval against it fails to resolve names.
         let source_field = fields
             .iter()
             .find(|field| field.attrs.iter().any(|a| a.name == "source"));
@@ -278,6 +284,12 @@ fn derive_script_impl_inner(
             tb.add("    fn script_source(&self) -> ScriptObject {self.")
                 .ident(&source_field.name)
                 .add(".as_object()");
+            tb.add("    }");
+        } else if let Some(deref_field) = deref_field {
+            tb.add("    fn script_source(&self) -> ScriptObject {")
+                .add("ScriptApply::script_source(&self.")
+                .ident(&deref_field.name)
+                .add(")");
             tb.add("    }");
         }
 
@@ -324,7 +336,23 @@ fn derive_script_impl_inner(
                         tb.add("Default::default()");
                     }
                 } else {
-                    tb.add("(").stream(attr.args.clone()).add(").into()");
+                    // for primitive numeric fields, cast instead of .into() -
+                    // unsuffixed literals like #[live(1.0)] on an f32 field
+                    // otherwise hit the deprecated f64->f32 inference fallback
+                    let ty = field.ty.to_string().replace(' ', "");
+                    if matches!(
+                        ty.as_str(),
+                        "f32" | "f64"
+                            | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    ) {
+                        tb.add("(")
+                            .stream(attr.args.clone())
+                            .add(") as ")
+                            .stream(Some(field.ty.clone()));
+                    } else {
+                        tb.add("(").stream(attr.args.clone()).add(").into()");
+                    }
                 }
             } else {
                 tb.add("Default::default()");

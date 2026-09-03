@@ -8,8 +8,10 @@ use crate::{
     },
     label::*,
     makepad_derive_widget::*,
+    makepad_draw::shader::draw_sploded_hairline::DrawSplodedHairline,
     makepad_draw::*,
     nav_control::NavControl,
+    screen_cap::ScreenCap,
     view::*,
     widget::*,
 };
@@ -24,6 +26,8 @@ script_mod! {
     use mod.widgets.KeyboardView
     use mod.widgets.WindowMenu
     use mod.widgets.NavControl
+    use mod.widgets.ScreenCap
+    use mod.widgets.Tweaker
     use mod.widgets.VoiceWave
     use mod.widgets.MenuItem
     use mod.draw.KeyCode
@@ -69,26 +73,24 @@ script_mod! {
     set_type_default() do #(DrawGaussUpsample::script_shader(vm)){
         ..mod.draw.DrawQuad
         source_texture: texture_2d(float)
-        detail_texture: texture_2d(float)
-        detail_mix: uniform(0.82)
 
         sample_source: fn(uv: vec2) -> vec4 {
             return self.source_texture.sample_as_bgra(clamp(uv, vec2(0.0, 0.0), vec2(1.0, 1.0)))
         }
 
-        sample_detail: fn(uv: vec2) -> vec4 {
-            return self.detail_texture.sample_as_bgra(clamp(uv, vec2(0.0, 0.0), vec2(1.0, 1.0)))
-        }
-
         pixel: fn() {
+            // Tent offsets are HALF a source texel (one target texel at 2x upsample). The
+            // exposed pyramid levels must keep a ratio-2 sigma ladder for the glass/tilt
+            // log2(radius) mapping to stay smooth; full-texel offsets widen each re-home
+            // stage enough to inflate deep levels ~35%, opening a visible blur jump at the
+            // raw->re-homed level boundary.
             let size = self.source_texture.size()
             let texel = vec2(
-                1.0 / max(size.x, 1.0),
-                1.0 / max(size.y, 1.0)
+                0.5 / max(size.x, 1.0),
+                0.5 / max(size.y, 1.0)
             )
             let uv = self.pos
-            let smooth =
-                self.sample_source(uv) * 0.25
+            return self.sample_source(uv) * 0.25
                 + (
                     self.sample_source(uv + texel * vec2(1.0, 0.0))
                     + self.sample_source(uv + texel * vec2(-1.0, 0.0))
@@ -101,7 +103,6 @@ script_mod! {
                     + self.sample_source(uv + texel * vec2(1.0, -1.0))
                     + self.sample_source(uv + texel * vec2(-1.0, -1.0))
                 ) * 0.0625
-            return smooth.mix(self.sample_detail(uv), clamp(self.detail_mix, 0.0, 1.0))
         }
     }
 
@@ -116,6 +117,18 @@ script_mod! {
         }
     }
 
+    set_type_default() do #(DrawSsaaResolve::script_shader(vm)){
+        ..mod.draw.DrawQuad
+        scene_texture: texture_2d(float)
+        source_y_flip: uniform(0.0)
+
+        // Downscale-resolve into the window: one bilinear tap = a 2x2 box average at supersample 2.
+        pixel: fn() {
+            let uv = vec2(self.pos.x, mix(self.pos.y, 1.0 - self.pos.y, self.source_y_flip))
+            return self.scene_texture.sample_as_bgra(clamp(uv, vec2(0.0, 0.0), vec2(1.0, 1.0)))
+        }
+    }
+
     mod.widgets.WindowBase = #(Window::register_widget(vm))
     mod.widgets.Window = set_type_default() do mod.widgets.WindowBase{
         demo: false
@@ -123,6 +136,10 @@ script_mod! {
         pass +: { clear_color: theme.color_bg_app }
         flow: Down
         nav_control: NavControl {}
+        // SHIFT+F12 records this window to local/screencap/*.mp4, picture and
+        // sound (widgets/src/screen_cap.rs). Hardcoded like the caption bar:
+        // inert and free until the key is pressed.
+        screen_cap: ScreenCap {}
         caption_bar := SolidView {
             visible: false
 
@@ -238,6 +255,9 @@ script_mod! {
             width: Fill height: Fill
             keyboard_min_shift: 30
         }
+        // The design-feedback overlay (widgets/src/tweaker.rs): hardcoded
+        // like the caption bar, inert unless --remote, zero cost while off.
+        tweaker := Tweaker {}
 
         cursor: MouseCursor.Default
         mouse_cursor_size: vec2(20 20)
@@ -297,6 +317,11 @@ pub struct Window {
     //#[live] performance_view: PerformanceView,
     #[live]
     nav_control: NavControl,
+    /// Shift+F12 screen recorder. Hardcoded here so every app can record
+    /// itself; Window owns it so the capture sink can be bound to THIS
+    /// window rather than whichever one presents first.
+    #[live]
+    screen_cap: ScreenCap,
     #[live]
     window: ScriptWindowHandle,
     #[live]
@@ -307,12 +332,24 @@ pub struct Window {
     draw_gauss_upsample: DrawGaussUpsample,
     #[live]
     draw_gauss_scene: DrawGaussScene,
+    #[live]
+    draw_ssaa_resolve: DrawSsaaResolve,
     #[rust]
     use_gauss_capture: bool,
+    #[rust]
+    use_ssaa: bool,
+    /// The exploded z-layer view is routing this window's content through its
+    /// own body pass this frame.
+    #[rust]
+    use_sploded: bool,
     #[rust]
     last_known_area: Area,
     #[rust(GaussStack::new(vm.cx_mut()))]
     gauss_stack: GaussStack,
+    #[rust(SsaaStack::new(vm.cx_mut()))]
+    ssaa_stack: SsaaStack,
+    #[rust(SplodedStack::new(vm.cx_mut()))]
+    sploded_stack: SplodedStack,
     #[new]
     overlay: Overlay,
     #[new]
@@ -337,6 +374,24 @@ pub struct Window {
     /// Used to only emit a platform op when the resolved value actually changes.
     #[rust]
     system_bar_dark_icons: Option<bool>,
+    /// Cached `(caption_bar visible, caption rect, buttons rect)` for `WindowDragQuery`. That event
+    /// fires once per `WM_NCHITTEST` — i.e. on every mouse move on Windows — and resolving the
+    /// views + their areas each time runs widget-tree lookups, a real source of scroll jitter when
+    /// the mouse is moved during a fling. These only change on relayout, so we recompute lazily and
+    /// invalidate on `WindowGeomChange`.
+    #[rust]
+    drag_query_cache: Option<(bool, Rect, Rect)>,
+    /// The caption-layout inputs (show_caption_bar, height override, system caption height) that
+    /// `drag_query_cache` was last computed against. When they change without a platform
+    /// `WindowGeomChange` (e.g. a live/DSL reload toggling the caption), we drop the cache in
+    /// `ensure_initialized`.
+    #[rust]
+    caption_query_sig: Option<(bool, Option<f64>, Option<f64>)>,
+    /// The resolved title last pushed to the caption label. `sync_caption_title` runs on
+    /// every event via `ensure_initialized`, so it uses this to skip the widget-tree label
+    /// lookup and `set_text` when the title is unchanged.
+    #[rust]
+    last_synced_title: Option<String>,
     #[deref]
     view: View,
 
@@ -363,6 +418,11 @@ pub enum WindowAction {
 
 const GAUSS_STACK_LEVELS: usize = GAUSS_VIEW_LEVELS;
 const GAUSS_SMOOTH_LEVEL_START: usize = 3;
+/// Deep mips are re-homed (tent-upsampled back) to this level's resolution before the glass
+/// samples them. Without this, blur level 5/6 samples a 1/64-res texture stretched over the
+/// window — the texel lattice and clamp-to-edge bands are clearly visible. With the floor at
+/// 1/8 res, no on-screen sample ever comes from a texture coarser than 8 device px per texel.
+const GAUSS_FLOOR_LEVEL: usize = 2;
 
 #[derive(Script, ScriptHook)]
 #[repr(C)]
@@ -385,13 +445,45 @@ pub struct DrawGaussScene {
     draw_super: DrawQuad,
 }
 
+/// Resolve (downscale) shader for full-window supersampling: samples the supersized scene
+/// texture into the window framebuffer. See `DrawSsaaResolve` shader in the Window script.
+#[derive(Script, ScriptHook)]
+#[repr(C)]
+pub struct DrawSsaaResolve {
+    #[deref]
+    draw_super: DrawQuad,
+}
+
+/// Full-window supersampling (SSAA) factor: renders the whole UI at NxN device pixels and
+/// downscales it — clean AA but costly, so it's off by default (the analytic AA covers most of
+/// it for free). Opt in with `MAKEPAD_SUPERSAMPLE` = 2 (clamped <=4).
+fn supersample_factor() -> f64 {
+    // Read the env var once and cache it: begin()/end() query this every frame per window, and
+    // std::env::var allocates a String each call. The factor can't change over a process's life.
+    static FACTOR: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *FACTOR.get_or_init(|| {
+        std::env::var("MAKEPAD_SUPERSAMPLE")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(1.0)
+            .clamp(1.0, 4.0)
+    })
+}
+
+struct GaussSmoothStage {
+    pass: DrawPass,
+    draw_list: DrawList2d,
+    texture: Texture,
+}
+
 struct GaussStackLevel {
     pass: DrawPass,
     draw_list: DrawList2d,
     texture: Texture,
-    smooth_pass: DrawPass,
-    smooth_draw_list: DrawList2d,
-    smooth_texture: Texture,
+    // One tent-upsample per resolution doubling from this level's own size back up to the
+    // floor size; the last stage's texture is what the snapshot exposes. Empty for levels
+    // at or above the floor resolution.
+    smooth_stages: Vec<GaussSmoothStage>,
 }
 
 struct GaussStack {
@@ -400,6 +492,11 @@ struct GaussStack {
     scene_texture: Texture,
     _scene_depth_texture: Texture,
     levels: Vec<GaussStackLevel>,
+}
+
+fn gauss_fast() -> bool {
+    thread_local! { static ON: bool = std::env::var_os("MAKEPAD_GAUSS_FAST").is_some(); }
+    ON.with(|v| *v)
 }
 
 fn gauss_render_texture_y_flip_for_os(os_type: &OsType) -> f32 {
@@ -427,10 +524,12 @@ impl GaussStack {
             DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
         );
         scene_pass.set_depth_texture(cx, &scene_depth_texture, DrawPassClearDepth::ClearWith(1.0));
+        scene_pass.set_live_with_parent(cx, true);
 
         let mut levels = Vec::with_capacity(GAUSS_STACK_LEVELS);
         for index in 0..GAUSS_STACK_LEVELS {
             let pass = DrawPass::new_with_name(cx, &format!("gauss_mip_{index}"));
+            pass.set_live_with_parent(cx, true);
             let draw_list = DrawList2d::new(cx);
             let texture = Self::new_render_texture(cx);
             pass.set_color_texture(
@@ -438,21 +537,34 @@ impl GaussStack {
                 &texture,
                 DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
             );
-            let smooth_pass = DrawPass::new_with_name(cx, &format!("gauss_smooth_mip_{index}"));
-            let smooth_draw_list = DrawList2d::new(cx);
-            let smooth_texture = Self::new_render_texture(cx);
-            smooth_pass.set_color_texture(
-                cx,
-                &smooth_texture,
-                DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
-            );
+            let stage_count = if index >= GAUSS_SMOOTH_LEVEL_START {
+                index - GAUSS_FLOOR_LEVEL
+            } else {
+                0
+            };
+            let mut smooth_stages = Vec::with_capacity(stage_count);
+            for stage in 0..stage_count {
+                let smooth_pass =
+                    DrawPass::new_with_name(cx, &format!("gauss_smooth_mip_{index}_{stage}"));
+                smooth_pass.set_live_with_parent(cx, true);
+                let smooth_draw_list = DrawList2d::new(cx);
+                let smooth_texture = Self::new_render_texture(cx);
+                smooth_pass.set_color_texture(
+                    cx,
+                    &smooth_texture,
+                    DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
+                );
+                smooth_stages.push(GaussSmoothStage {
+                    pass: smooth_pass,
+                    draw_list: smooth_draw_list,
+                    texture: smooth_texture,
+                });
+            }
             levels.push(GaussStackLevel {
                 pass,
                 draw_list,
                 texture,
-                smooth_pass,
-                smooth_draw_list,
-                smooth_texture,
+                smooth_stages,
             });
         }
 
@@ -495,10 +607,9 @@ impl GaussStack {
             mip_textures: self
                 .levels
                 .iter()
-                .enumerate()
-                .map(|(index, level)| {
-                    if index >= GAUSS_SMOOTH_LEVEL_START {
-                        level.smooth_texture.clone()
+                .map(|level| {
+                    if let Some(stage) = level.smooth_stages.last() {
+                        stage.texture.clone()
                     } else {
                         level.texture.clone()
                     }
@@ -529,6 +640,11 @@ impl GaussStack {
         let mut source_texture = self.scene_texture.clone();
 
         for (index, level) in self.levels.iter_mut().enumerate() {
+            // MAKEPAD_GAUSS_FAST=1: probe rig — stop the chain early to
+            // measure how much of a frame the pass COUNT itself costs.
+            if gauss_fast() && index > 3 {
+                break;
+            }
             let level_size = Self::level_size(root_size, dpi, index);
 
             level.pass.set_size(cx, level_size);
@@ -554,51 +670,46 @@ impl GaussStack {
         }
     }
 
+    // Re-home each deep mip at the floor resolution: starting from the level's own raw mip,
+    // tent-upsample one resolution doubling at a time until the floor size is reached. The
+    // progressive doubling matters — a single stretch from 1/64 straight to 1/8 would keep the
+    // source's texel lattice; each doubling convolves another tent on top and gaussianizes it.
     fn draw_high_blur_chain(
         &mut self,
         cx: &mut Cx2d,
         upsample: &mut DrawGaussUpsample,
         root_size: Vec2d,
     ) {
-        if self.levels.is_empty() || GAUSS_SMOOTH_LEVEL_START >= self.levels.len() {
+        if gauss_fast() {
             return;
         }
-
         let dpi = cx.current_dpi_factor();
-        let mut source_texture = self.levels[self.levels.len() - 1].texture.clone();
-
-        for index in (GAUSS_SMOOTH_LEVEL_START..self.levels.len()).rev() {
-            let level_size = Self::level_size(root_size, dpi, index);
+        for index in GAUSS_SMOOTH_LEVEL_START..self.levels.len() {
             let level = &mut self.levels[index];
-            level.smooth_pass.set_size(cx, level_size);
-            cx.make_child_pass(&level.smooth_pass);
-            cx.begin_pass(&level.smooth_pass, Some(dpi));
-            level.smooth_draw_list.begin_always(cx);
+            let mut source_texture = level.texture.clone();
+            for (stage_index, stage) in level.smooth_stages.iter_mut().enumerate() {
+                let stage_size = Self::level_size(root_size, dpi, index - 1 - stage_index);
+                stage.pass.set_size(cx, stage_size);
+                cx.make_child_pass(&stage.pass);
+                cx.begin_pass(&stage.pass, Some(dpi));
+                stage.draw_list.begin_always(cx);
 
-            let pass_size = cx.current_pass_size();
-            cx.begin_root_turtle(pass_size, Layout::flow_overlay());
-            upsample.draw_vars.set_texture(0, &source_texture);
-            upsample.draw_vars.set_texture(1, &level.texture);
-            let detail_mix = if index == GAUSS_SMOOTH_LEVEL_START {
-                0.90
-            } else {
-                0.78
-            };
-            upsample
-                .draw_vars
-                .set_uniform(cx, live_id!(detail_mix), &[detail_mix]);
-            upsample.draw_abs(
-                cx,
-                Rect {
-                    pos: dvec2(0.0, 0.0),
-                    size: pass_size,
-                },
-            );
-            cx.end_pass_sized_turtle();
+                let pass_size = cx.current_pass_size();
+                cx.begin_root_turtle(pass_size, Layout::flow_overlay());
+                upsample.draw_vars.set_texture(0, &source_texture);
+                upsample.draw_abs(
+                    cx,
+                    Rect {
+                        pos: dvec2(0.0, 0.0),
+                        size: pass_size,
+                    },
+                );
+                cx.end_pass_sized_turtle();
 
-            level.smooth_draw_list.end(cx);
-            cx.end_pass(&level.smooth_pass);
-            source_texture = level.smooth_texture.clone();
+                stage.draw_list.end(cx);
+                cx.end_pass(&stage.pass);
+                source_texture = stage.texture.clone();
+            }
         }
     }
 
@@ -618,8 +729,247 @@ impl GaussStack {
     }
 }
 
+/// Body target for the exploded z-layer view.
+///
+/// The explode is a camera on a PASS, so which pass it goes on decides what
+/// tilts. Putting it on the window pass tilts everything — including the
+/// tweaker's panel, which then cannot be read or clicked. So while the mode is
+/// up the window's own content renders into this child pass, that pass carries
+/// the explode camera, and the resulting texture is composited back into the
+/// window pass by a flat quad. Overlays bound to the window pass — the panel,
+/// its popups, tooltips — draw over that composite completely untouched.
+///
+/// The pass and its textures are allocated once with the window (recycling a
+/// `DrawPass` at runtime leaks its render target on Metal), but a render target
+/// is only ever allocated on the first pass draw, so an app that never opens
+/// the mode pays no GPU memory for this.
+struct SplodedStack {
+    scene_pass: DrawPass,
+    scene_draw_list: DrawList2d,
+    scene_texture: Texture,
+    _scene_depth_texture: Texture,
+    /// The tweaker's hover / pinned outlines, drawn INSIDE the exploded pass
+    /// on their widgets' own planes. Its own list so a hover change redraws
+    /// the marks alone, not the app.
+    mark_draw_list: DrawList2d,
+    mark_outline: Option<Box<DrawSplodedHairline>>,
+}
+
+impl SplodedStack {
+    fn new(cx: &mut Cx) -> Self {
+        let scene_pass = DrawPass::new_with_name(cx, "sploded_body");
+        let scene_draw_list = DrawList2d::new(cx);
+        let scene_texture = Texture::new_with_format(
+            cx,
+            TextureFormat::RenderBGRAu8 {
+                size: TextureSize::Auto,
+                initial: true,
+            },
+        );
+        let scene_depth_texture = Texture::new_with_format(
+            cx,
+            TextureFormat::DepthD32 {
+                size: TextureSize::Auto,
+                initial: true,
+            },
+        );
+        scene_pass.set_color_texture(
+            cx,
+            &scene_texture,
+            DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
+        );
+        scene_pass.set_depth_texture(cx, &scene_depth_texture, DrawPassClearDepth::ClearWith(1.0));
+        scene_pass.set_live_with_parent(cx, true);
+        Self {
+            scene_pass,
+            scene_draw_list,
+            scene_texture,
+            _scene_depth_texture: scene_depth_texture,
+            mark_draw_list: DrawList2d::new(cx),
+            mark_outline: None,
+        }
+    }
+
+    /// The tweaker's marks, last in the body pass so they paint over the
+    /// app on their planes. Each mark's draw call is created with
+    /// `nesting_depth` set to the mark's level — that is the only thing that
+    /// decides which plane a call renders on while the mode is up.
+    fn draw_marks(&mut self, cx: &mut Cx2d) {
+        cx.sploded_set_mark_list(self.mark_draw_list.id());
+        // `begin_always`, like the scene list: a walk here would register a
+        // deferred Fill on the pass root turtle moments before that turtle
+        // ends, and the window's own deferred walks then resolve against the
+        // wrong turtle (an index-out-of-bounds in `resolve_fill`, contained
+        // at the display-link boundary — which reads as the app hanging).
+        self.mark_draw_list.begin_always(cx);
+        let (hover, pinned) = cx.sploded_marks();
+        if hover.is_some() || pinned.is_some() {
+            if self.mark_outline.is_none() {
+                let outline =
+                    cx.with_vm(|vm| DrawSplodedHairline::script_new_with_default(vm));
+                self.mark_outline = Some(Box::new(outline));
+            }
+            let mut outline = self.mark_outline.take().unwrap();
+            let saved_depth = cx.nesting_depth;
+            if let Some(mark) = pinned {
+                cx.nesting_depth = mark.level as usize;
+                outline.draw_mark(cx, mark.rect, mark.level, 2.0, 2.5);
+            }
+            if let Some(mark) = hover {
+                if Some(mark) != pinned {
+                    cx.nesting_depth = mark.level as usize;
+                    outline.draw_mark(cx, mark.rect, mark.level, 1.0, 1.5);
+                }
+            }
+            cx.nesting_depth = saved_depth;
+            self.mark_outline = Some(outline);
+        }
+        self.mark_draw_list.end(cx);
+    }
+
+    fn begin_scene(&mut self, cx: &mut Cx2d) {
+        let dpi = cx.current_dpi_factor();
+        let size = cx.current_pass_size();
+        self.scene_pass.set_size(cx, size);
+        cx.make_child_pass(&self.scene_pass);
+        cx.begin_pass(&self.scene_pass, Some(dpi));
+        // The explode camera goes on THIS pass and nowhere else. Setting it
+        // here — before any content is emitted — also means the CPU-side slug
+        // text matrix, which bakes `camera_view` at draw time, is correct on
+        // the very first exploded frame instead of one frame late.
+        let pass_id = self.scene_pass.draw_pass_id();
+        let params = cx.sploded_params(size);
+        cx.passes[pass_id].sploded = params;
+        cx.passes[pass_id].set_ortho_matrix(dvec2(0.0, 0.0), size);
+        self.scene_draw_list.begin_always(cx);
+        let pass_size = cx.current_pass_size();
+        cx.begin_root_turtle(pass_size, Layout::flow_overlay());
+        // Only the body explodes: scope frames are emitted into lists bound
+        // to this pass, nowhere else (the panel stays flat and frameless).
+        cx.sploded_scene = Some(pass_id);
+    }
+
+    fn end_scene(&mut self, cx: &mut Cx2d) {
+        cx.sploded_scene = None;
+        self.draw_marks(cx);
+        cx.end_pass_sized_turtle();
+        self.scene_draw_list.end(cx);
+        cx.end_pass(&self.scene_pass);
+    }
+
+    /// Composite the exploded body back into the window pass, flat and 1:1.
+    fn draw_resolve(&mut self, cx: &mut Cx2d, resolve: &mut DrawSsaaResolve, root_size: Vec2d) {
+        // Same orientation as the gauss compositor, NOT the SSAA one: this
+        // pass renders at the window's own dpi, so its texture comes back
+        // top-down (grab-verified — the inverted flag renders the UI mirrored).
+        let source_y_flip = gauss_render_texture_y_flip_for_os(cx.os_type());
+        resolve
+            .draw_vars
+            .set_uniform(cx, live_id!(source_y_flip), &[source_y_flip]);
+        resolve.draw_vars.set_texture(0, &self.scene_texture);
+        resolve.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: root_size,
+            },
+        );
+    }
+}
+
+/// Full-window supersampling target: render the UI into a `supersample`x offscreen pass, then a resolve quad downscales it.
+struct SsaaStack {
+    scene_pass: DrawPass,
+    scene_draw_list: DrawList2d,
+    scene_texture: Texture,
+    _scene_depth_texture: Texture,
+}
+
+impl SsaaStack {
+    fn new(cx: &mut Cx) -> Self {
+        let scene_pass = DrawPass::new_with_name(cx, "ssaa_scene");
+        let scene_draw_list = DrawList2d::new(cx);
+        let scene_texture = Texture::new_with_format(
+            cx,
+            TextureFormat::RenderBGRAu8 {
+                size: TextureSize::Auto,
+                initial: true,
+            },
+        );
+        let scene_depth_texture = Texture::new_with_format(
+            cx,
+            TextureFormat::DepthD32 {
+                size: TextureSize::Auto,
+                initial: true,
+            },
+        );
+        scene_pass.set_color_texture(
+            cx,
+            &scene_texture,
+            DrawPassClearColor::ClearWith(vec4(0.0, 0.0, 0.0, 0.0)),
+        );
+        scene_pass.set_depth_texture(cx, &scene_depth_texture, DrawPassClearDepth::ClearWith(1.0));
+        scene_pass.set_live_with_parent(cx, true);
+        Self {
+            scene_pass,
+            scene_draw_list,
+            scene_texture,
+            _scene_depth_texture: scene_depth_texture,
+        }
+    }
+
+    /// Begin rendering the whole UI into the supersized scene pass. The dpi override
+    /// (dpi * supersample) inflates only the render-target pixel density + viewport; the pass
+    /// rect (logical layout size) is copied from the parent window pass, so layout/hit-testing
+    /// are unchanged — only rasterization happens at higher resolution.
+    fn begin_scene(&mut self, cx: &mut Cx2d, supersample: f64) {
+        let dpi = cx.current_dpi_factor();
+        // Logical size of the window pass. Set it explicitly on the scene pass (like the gauss
+        // mip passes do): begin_pass(Some(dpi)) does NOT auto-inherit the parent rect, so without
+        // set_size get_pass_rect returns None and the GL backend panics. With the dpi override =
+        // dpi*supersample, the same logical size rasterizes into a supersample-x device texture.
+        let size = cx.current_pass_size();
+        self.scene_pass.set_size(cx, size);
+        cx.make_child_pass(&self.scene_pass);
+        cx.begin_pass(&self.scene_pass, Some(dpi * supersample));
+        self.scene_draw_list.begin_always(cx);
+        let pass_size = cx.current_pass_size();
+        cx.begin_root_turtle(pass_size, Layout::flow_overlay());
+    }
+
+    fn end_scene(&mut self, cx: &mut Cx2d) {
+        cx.end_pass_sized_turtle();
+        self.scene_draw_list.end(cx);
+        cx.end_pass(&self.scene_pass);
+    }
+
+    /// Draw the single fullscreen resolve quad into the (now-active) window pass, sampling the
+    /// supersized scene texture with LINEAR (== a 2x2 box for supersample==2).
+    fn draw_resolve(&mut self, cx: &mut Cx2d, resolve: &mut DrawSsaaResolve, root_size: Vec2d) {
+        // Scene texture is bottom-up — flip opposite to the gauss compositor or the UI shows upside-down.
+        let source_y_flip = 1.0 - gauss_render_texture_y_flip_for_os(cx.os_type());
+        resolve
+            .draw_vars
+            .set_uniform(cx, live_id!(source_y_flip), &[source_y_flip]);
+        resolve.draw_vars.set_texture(0, &self.scene_texture);
+        resolve.draw_abs(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: root_size,
+            },
+        );
+    }
+}
+
 impl Window {
     fn sync_caption_bar_state(&mut self, cx: &mut Cx) {
+        // Hosted inside studio: the studio chrome owns the window, never
+        // show our own caption bar (a DSL hot-reload re-runs this sync).
+        if cx.in_makepad_studio() {
+            self.view(cx, ids!(caption_bar)).set_visible(cx, false);
+            return;
+        }
         match cx.os_type() {
             OsType::Windows => {
                 self.view(cx, ids!(caption_bar))
@@ -690,23 +1040,42 @@ impl Window {
 
         let caption_label = self.view(cx, ids!(caption_label));
         if let Some(mut inner) = caption_label.borrow_mut() {
-            inner.layout.padding.left = padding_left;
+            // Redraw when the padding actually changes; nothing else re-lays-out
+            // the caption label now that the title sync skips unchanged titles.
+            if (inner.layout.padding.left - padding_left).abs() > 0.1 {
+                inner.layout.padding.left = padding_left;
+                inner.redraw(cx);
+            }
         }
         drop(caption_label);
     }
 
     fn sync_caption_title(&mut self, cx: &mut Cx) {
         let title = if self.window.title.is_empty() {
-            cx.windows[self.window.handle.window_id()]
-                .create_title
-                .clone()
+            cx.windows[self.window.handle.window_id()].create_title.clone()
         } else {
             self.window.title.clone()
         };
-        if !title.is_empty() {
-            self.label(cx, ids!(caption_label.label))
-                .set_text(cx, &title);
+        // Under `--remote` the title carries a `[remote]` tag, so a human who
+        // finds this window lingering can tell it belongs to an agent. Apps that
+        // draw their own caption bar must show it too, not just the OS title bar.
+        // No-op (and idempotent) when the remote server is not running.
+        let title = crate::makepad_platform::remote::tag_window_title(title);
+        // Bail out early when the resolved title was already synced: pushing an
+        // unchanged title through `set_text` every event would still cost a
+        // widget-tree lookup per event.
+        if self.last_synced_title.as_deref() == Some(title.as_str()) {
+            return;
         }
+        if !title.is_empty() {
+            let label = self.label(cx, ids!(caption_label.label));
+            if label.borrow().is_none() {
+                // No caption label in the tree yet; retry on a later event.
+                return;
+            }
+            label.set_text(cx, &title);
+        }
+        self.last_synced_title = Some(title);
     }
 
     /// Resolves the desired system-bar (status/navigation bar) icon tint and,
@@ -737,6 +1106,19 @@ impl Window {
     }
 
     fn ensure_initialized(&mut self, cx: &mut Cx) {
+        // If the inputs that drive caption layout changed without a platform WindowGeomChange
+        // (e.g. a live/DSL reload toggling the caption bar or changing its height), the cached
+        // WindowDragQuery geometry is stale — drop it so the next hit-test recomputes.
+        let caption_sig = (
+            self.show_caption_bar,
+            self.window.caption_bar_height_override,
+            self.system_caption_bar_height,
+        );
+        if self.caption_query_sig != Some(caption_sig) {
+            self.caption_query_sig = Some(caption_sig);
+            self.drag_query_cache = None;
+        }
+
         self.sync_caption_bar_state(cx);
         self.sync_caption_bar_height(cx);
         self.sync_caption_title(cx);
@@ -795,10 +1177,29 @@ impl Window {
         };
         begin_window_gauss_frame(cx, window_id, self.use_gauss_capture, gauss_snapshot);
 
-        if self.use_gauss_capture {
+        // Full-window supersampling: render everything (incl. the overlay = tooltips/modals/
+        // context-menus) into the supersized scene pass, then downscale in end(). Skip when
+        // gauss capture is active for this window (avoid nesting the two scene mechanisms).
+        self.use_ssaa = !self.use_gauss_capture && supersample_factor() > 1.0;
+        // The exploded view owns the body pass; it does not nest inside the
+        // other two scene mechanisms.
+        self.use_sploded =
+            cx.sploded_active() && !self.use_gauss_capture && !self.use_ssaa;
+
+        if self.use_sploded {
+            self.sploded_stack.begin_scene(cx);
+            // Bind the overlay to the WINDOW pass, so the tweaker's panel and
+            // every popup composite flat over the exploded body.
+            self.overlay
+                .begin_for_pass(cx, self.pass.handle.draw_pass_id());
+        } else if self.use_gauss_capture {
             self.gauss_stack.begin_scene(cx);
             self.overlay
                 .begin_for_pass(cx, self.pass.handle.draw_pass_id());
+        } else if self.use_ssaa {
+            self.ssaa_stack.begin_scene(cx, supersample_factor());
+            self.overlay
+                .begin_for_pass(cx, self.ssaa_stack.scene_pass.draw_pass_id());
         } else {
             self.overlay.begin(cx);
         }
@@ -823,7 +1224,18 @@ impl Window {
             self.cursor_draw_list.end(cx);
         }
 
-        if self.use_gauss_capture {
+        if self.use_sploded {
+            // End the body pass first, then composite it, then let the overlay
+            // (panel, popups) close into the window pass ON TOP of it — the
+            // gauss ordering, for the same reason.
+            self.sploded_stack.end_scene(cx);
+            let root_size = cx.current_pass_size();
+            if root_size.x >= 0.5 && root_size.y >= 0.5 {
+                self.sploded_stack
+                    .draw_resolve(cx, &mut self.draw_ssaa_resolve, root_size);
+            }
+            self.overlay.end(cx);
+        } else if self.use_gauss_capture {
             self.gauss_stack.end_scene(cx);
             let root_size = cx.current_pass_size();
             if root_size.x >= 0.5 && root_size.y >= 0.5 {
@@ -834,8 +1246,20 @@ impl Window {
                 self.gauss_stack
                     .draw_scene(cx, &mut self.draw_gauss_scene, root_size);
             }
+            self.overlay.end(cx);
+        } else if self.use_ssaa {
+            // The overlay was begun for the scene pass, so finalize it BEFORE ending that pass.
+            self.overlay.end(cx);
+            self.ssaa_stack.end_scene(cx);
+            // Now the window pass is active again; downscale the supersized scene into it.
+            let root_size = cx.current_pass_size();
+            if root_size.x >= 0.5 && root_size.y >= 0.5 {
+                self.ssaa_stack
+                    .draw_resolve(cx, &mut self.draw_ssaa_resolve, root_size);
+            }
+        } else {
+            self.overlay.end(cx);
         }
-        self.overlay.end(cx);
         let window_id = self.window.handle.window_id();
         if finish_window_gauss_frame(cx, window_id) {
             cx.repaint_pass_and_child_passes(self.pass.handle.draw_pass_id());
@@ -874,6 +1298,18 @@ impl Window {
         //if self.show_performance_view {
         //    self.performance_view.draw_all(cx, &mut Scope::empty());
         //}
+
+        // The REC dot goes on last, in the WINDOW pass, so it sits over every
+        // scene mechanism (gauss / ssaa / sploded) and over the overlay - and
+        // so it lands in the recording, which reads back this same pass.
+        let pass_size = cx.current_pass_size();
+        self.screen_cap.draw_indicator(
+            cx,
+            Rect {
+                pos: dvec2(0.0, 0.0),
+                size: pass_size,
+            },
+        );
 
         cx.end_pass_sized_turtle();
 
@@ -934,6 +1370,18 @@ mod tests {
 }
 
 impl WindowRef {
+    pub fn set_title(&self, cx: &mut Cx, title: &str) {
+        if let Some(mut inner) = self.borrow_mut() {
+            if inner.window.title == title {
+                return;
+            }
+            inner.window.title = title.to_string();
+            inner.window.handle.set_title(cx, title.to_string());
+            inner.last_synced_title = None;
+            inner.sync_caption_title(cx);
+        }
+    }
+
     pub fn window_id(&self) -> Option<WindowId> {
         self.borrow().map(|inner| inner.window.handle.window_id())
     }
@@ -958,6 +1406,30 @@ impl WindowRef {
             inner.window.handle.is_fullscreen(cx)
         } else {
             false
+        }
+    }
+    /// OS-native maximize (Windows: `ShowWindow(SW_MAXIMIZE)`; macOS: zoom).
+    /// Unlike `fullscreen()`/`disable_fullscreen()` (which push
+    /// `FullscreenWindow`/`NormalizeWindow` — not handled by every
+    /// backend), `maximize`/`restore` push the ops the Windows backend
+    /// actually implements, and `is_fullscreen()` reflects this state
+    /// there too (`window_geom.is_fullscreen` mirrors `get_is_maximized`).
+    pub fn maximize(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.window.handle.maximize(cx);
+        }
+    }
+    /// See `maximize()`.
+    pub fn restore(&self, cx: &mut Cx) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.window.handle.restore(cx);
+        }
+    }
+    /// See `WindowHandle::set_chromeless_when_maximized` (Windows only;
+    /// other backends ignore it).
+    pub fn set_chromeless_when_maximized(&self, cx: &mut Cx, chromeless: bool) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.window.handle.set_chromeless_when_maximized(cx, chromeless);
         }
     }
     pub fn resize(&self, cx: &mut Cx, size: Vec2d) {
@@ -1020,6 +1492,11 @@ impl Widget for Window {
             self.draw_all(cx, scope);
             return;
         }
+        if matches!(event, Event::LiveEdit) {
+            // A live reload can re-apply DSL text over the caption label, so
+            // force the next sync to push the title again.
+            self.last_synced_title = None;
+        }
         self.ensure_initialized(cx);
 
         let uid = self.widget_uid();
@@ -1032,6 +1509,22 @@ impl Widget for Window {
         self.nav_control
             .handle_event(cx, event, self.main_draw_list.draw_list_id());
         self.overlay.handle_event(cx, event);
+        // The recorder is fed the raw event before focus routing, so Shift+F12
+        // works while a text input holds the caret, and is told which window
+        // it is recording so its capture sink follows THIS window.
+        self.screen_cap.set_window_id(self.window.window_id().id());
+        self.screen_cap.handle_event(cx, event, scope);
+        if self.screen_cap.take_redraw_request() {
+            // The REC dot appearing or disappearing is a change to the draw
+            // lists, so it needs a real redraw — twice per recording.
+            self.view.redraw(cx);
+        }
+        if self.screen_cap.take_repaint_request() {
+            // A still app presents no frames, and a recorder with no frames is
+            // an empty file. A pass repaint re-presents the existing draw lists
+            // at frame rate without re-running the widget tree.
+            cx.repaint_pass_and_child_passes(self.pass.handle.draw_pass_id());
+        }
         if self.demo_next_frame.is_event(event).is_some() {
             if self.demo {
                 self.demo_next_frame = cx.new_next_frame();
@@ -1048,6 +1541,9 @@ impl Widget for Window {
             }
             Event::WindowGeomChange(ev) => {
                 if ev.window_id == self.window.window_id() {
+                    // The caption / buttons may have been re-laid-out; drop the WindowDragQuery
+                    // geometry cache so it is recomputed on the next hit-test.
+                    self.drag_query_cache = None;
                     match cx.os_type() {
                         OsType::Windows | OsType::Macos => {
                             if self.hide_caption_on_fullscreen && !cx.in_makepad_studio() {
@@ -1062,9 +1558,13 @@ impl Widget for Window {
                         _ => (),
                     }
 
-                    // Update the display context if the screen size has changed
+                    // Update the display context if the screen size has changed.
+                    // Some platforms send spurious zero-size geometry at startup (notably macOS);
+                    // don't let it clobber a good size and flip adaptive layouts to their fallback.
                     let old_insets = cx.display_context.safe_area_insets;
-                    cx.display_context.screen_size = ev.new_geom.inner_size;
+                    if ev.new_geom.inner_size.x > 0.0 && ev.new_geom.inner_size.y > 0.0 {
+                        cx.display_context.screen_size = ev.new_geom.inner_size;
+                    }
                     cx.display_context.safe_area_insets = ev.new_geom.safe_area_insets;
                     cx.display_context.updated_on_event_id = cx.event_id();
 
@@ -1072,15 +1572,17 @@ impl Widget for Window {
                     // Splash code can reference mod.widgets.SAFE_INSET_PAD_*.
                     cx.update_safe_inset_script_values(ev.new_geom.safe_area_insets);
 
-                    // If the platform reports native chrome button geometry, derive
-                    // the caption bar height so the buttons are vertically centered:
-                    // height = top_margin * 2 + button_height = pos.y * 2 + size.y.
-                    let new_buttons = ev.new_geom.window_chrome_buttons;
-                    if new_buttons != Rect::default() {
-                        let h = (new_buttons.pos.y * 2.0 + new_buttons.size.y).ceil();
-                        if self.system_caption_bar_height != Some(h) {
-                            self.system_caption_bar_height = Some(h);
-                            self.view(cx, ids!(caption_bar)).redraw(cx);
+                    // Only pin the caption height on macOS: the buttons there are OS traffic lights
+                    // (fixed size, don't zoom) that the title lines up with. Elsewhere we draw the
+                    // buttons ourselves, so height: Fit lets the bar zoom along with them instead.
+                    if matches!(cx.os_type(), OsType::Macos) {
+                        let new_buttons = ev.new_geom.window_chrome_buttons;
+                        if new_buttons != Rect::default() {
+                            let h = (new_buttons.pos.y * 2.0 + new_buttons.size.y).ceil();
+                            if self.system_caption_bar_height != Some(h) {
+                                self.system_caption_bar_height = Some(h);
+                                self.view(cx, ids!(caption_bar)).redraw(cx);
+                            }
                         }
                     }
 
@@ -1102,10 +1604,32 @@ impl Widget for Window {
             }
             Event::WindowDragQuery(dq) => {
                 if dq.window_id == self.window.window_id() {
-                    if self.view(cx, ids!(caption_bar)).visible() {
-                        let caption_rect = self.view(cx, ids!(caption_bar)).area().rect(cx);
-                        let buttons_rect = self.view(cx, ids!(windows_buttons)).area().rect(cx);
-
+                    // Resolve the caption / buttons geometry at most once per relayout; this event
+                    // arrives per mouse-move (per WM_NCHITTEST) and the view lookups are not free.
+                    let (visible, caption_rect, buttons_rect) = match self.drag_query_cache {
+                        Some(c) => c,
+                        None => {
+                            let visible = self.view(cx, ids!(caption_bar)).visible();
+                            let caption_rect = self.view(cx, ids!(caption_bar)).area().rect(cx);
+                            let buttons_view = self.view(cx, ids!(windows_buttons));
+                            let buttons_visible = buttons_view.visible();
+                            let buttons_rect = buttons_view.area().rect(cx);
+                            // Only cache once the caption bar AND its (visible) buttons have actually
+                            // been laid out, so an early query doesn't pin a stale rect. Pinning a
+                            // zero buttons_rect while the buttons are visible-but-not-yet-laid-out
+                            // would make the min/max/close strip respond as draggable Caption (a
+                            // click on Close would drag the window) until the next geometry change. A
+                            // window with no (hidden) buttons keeps a zero buttons_rect, which is fine.
+                            let caption_ready = caption_rect.size != Vec2d::default();
+                            let buttons_ready =
+                                !buttons_visible || buttons_rect.size != Vec2d::default();
+                            if !visible || (caption_ready && buttons_ready) {
+                                self.drag_query_cache = Some((visible, caption_rect, buttons_rect));
+                            }
+                            (visible, caption_rect, buttons_rect)
+                        }
+                    };
+                    if visible {
                         if caption_rect.contains(dq.abs) {
                             if buttons_rect.size != Vec2d::default()
                                 && buttons_rect.contains(dq.abs)
@@ -1149,7 +1673,13 @@ impl Widget for Window {
             cx.widget_action(uid, WindowAction::EventForOtherWindow);
             return;
         } else {
-            self.view.handle_event(cx, event, scope);
+            // Tweak mode swallows pointer events over the body before
+            // ordinary dispatch (picking must never fire a Button); all the
+            // logic lives in widgets/src/tweaker.rs.
+            if !crate::tweaker::window_intercept(cx, event, &mut self.view, self.window.window_id())
+            {
+                self.view.handle_event(cx, event, scope);
+            }
         }
 
         if let Event::Actions(actions) = event {

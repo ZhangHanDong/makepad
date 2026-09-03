@@ -63,8 +63,21 @@ public class MakepadNative {
     // midi
     public native static void onMidiDeviceOpened(String name, Object midi_device);
     
+    // file and folder dialogs (Storage Access Framework).
+    // An empty uris array means the user cancelled.
+    public native static void onFileDialogResult(int requestCode, String[] uris);
+
     // permissions
     public native static void onPermissionResult(String permission, int requestId, int status);
+
+    // location
+    public native static void onLocationUpdate(
+        double longitude, double latitude, float accuracy,
+        boolean hasAltitude, double altitude,
+        boolean hasSpeed, float speed,
+        boolean hasBearing, float bearing,
+        long timeMillis);
+    public native static void onLocationError(int code, String message);
 
     // video playback
     public static native void onVideoPlaybackPrepared(long videoId, int videoWidth, int videoHeight, long duration, VideoPlayer surfaceTexture);

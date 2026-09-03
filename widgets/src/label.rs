@@ -14,6 +14,11 @@ script_mod! {
         padding: theme.mspace_1
 
         draw_text +: {
+            // A label is a box with text in it, and the boxes apps put labels
+            // in are centered by their align, not by their baselines: center
+            // the ink, so a label reads as centered when its parent says it is.
+            ink_centered: true
+
             color_dither: uniform(1.0)
             color: theme.color_label_outer
             color_2: uniform(vec4(-1.0, -1.0, -1.0, -1.0))
@@ -196,6 +201,10 @@ script_mod! {
     mod.widgets.IconSet = mod.widgets.Label{
         width: Fit
         draw_text +: {
+            // An icon font's cap height describes a capital nobody is drawing:
+            // these glyphs are pictures placed in their own box, so leave them
+            // on the baseline the font asks for.
+            ink_centered: false
             text_style: theme.font_icons{
                 line_spacing: theme.font_wdgt_line_spacing
                 font_size: 100.
@@ -274,13 +283,15 @@ impl Widget for Label {
                 let trap = vm.bx.threads.cur().trap.pass();
                 let value = vm.bx.heap.vec_value(args_obj, 0, trap);
                 if !value.is_err() {
-                    let new_text = vm.bx.heap.temp_string_with(|heap, out| {
-                        heap.cast_to_string(value, out);
-                        out.to_string()
-                    });
-                    vm.with_cx_mut(|cx| {
-                        self.set_text(cx, &new_text);
-                    });
+                    if let Some(new_text) = vm
+                        .bx
+                        .heap
+                        .cast_to_owned_string(value, "copying label text")
+                    {
+                        vm.with_cx_mut(|cx| {
+                            self.set_text(cx, &new_text);
+                        });
+                    }
                 }
             }
             return ScriptAsyncResult::Return(NIL);
@@ -319,6 +330,11 @@ impl Widget for Label {
     }
 
     fn set_text(&mut self, cx: &mut Cx, v: &str) {
+        // Identical text produces identical visuals, so skip the string
+        // rebuild and the redraw that would dirty the whole draw list.
+        if self.text.as_ref() == v {
+            return;
+        }
         self.text.as_mut_empty().push_str(v);
         self.redraw(cx);
     }
@@ -344,6 +360,19 @@ impl Widget for Label {
     }
 }
 
+impl Label {
+    /// Sets the text color.
+    ///
+    /// Does nothing if the color is unchanged.
+    pub fn set_text_color(&mut self, cx: &mut Cx, color: Vec4f) {
+        if self.draw_text.color == color {
+            return;
+        }
+        self.draw_text.color = color;
+        self.redraw(cx);
+    }
+}
+
 impl LabelRef {
     pub fn text(&self) -> String {
         if let Some(inner) = self.borrow() {
@@ -356,6 +385,13 @@ impl LabelRef {
     pub fn set_text(&self, cx: &mut Cx, text: &str) {
         if let Some(mut inner) = self.borrow_mut() {
             inner.set_text(cx, text);
+        }
+    }
+
+    /// See [`Label::set_text_color()`].
+    pub fn set_text_color(&self, cx: &mut Cx, color: Vec4f) {
+        if let Some(mut inner) = self.borrow_mut() {
+            inner.set_text_color(cx, color);
         }
     }
 

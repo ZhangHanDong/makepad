@@ -178,6 +178,19 @@ pub enum FromJavaMessage {
         request_id: i32,
         status: i32, // 0=NotDetermined, 1=Granted, 2=DeniedCanRetry, 3=DeniedPermanent
     },
+    LocationUpdate {
+        lon: f64,
+        lat: f64,
+        accuracy_m: f32,
+        altitude_m: Option<f64>,
+        speed_mps: Option<f32>,
+        heading_deg: Option<f32>,
+        time_ms: i64,
+    },
+    LocationError {
+        code: i32, // 1 = permission denied, 2 = unavailable
+        message: String,
+    },
     VideoPlaybackPrepared {
         video_id: u64,
         video_width: u32,
@@ -1196,6 +1209,65 @@ pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onPermissionResu
     });
 }
 
+/// The answer to a file/folder dialog, from `MakepadActivity.onActivityResult`.
+///
+/// An empty `uris` array is a cancel — which is a normal outcome, not an
+/// error. Answering straight from here rather than through
+/// `FromJavaMessage` is deliberate: `Cx::post_action` is the platform-wide
+/// contract for a dialog answer and is already cross-thread safe, so a hop
+/// through the render-thread queue would buy nothing.
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onFileDialogResult(
+    env: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    request_code: jni_sys::jint,
+    uris: jni_sys::jobjectArray,
+) {
+    super::android_file_dialog::on_result(
+        request_code as i32,
+        java_string_array_to_vec(env, uris),
+    );
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onLocationUpdate(
+    _: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    longitude: jni_sys::jdouble,
+    latitude: jni_sys::jdouble,
+    accuracy: jni_sys::jfloat,
+    has_altitude: jni_sys::jboolean,
+    altitude: jni_sys::jdouble,
+    has_speed: jni_sys::jboolean,
+    speed: jni_sys::jfloat,
+    has_bearing: jni_sys::jboolean,
+    bearing: jni_sys::jfloat,
+    time_millis: jni_sys::jlong,
+) {
+    send_from_java_message(FromJavaMessage::LocationUpdate {
+        lon: longitude,
+        lat: latitude,
+        accuracy_m: accuracy,
+        altitude_m: if has_altitude != 0 { Some(altitude) } else { None },
+        speed_mps: if has_speed != 0 { Some(speed) } else { None },
+        heading_deg: if has_bearing != 0 { Some(bearing) } else { None },
+        time_ms: time_millis,
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onLocationError(
+    env: *mut jni_sys::JNIEnv,
+    _: jni_sys::jclass,
+    code: jni_sys::jint,
+    message: jni_sys::jstring,
+) {
+    send_from_java_message(FromJavaMessage::LocationError {
+        code,
+        message: jstring_to_string(env, message),
+    });
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn Java_dev_makepad_android_MakepadNative_onPermissionDenied(
     env: *mut jni_sys::JNIEnv,
@@ -2135,6 +2207,21 @@ pub unsafe fn to_java_unmute_video_playback(env: *mut jni_sys::JNIEnv, video_id:
     ndk_utils::call_void_method!(env, get_activity(), "unmuteVideoPlayback", "(J)V", video_id);
 }
 
+pub unsafe fn to_java_set_video_playback_rate(
+    env: *mut jni_sys::JNIEnv,
+    video_id: LiveId,
+    rate: f64,
+) {
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "setVideoPlaybackRate",
+        "(JD)V",
+        video_id,
+        rate as jni_sys::jdouble
+    );
+}
+
 pub unsafe fn to_java_seek_video_playback(
     env: *mut jni_sys::JNIEnv,
     video_id: LiveId,
@@ -2180,6 +2267,125 @@ pub unsafe fn to_java_cleanup_video_decoder_ref(
     (**env).DeleteGlobalRef.unwrap()(env, video_decoder_ref);
 }
 
+/// Create an [`OesDecodeSurface`] for MediaCodec zero-copy present.
+///
+/// Returns a JNI **global** ref to the bridge object, or `None` on failure.
+/// Caller must eventually call [`to_java_release_oes_decode_surface`].
+pub unsafe fn to_java_create_oes_decode_surface(
+    env: *mut jni_sys::JNIEnv,
+    oes_tex_id: u32,
+) -> Option<jni_sys::jobject> {
+    if oes_tex_id == 0 {
+        return None;
+    }
+    let bridge = crate::new_object!(
+        env,
+        "dev/makepad/android/OesDecodeSurface",
+        "(I)V",
+        oes_tex_id as jni_sys::jint
+    );
+    if bridge.is_null() {
+        return None;
+    }
+    let ready = ndk_utils::call_bool_method!(env, bridge, "isReady", "()Z");
+    if ready == 0 {
+        (**env).DeleteLocalRef.unwrap()(env, bridge);
+        return None;
+    }
+    let global = (**env).NewGlobalRef.unwrap()(env, bridge);
+    (**env).DeleteLocalRef.unwrap()(env, bridge);
+    if global.is_null() {
+        None
+    } else {
+        Some(global)
+    }
+}
+
+/// Borrow the `android.view.Surface` from an OES decode bridge (new local ref).
+/// Caller should `NewGlobalRef` if it must outlive the current JNI scope, or
+/// pass the local ref to the hard-decode path only while the bridge stays alive.
+pub unsafe fn to_java_oes_decode_surface_get_surface(
+    env: *mut jni_sys::JNIEnv,
+    bridge: jni_sys::jobject,
+) -> Option<jni_sys::jobject> {
+    let surface = ndk_utils::call_object_method!(
+        env,
+        bridge,
+        "getSurface",
+        "()Landroid/view/Surface;"
+    );
+    if surface.is_null() {
+        None
+    } else {
+        Some(surface)
+    }
+}
+
+/// Drain all pending SurfaceTexture frames onto the OES texture (GL thread).
+/// Returns `(frames_drained, column_major_4x4_transform)`.
+pub unsafe fn to_java_oes_decode_surface_drain(
+    env: *mut jni_sys::JNIEnv,
+    bridge: jni_sys::jobject,
+) -> (u32, [f32; 16]) {
+    let drained =
+        ndk_utils::call_int_method!(env, bridge, "drainTexImage", "()I").max(0) as u32;
+    let mut matrix = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    if drained > 0 {
+        let arr = ndk_utils::call_object_method!(env, bridge, "getTransformMatrix", "()[F");
+        if !arr.is_null() {
+            let arr = arr as jni_sys::jfloatArray;
+            let len = (**env).GetArrayLength.unwrap()(env, arr);
+            if len >= 16 {
+                let mut is_copy: jni_sys::jboolean = 0;
+                let elems =
+                    (**env).GetFloatArrayElements.unwrap()(env, arr, &mut is_copy);
+                if !elems.is_null() {
+                    for i in 0..16 {
+                        matrix[i] = *elems.add(i);
+                    }
+                    (**env).ReleaseFloatArrayElements.unwrap()(
+                        env,
+                        arr,
+                        elems,
+                        jni_sys::JNI_ABORT,
+                    );
+                }
+            }
+            (**env).DeleteLocalRef.unwrap()(env, arr as jni_sys::jobject);
+        }
+    }
+    (drained, matrix)
+}
+
+pub unsafe fn to_java_oes_decode_surface_set_default_buffer_size(
+    env: *mut jni_sys::JNIEnv,
+    bridge: jni_sys::jobject,
+    width: i32,
+    height: i32,
+) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    ndk_utils::call_void_method!(
+        env,
+        bridge,
+        "setDefaultBufferSize",
+        "(II)V",
+        width as jni_sys::jint,
+        height as jni_sys::jint
+    );
+}
+
+pub unsafe fn to_java_release_oes_decode_surface(
+    env: *mut jni_sys::JNIEnv,
+    bridge: jni_sys::jobject,
+) {
+    ndk_utils::call_void_method!(env, bridge, "release", "()V");
+    (**env).DeleteGlobalRef.unwrap()(env, bridge);
+}
+
 pub unsafe fn to_java_check_permission(permission: &str) -> i32 {
     let env = attach_jni_env();
     let permission_str = CString::new(permission).unwrap();
@@ -2195,6 +2401,88 @@ pub unsafe fn to_java_check_permission(permission: &str) -> i32 {
 
     (**env).DeleteLocalRef.unwrap()(env, permission_jstr);
     result
+}
+
+/// Ask the activity to start a Storage Access Framework picker.
+///
+/// The activity hops onto its own looper before it touches the Intent (see
+/// `MakepadActivity.openFileDialog`): `startActivityForResult` is an
+/// Activity call, and this runs on the render thread from inside the
+/// platform-op drain, which holds the `Cx` borrow.
+pub unsafe fn to_java_open_file_dialog(
+    request_code: i32,
+    kind: i32,
+    mime_type: &str,
+    mime_types: &[String],
+    allow_multiple: bool,
+    file_name: &str,
+) {
+    let env = attach_jni_env();
+    let mime_jstr = new_java_string(env, mime_type);
+    let mime_types_array = new_java_string_array(env, mime_types);
+    let file_name_jstr = new_java_string(env, file_name);
+
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "openFileDialog",
+        "(IILjava/lang/String;[Ljava/lang/String;ZLjava/lang/String;)V",
+        request_code as jni_sys::jint,
+        kind as jni_sys::jint,
+        mime_jstr,
+        mime_types_array,
+        allow_multiple as std::os::raw::c_int,
+        file_name_jstr
+    );
+
+    (**env).DeleteLocalRef.unwrap()(env, file_name_jstr);
+    (**env).DeleteLocalRef.unwrap()(env, mime_types_array);
+    (**env).DeleteLocalRef.unwrap()(env, mime_jstr);
+}
+
+unsafe fn new_java_string(env: *mut jni_sys::JNIEnv, value: &str) -> jni_sys::jstring {
+    // An interior NUL cannot reach Java through the modified-UTF8 API at
+    // all; an empty string is the harmless reading of a filename or MIME
+    // type that malformed.
+    let value = CString::new(value).unwrap_or_default();
+    ((**env).NewStringUTF.unwrap())(env, value.as_ptr())
+}
+
+unsafe fn new_java_string_array(
+    env: *mut jni_sys::JNIEnv,
+    values: &[String],
+) -> jni_sys::jobjectArray {
+    let class = ((**env).FindClass.unwrap())(env, b"java/lang/String\0".as_ptr() as _);
+    let array = ((**env).NewObjectArray.unwrap())(
+        env,
+        values.len() as jni_sys::jsize,
+        class,
+        std::ptr::null_mut(),
+    );
+    for (index, value) in values.iter().enumerate() {
+        let value = new_java_string(env, value);
+        ((**env).SetObjectArrayElement.unwrap())(env, array, index as jni_sys::jsize, value);
+        (**env).DeleteLocalRef.unwrap()(env, value);
+    }
+    (**env).DeleteLocalRef.unwrap()(env, class);
+    array
+}
+
+pub unsafe fn to_java_start_location_updates(min_interval_ms: i64, min_distance_m: f32) {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(
+        env,
+        get_activity(),
+        "startLocationUpdates",
+        "(JF)V",
+        min_interval_ms as jni_sys::jlong,
+        min_distance_m as std::os::raw::c_double
+    );
+}
+
+pub unsafe fn to_java_stop_location_updates() {
+    let env = attach_jni_env();
+    ndk_utils::call_void_method!(env, get_activity(), "stopLocationUpdates", "()V");
 }
 
 pub unsafe fn to_java_request_permission(permission: &str, request_id: i32) {

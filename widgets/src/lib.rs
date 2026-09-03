@@ -22,6 +22,8 @@ pub mod theme_desktop_light;
 pub mod theme_desktop_skeleton;
 pub mod widget;
 pub mod widget_async;
+pub mod splash_host;
+pub mod splash_storage;
 pub mod widget_match_event;
 pub mod widget_tree;
 
@@ -29,6 +31,7 @@ pub mod widget_tree;
 pub mod rubber_view;
 pub mod scroll_bar;
 pub mod scroll_bars;
+pub mod scroll_motion;
 pub mod view;
 pub mod view_ui;
 
@@ -49,6 +52,7 @@ pub mod desktop_button;
 pub mod gauss_view;
 pub mod keyboard_view;
 pub mod nav_control;
+pub mod tweaker;
 #[cfg(feature = "voice")]
 pub mod voice_wave;
 pub mod window;
@@ -56,12 +60,18 @@ pub mod window_menu;
 #[cfg(feature = "voice")]
 mod window_voice_input;
 
+pub mod combo_box;
 pub mod drop_down;
+pub mod drop_down2;
 pub mod native_label;
 pub mod native_text_input;
 pub mod popup_menu;
 pub mod slider;
 pub mod text_input;
+pub mod drop_slider;
+pub mod tip;
+pub mod value_input;
+pub mod fab_controls;
 
 pub mod splitter;
 
@@ -74,7 +84,9 @@ pub mod loading_spinner;
 pub mod bare_step;
 pub mod turtle_step;
 
+pub mod data_grid;
 pub mod portal_list;
+pub mod reorder_list;
 pub mod text_flow;
 
 pub mod cached_widget;
@@ -122,6 +134,7 @@ pub mod flat_list;
 
 pub mod chart;
 pub mod perf_graph;
+pub mod screen_cap;
 
 // Commented out modules (not yet converted)
 // lets depricate these for now
@@ -144,10 +157,12 @@ pub use crate::{
     cached_widget::*,
     callout_tooltip::*,
     check_box::*,
+    combo_box::*,
     desktop_button::*,
     dock::*,
 
     drop_down::*,
+    drop_down2::*,
     expandable_panel::*,
     file_tree::*,
     flat_list::*,
@@ -173,7 +188,9 @@ pub use crate::{
     page_flip::*,
     popup_menu::*,
     popup_notification::*,
+    data_grid::*,
     portal_list::*,
+    reorder_list::*,
     radio_button::*,
     root::*,
 
@@ -230,6 +247,8 @@ pub use crate::html::*;
 pub use crate::markdown::*;
 
 #[cfg(feature = "maps")]
+pub use crate::map::overlay::{MapMarker, MapPuck, MapRouteOverlay};
+#[cfg(feature = "maps")]
 pub use crate::map::view::*;
 
 pub use crate::math_view::*;
@@ -243,6 +262,7 @@ pub use crate::vector::*;
 
 pub use crate::chart::*;
 pub use crate::perf_graph::*;
+pub use crate::screen_cap::*;
 
 pub use crate::video::*;
 
@@ -544,15 +564,23 @@ pub fn widgets_mod(vm: &mut ScriptVm) {
     });
     crate::window_menu::script_mod(vm);
     crate::nav_control::script_mod(vm);
+    crate::tweaker::script_mod(vm);
     crate::gauss_view::script_mod(vm);
+    crate::screen_cap::script_mod(vm);
     crate::window::script_mod(vm);
 
     crate::popup_menu::script_mod(vm);
     crate::drop_down::script_mod(vm);
+    crate::drop_down2::script_mod(vm);
     crate::native_label::script_mod(vm);
     crate::text_input::script_mod(vm);
     crate::native_text_input::script_mod(vm);
     crate::slider::script_mod(vm);
+    crate::drop_slider::script_mod(vm);
+    crate::tip::script_mod(vm);
+    crate::value_input::script_mod(vm);
+    crate::fab_controls::script_mod(vm);
+    crate::combo_box::script_mod(vm);
 
     crate::splitter::script_mod(vm);
 
@@ -565,7 +593,9 @@ pub fn widgets_mod(vm: &mut ScriptVm) {
     crate::bare_step::script_mod(vm);
     crate::turtle_step::script_mod(vm);
 
+    crate::data_grid::script_mod(vm);
     crate::portal_list::script_mod(vm);
+    crate::reorder_list::script_mod(vm);
     crate::text_flow::script_mod(vm);
 
     crate::cached_widget::script_mod(vm);
@@ -650,8 +680,11 @@ pub fn widgets_mod(vm: &mut ScriptVm) {
 }
 
 pub fn script_mod(vm: &mut ScriptVm) {
+    makepad_platform::startup_trace("widgets: theme_mod begin");
     theme_mod(vm);
+    makepad_platform::startup_trace("widgets: theme_mod done");
     widgets_mod(vm);
+    makepad_platform::startup_trace("widgets: widgets_mod done");
     crate::splash::register_agent_module(vm);
 }
 

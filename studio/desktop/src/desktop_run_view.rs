@@ -9,8 +9,9 @@ use crate::makepad_widgets::makepad_platform::shared_framebuf::{
 use crate::makepad_widgets::*;
 use makepad_studio_protocol::hub_protocol::{FrameCodec, QueryId, RunViewInputVizKind};
 use makepad_studio_protocol::{
-    MouseButton, PresentableDraw, RemoteKeyModifiers, RemoteMouseDown, RemoteMouseMove,
-    RemoteMouseUp, RemoteScroll, RunViewFrameData, RunViewFrameRequest, StudioToApp,
+    MouseButton, PresentableDraw, RemoteGameInput, RemoteKeyModifiers, RemoteMouseDown,
+    RemoteMouseMove, RemoteMouseUp, RemoteScroll, RunViewFrameData, RunViewFrameRequest,
+    StudioToApp,
     StudioToAppVec,
 };
 use std::collections::VecDeque;
@@ -213,6 +214,11 @@ pub struct DesktopRunView {
     remote_cursor: MouseCursor,
     #[rust]
     is_hovered: bool,
+    /// Last controller set forwarded to the app, so an idle pad costs nothing.
+    /// `None` means "nothing sent yet", which forces one send — a freshly
+    /// targeted app must learn the current state, not just future changes.
+    #[rust]
+    last_game_input: Option<Vec<RemoteGameInput>>,
     #[rust]
     ai_viz_kind: Option<RunViewInputVizKind>,
     #[rust]
@@ -275,6 +281,34 @@ impl DesktopRunView {
             self.uid,
             DesktopRunViewAction::ForwardToApp { build_id, msg_bin },
         );
+    }
+
+    /// Forward Studio's game controllers to the hosted app.
+    ///
+    /// A Studio-hosted app is a child process with no window of its own, so
+    /// the OS hands controller input to Studio and never to it — exactly the
+    /// reason mouse and key events are forwarded rather than read directly.
+    /// Without this a game is playable standalone and dead under Studio, which
+    /// is precisely where it gets developed.
+    ///
+    /// Only the focused view forwards, so two open run views cannot both drive
+    /// from one stick; that is the same rule the keyboard already follows.
+    /// Sent on change only — an untouched pad reports the same level state
+    /// every tick and is not worth the wire.
+    fn game_input_msg_if_changed(&mut self, cx: &mut Cx) -> Option<StudioToApp> {
+        if !cx.has_key_focus(self.area) {
+            // Drop the memo, so regaining focus resends rather than assuming
+            // the app still holds what we last sent.
+            self.last_game_input = None;
+            return None;
+        }
+        let states: Vec<RemoteGameInput> =
+            cx.game_input_states().iter().map(|s| s.into()).collect();
+        if self.last_game_input.as_ref() == Some(&states) {
+            return None;
+        }
+        self.last_game_input = Some(states.clone());
+        Some(StudioToApp::GameInput(states))
     }
 
     fn set_target(&mut self, cx: &mut Cx, target: Option<RunTarget>) {
@@ -531,8 +565,24 @@ impl DesktopRunView {
         }
 
         let Some(drawn) = swapchain.get_image(presentable_draw.target_id) else {
+            crate::log!("WINHOST: apply NO IMAGE for target={:?}", presentable_draw.target_id);
             return false;
         };
+        {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static WINHOST_APPLY: AtomicUsize = AtomicUsize::new(0);
+            let n = WINHOST_APPLY.fetch_add(1, Ordering::Relaxed);
+            if n < 5 {
+                crate::log!("WINHOST: apply OK target={:?} {}x{}", presentable_draw.target_id, presentable_draw.width, presentable_draw.height);
+            }
+            // TEMP DIAGNOSTIC (strip before merge): host-device CPU readback of the shared
+            // texture — the closing experiment distinguishing child-renders-black /
+            // coherence-broken / studio-layout-bug. Sample early frames AND settled frames.
+            #[cfg(target_os = "windows")]
+            if n < 3 || (n % 60 == 0 && n <= 360) {
+                cx.debug_readback_shared_texture(&drawn.texture, &format!("apply#{}", n));
+            }
+        }
 
         #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
         if let Some(buffer) = drawn.software_buffer.as_ref() {
@@ -561,6 +611,16 @@ impl DesktopRunView {
                 (swapchain.alloc_height as f32),
             ],
         );
+        // The `packed_header` shader path decodes an in-band size header from texel (0,0)/(1,0)
+        // and returns transparent when it decodes to <= 0. That header is only ever written by
+        // the Linux software-fallback path — the Windows (and macOS) hosted-app render never
+        // writes it — so on Windows the guard spuriously blanks the RunView whenever the app's
+        // top-left pixel is black. Use the host's known tex_scale (packed_header = 0) there.
+        #[cfg(target_os = "windows")]
+        draw_app
+            .draw_vars
+            .set_dyn_instance(cx, id!(packed_header), &[0.0f32]);
+        #[cfg(not(target_os = "windows"))]
         draw_app
             .draw_vars
             .set_dyn_instance(cx, id!(packed_header), &[1.0f32]);
@@ -1005,6 +1065,20 @@ impl Widget for DesktopRunView {
     fn draw_walk(&mut self, cx: &mut Cx2d, scope: &mut Scope, walk: Walk) -> DrawStep {
         let dpi_factor = Self::host_dpi_factor(cx);
         let rect = cx.walk_turtle(walk).dpi_snap(dpi_factor);
+        // TEMP DIAGNOSTIC (strip before merge): where does the RunView actually draw?
+        #[cfg(target_os = "windows")]
+        {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static WINHOST_DRAW: AtomicUsize = AtomicUsize::new(0);
+            let n = WINHOST_DRAW.fetch_add(1, Ordering::Relaxed);
+            if n < 3 || (n % 120 == 0 && n <= 600) {
+                crate::log!(
+                    "WINHOST: draw_walk#{} rect=({:.0},{:.0} {:.0}x{:.0}) dpi={:.2} target={:?} pending={}",
+                    n, rect.pos.x, rect.pos.y, rect.size.x, rect.size.y, dpi_factor,
+                    self.current_target.is_some(), self.pending_draw.is_some()
+                );
+            }
+        }
         self.draw_bg.draw_abs(cx, rect);
 
         let target = self.current_target;
@@ -1197,6 +1271,9 @@ impl Widget for DesktopRunView {
                     }
                     if let Some(request) = self.request_remote_frame_if_needed(target) {
                         msgs.push(request);
+                    }
+                    if let Some(msg) = self.game_input_msg_if_changed(cx) {
+                        msgs.push(msg);
                     }
                     msgs.push(StudioToApp::Tick);
                     self.emit_to_app(cx, target.build_id, msgs);

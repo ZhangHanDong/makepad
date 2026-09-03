@@ -17,7 +17,7 @@ use {
     std::{
         borrow::Borrow,
         cell::RefCell,
-        collections::VecDeque,
+        collections::BTreeMap,
         env,
         hash::{Hash, Hasher},
         mem,
@@ -28,47 +28,69 @@ use {
 
 const LPXS_PER_INCH: f32 = 96.0;
 const PTS_PER_INCH: f32 = 72.0;
-const LAYOUT_CACHE_MAX_TEXT_LEN: usize = 512;
-const LAYOUT_CACHE_MULTILINE_TEXT_LEN: usize = 192;
-const LAYOUT_CACHE_MULTILINE_LINE_COUNT: usize = 4;
+
+/// Approximate upper bound, in bytes, on the memory retained by the layout cache.
+/// Entry weights are estimates (text bytes plus laid-out row/glyph storage), where a
+/// laid-out glyph is ~64 bytes, so a maximal ~60 KB pasted-wall message weighs about
+/// 4 MB and a typical 2-10 KB code block 130-650 KB. This budget keeps several such
+/// messages warm for scroll-back. Texts drawn in the current frame are never evicted
+/// even over budget (see `evict_lru_to_limits`), and the excess is reclaimed at the
+/// end of the first frame that no longer draws them (see `advance_cache_generation`),
+/// so the true footprint can exceed this only briefly and only by the visible set.
+pub const LAYOUT_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// A layout cache entry, tracked with its estimated size, its position in the
+/// least-recently-used order (the tick under which it is registered in
+/// `Layouter::cache_lru_order`), and the frame generation it was last used in.
+#[derive(Debug)]
+struct CachedLayout {
+    result: Rc<LaidoutText>,
+    weight_in_bytes: usize,
+    last_used: u64,
+    generation: u64,
+}
 
 #[derive(Debug)]
 pub struct Layouter {
     pub(crate) loader: Loader,
     cache_size: usize,
-    cached_params: VecDeque<OwnedLayoutParams>,
-    cached_results: FxHashMap<OwnedLayoutParams, Rc<LaidoutText>>,
+    cache_tick: u64,
+    cache_bytes: usize,
+    /// Frame counter for working-set protection: eviction never removes entries
+    /// used in the current generation, so the texts visible in one frame cannot
+    /// evict each other into a permanent every-frame miss cycle when they
+    /// collectively exceed the byte budget. Advanced once per frame via
+    /// [`Self::advance_cache_generation`].
+    cache_generation: u64,
+    cached_results: FxHashMap<OwnedLayoutParams, CachedLayout>,
+    cache_lru_order: BTreeMap<u64, OwnedLayoutParams>,
 }
 
 impl Layouter {
-    fn should_cache_text(text: &str) -> bool {
-        if text.len() > LAYOUT_CACHE_MAX_TEXT_LEN {
-            return false;
-        }
-        if text.len() > LAYOUT_CACHE_MULTILINE_TEXT_LEN {
-            let line_count = text
-                .as_bytes()
-                .iter()
-                .filter(|byte| **byte == b'\n')
-                .count()
-                + 1;
-            if line_count >= LAYOUT_CACHE_MULTILINE_LINE_COUNT {
-                return false;
-            }
-        }
-        true
-    }
-
     pub fn new(settings: Settings) -> Self {
         Self {
             loader: Loader::new(settings.loader),
             cache_size: settings.cache_size,
-            cached_params: VecDeque::with_capacity(settings.cache_size),
+            cache_tick: 0,
+            cache_bytes: 0,
+            cache_generation: 0,
             cached_results: FxHashMap::with_capacity_and_hasher(
                 settings.cache_size,
                 Default::default(),
             ),
+            cache_lru_order: BTreeMap::new(),
         }
+    }
+
+    /// Marks a frame boundary for the cache's working-set protection; called once
+    /// per frame from the font system's per-frame preparation, which runs after the
+    /// frame's draws. Eviction runs first, while the finished frame's entries are
+    /// still protected: anything older that pushed the cache over its limits (e.g.
+    /// a huge message that just scrolled off screen) is reclaimed here, one frame
+    /// after it was last drawn, rather than lingering until some later insert.
+    pub fn advance_cache_generation(&mut self) {
+        self.evict_lru_to_limits();
+        self.cache_generation += 1;
     }
 
     pub fn rasterizer(&self) -> &Rc<RefCell<Rasterizer>> {
@@ -93,8 +115,9 @@ impl Layouter {
         definition: FontFamilyDefinition,
     ) {
         self.loader.set_font_family_definition(id, definition);
-        self.cached_params.clear();
         self.cached_results.clear();
+        self.cache_lru_order.clear();
+        self.cache_bytes = 0;
     }
 
     pub fn define_font(&mut self, id: FontId, definition: FontDefinition) {
@@ -106,22 +129,91 @@ impl Layouter {
     }
 
     pub fn get_or_layout(&mut self, params: impl LayoutParams) -> Rc<LaidoutText> {
-        if self.cache_size == 0 || !Self::should_cache_text(params.text()) {
+        if self.cache_size == 0 {
             return Rc::new(self.layout(params.to_owned()));
         }
-        if let Some(result) = self.cached_results.get(&params as &dyn LayoutParams) {
-            return result.clone();
-        }
-        if self.cached_params.len() == self.cache_size {
-            let params = self.cached_params.pop_front().unwrap();
-            self.cached_results.remove(&params);
+        if let Some(entry) = self.cached_results.get_mut(&params as &dyn LayoutParams) {
+            // Refresh recency so texts that are drawn every frame (e.g. all the
+            // visible items of a scrolling list) survive eviction.
+            if let Some(key) = self.cache_lru_order.remove(&entry.last_used) {
+                self.cache_tick += 1;
+                entry.last_used = self.cache_tick;
+                entry.generation = self.cache_generation;
+                self.cache_lru_order.insert(entry.last_used, key);
+            }
+            return entry.result.clone();
         }
         let params = params.to_owned();
         let cache_key = params.clone();
         let result = Rc::new(self.layout(params));
-        self.cached_params.push_back(cache_key.clone());
-        self.cached_results.insert(cache_key, result.clone());
+        self.insert_cached_result(cache_key, result.clone());
         result
+    }
+
+    fn insert_cached_result(&mut self, cache_key: OwnedLayoutParams, result: Rc<LaidoutText>) {
+        let weight_in_bytes = Self::entry_weight_in_bytes(&cache_key, &result);
+        self.cache_tick += 1;
+        self.cache_bytes = self.cache_bytes.saturating_add(weight_in_bytes);
+        self.cache_lru_order.insert(self.cache_tick, cache_key.clone());
+        if let Some(old) = self.cached_results.insert(
+            cache_key,
+            CachedLayout {
+                result,
+                weight_in_bytes,
+                last_used: self.cache_tick,
+                generation: self.cache_generation,
+            },
+        ) {
+            // Replacing an existing entry: drop its LRU registration and weight
+            // so the bookkeeping stays consistent.
+            self.cache_lru_order.remove(&old.last_used);
+            self.cache_bytes = self.cache_bytes.saturating_sub(old.weight_in_bytes);
+        }
+        self.evict_lru_to_limits();
+    }
+
+    /// Evicts least-recently-used entries until both the entry-count cap and the
+    /// byte budget are respected, at a cost proportional to the number of entries
+    /// evicted. Entries used in the current frame generation are never evicted:
+    /// once the oldest remaining entry is current-generation, everything newer is
+    /// too, and eviction stops. The budget is therefore soft-exceeded while a
+    /// single frame's visible texts collectively outweigh it (they would otherwise
+    /// evict each other and re-layout every frame); the excess is bounded by the
+    /// visible working set and drains once scrolling moves on.
+    fn evict_lru_to_limits(&mut self) {
+        while self.cached_results.len() > 1
+            && (self.cached_results.len() > self.cache_size
+                || self.cache_bytes > LAYOUT_CACHE_MAX_BYTES)
+        {
+            let Some((tick, key)) = self.cache_lru_order.pop_first() else {
+                break;
+            };
+            if self
+                .cached_results
+                .get(&key)
+                .is_some_and(|entry| entry.generation == self.cache_generation)
+            {
+                self.cache_lru_order.insert(tick, key);
+                break;
+            }
+            if let Some(entry) = self.cached_results.remove(&key) {
+                self.cache_bytes = self.cache_bytes.saturating_sub(entry.weight_in_bytes);
+            }
+        }
+    }
+
+    /// Estimates the memory retained by one cache entry: the text bytes plus the
+    /// laid-out row and glyph storage, plus the key stored in both the result map
+    /// and the LRU order. This intentionally ignores allocator and hash-map
+    /// overhead; the budget is a soft target, not an exact accounting.
+    fn entry_weight_in_bytes(params: &OwnedLayoutParams, result: &LaidoutText) -> usize {
+        let glyph_count: usize = result.rows.iter().map(|row| row.glyphs.len()).sum();
+        params.text.len()
+            + 2 * mem::size_of::<OwnedLayoutParams>()
+            + mem::size_of::<CachedLayout>()
+            + mem::size_of::<LaidoutText>()
+            + result.rows.len() * mem::size_of::<LaidoutRow>()
+            + glyph_count * mem::size_of::<LaidoutGlyph>()
     }
 
     fn layout(&mut self, params: OwnedLayoutParams) -> LaidoutText {
@@ -308,6 +400,14 @@ impl LayoutContext {
             .map_or(false, |max| self.rows.len() >= max)
     }
 
+    /// Whether the row currently being laid out is the last one `max_rows`
+    /// permits.
+    fn current_row_is_last_allowed(&self) -> bool {
+        self.options
+            .max_rows
+            .map_or(false, |max| self.rows.len() + 1 >= max)
+    }
+
     fn layout(&mut self, len: usize) {
         if self.remaining_width_in_lpxs().is_none() {
             self.layout_directly(len);
@@ -333,6 +433,21 @@ impl LayoutContext {
                     let next_word = &self.text[self.current_row_end..][..fitter.next_len()];
                     if next_word.chars().all(|char| char.is_whitespace()) {
                         self.layout_directly(fitter.pop());
+                    } else if self.options.ellipsis
+                        && self.current_row_is_last_allowed()
+                        && !self.current_row_is_continuation()
+                    {
+                        // The last permitted row ends in an ellipsis, so word
+                        // integrity is moot: fill it to the width limit by
+                        // grapheme so the ellipsis truncates at the last glyph
+                        // that fits instead of at the last whole word — a word
+                        // that wraps away from this row would otherwise leave
+                        // it ellipsized far short of the available width.
+                        // Continuation rows are excluded: grapheme layout
+                        // force-places a grapheme wider than an empty row's
+                        // remnant past the width limit, unflagged, whereas
+                        // finishing the row truncates within bounds.
+                        self.layout_by_grapheme(fitter.pop());
                     } else if self.current_row_is_empty() && !self.current_row_is_continuation() {
                         self.layout_by_grapheme(fitter.pop());
                     } else {
@@ -402,6 +517,7 @@ impl LayoutContext {
         let descender_in_lpxs =
             font.map_or(0.0, |font| font.descender_in_ems()) * font_size_in_lpxs;
         let line_gap_in_lpxs = font.map_or(0.0, |font| font.line_gap_in_ems()) * font_size_in_lpxs;
+        let cap_height_in_lpxs = font.map_or(0.0, |font| font.cap_height_in_ems()) * font_size_in_lpxs;
 
         let text = self
             .text
@@ -417,13 +533,28 @@ impl LayoutContext {
             ascender_in_lpxs,
             descender_in_lpxs,
             line_gap_in_lpxs,
+            cap_height_in_lpxs,
             line_spacing_scale: self.options.line_spacing_scale,
             glyphs,
         };
 
         self.current_point_in_lpxs.x = 0.0;
         self.current_point_in_lpxs.y += self.rows.last().map_or(row.ascender_in_lpxs, |prev_row| {
-            prev_row.line_spacing_in_lpxs(&row)
+            let natural_in_lpxs = prev_row.line_spacing_in_lpxs(&row);
+            if self.rows.len() == 1 {
+                // The first row can share its visual row with earlier inline
+                // content that is taller than the text; the caller passes that
+                // row's real height (plus wrap spacing) so the second row's
+                // top edge clears it. The floor is a top-to-top distance, so
+                // it converts to a baseline advance by adding the change in
+                // ascender between the two rows.
+                let min_advance_in_lpxs = self.options.first_row_min_line_spacing_below_in_lpxs
+                    + row.ascender_in_lpxs
+                    - prev_row.ascender_in_lpxs;
+                natural_in_lpxs.max(min_advance_in_lpxs)
+            } else {
+                natural_in_lpxs
+            }
         });
         let max_width_in_lpxs = self.options.max_width_in_lpxs.unwrap_or(row.width_in_lpxs);
         let remaining_width_in_lpxs = max_width_in_lpxs - row.width_in_lpxs;
@@ -484,9 +615,23 @@ impl LayoutContext {
             }
         };
 
-        let text_was_truncated = self.rows.len() > max_rows || !all_text_consumed;
+        let mut text_was_truncated = self.rows.len() > max_rows || !all_text_consumed;
 
         self.rows.truncate(max_rows);
+
+        // A non-wrapping layout puts every glyph on a single row, so its
+        // overflow shows up as a row wider than the bound rather than as
+        // surplus rows. Row counting alone therefore reports "nothing was
+        // truncated" for the very case the ellipsis exists to handle.
+        // Restricted to non-wrapping layouts because a wrapped row's width
+        // includes any first-row indent and may legitimately reach the bound.
+        if self.options.ellipsis && !self.options.wrap {
+            if let Some(max_width) = self.options.max_width_in_lpxs {
+                if self.rows.last().is_some_and(|row| row.width_in_lpxs > max_width) {
+                    text_was_truncated = true;
+                }
+            }
+        }
 
         if !text_was_truncated {
             return self.finish_with(false);
@@ -898,8 +1043,12 @@ impl PartialEq for Style {
 #[derive(Clone, Copy, Debug)]
 pub struct LayoutOptions {
     pub first_row_indent_in_lpxs: f32,
-    // Note: currently does nothing. Only used by `TextFlow`. Should be removed once `TextFlow` is
-    // replaced with `TextFlow2`.
+    /// Minimum distance in logical pixels from the first row's top edge to the
+    /// second row's top edge. A continuation run's first row can share its
+    /// visual row with earlier inline content that is taller than the text;
+    /// callers pass that row's real height (plus wrap spacing) so the second
+    /// row clears it. Zero keeps pure font-metric spacing. Only the first row
+    /// boundary is affected; later rows always use font-metric spacing.
     pub first_row_min_line_spacing_below_in_lpxs: f32,
     pub max_width_in_lpxs: Option<f32>,
     pub wrap: bool,
@@ -973,6 +1122,33 @@ pub struct LaidoutText {
 }
 
 impl LaidoutText {
+    /// How far down the text has to move for its *ink* to sit in the middle of
+    /// the box `size_in_lpxs` describes, instead of its line box.
+    ///
+    /// The box this text occupies runs from the first row's ascender down to
+    /// the last row's descender. The ink runs from the first row's cap line
+    /// down to the last row's baseline. A text face's ascender reaches further
+    /// above the cap line than its descender reaches below the baseline, so
+    /// the two centers do not coincide and the ink reads as sitting high. The
+    /// difference works out to `(descender + cap_height - ascender) / 2`
+    /// whatever the row count, because both boxes share everything in between.
+    ///
+    /// Returns `0.0` when the metrics are not trustworthy enough to move
+    /// anything: a face with no capital (icon and symbol fonts), or one whose
+    /// cap height claims to reach past its own ascender.
+    pub fn ink_center_offset_in_lpxs(&self) -> f32 {
+        let (Some(first), Some(last)) = (self.rows.first(), self.rows.last()) else {
+            return 0.0;
+        };
+        let ascender = first.ascender_in_lpxs;
+        let cap_height = first.cap_height_in_lpxs;
+        let descender = -last.descender_in_lpxs;
+        if cap_height <= 0.0 || cap_height > ascender {
+            return 0.0;
+        }
+        (descender + cap_height - ascender) * 0.5
+    }
+
     pub fn cursor_to_position(&self, cursor: Cursor) -> CursorPosition {
         let row_index = self.cursor_to_row_index(cursor);
         let row = &self.rows[row_index];
@@ -1113,6 +1289,9 @@ pub struct LaidoutRow {
     pub ascender_in_lpxs: f32,
     pub descender_in_lpxs: f32,
     pub line_gap_in_lpxs: f32,
+    /// Height of a capital above this row's baseline, or `0.0` when the row's
+    /// font has no capital to measure (see [`Font::cap_height_in_ems`]).
+    pub cap_height_in_lpxs: f32,
     pub line_spacing_scale: f32,
     pub glyphs: Vec<LaidoutGlyph>,
 }
@@ -1231,10 +1410,10 @@ impl LaidoutGlyph {
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_segments_for_line_breaking, parse_text_atlas_size_value, Layouter, Size,
-        LAYOUT_CACHE_MAX_TEXT_LEN, LAYOUT_CACHE_MULTILINE_LINE_COUNT,
-        LAYOUT_CACHE_MULTILINE_TEXT_LEN,
+        merge_segments_for_line_breaking, parse_text_atlas_size_value, LaidoutText, LayoutOptions,
+        Layouter, OwnedLayoutParams, Settings, Size, Style, LAYOUT_CACHE_MAX_BYTES,
     };
+    use std::rc::Rc;
     use unicode_segmentation::UnicodeSegmentation;
 
     #[test]
@@ -1326,18 +1505,394 @@ mod tests {
         assert_eq!(merged_segments(""), Vec::<String>::new());
     }
 
+    fn cache_test_params(text: &str) -> OwnedLayoutParams {
+        OwnedLayoutParams {
+            text: text.into(),
+            style: Style {
+                font_family_id: 0u64.into(),
+                font_size_in_pts: 12.0,
+                color: None,
+            },
+            options: LayoutOptions::default(),
+        }
+    }
+
+    /// Builds a synthetic cache entry so cache behavior can be exercised
+    /// without loading real fonts.
+    fn cache_test_result(text: &str) -> Rc<LaidoutText> {
+        Rc::new(LaidoutText {
+            text: text.into(),
+            size_in_lpxs: Size::new(0.0, 0.0),
+            rows: Vec::new(),
+            is_truncated: false,
+        })
+    }
+
     #[test]
-    fn skips_layout_cache_for_large_or_multiline_debug_text() {
-        assert!(Layouter::should_cache_text("fps 90.0"));
-        assert!(!Layouter::should_cache_text(
-            &"x".repeat(LAYOUT_CACHE_MAX_TEXT_LEN + 1)
+    fn layout_cache_admits_long_texts_and_hits_refresh_recency() {
+        let mut settings = Settings::default();
+        settings.cache_size = 3;
+        let mut layouter = Layouter::new(settings);
+
+        // Texts well beyond the old 512-byte admission limit must be cacheable.
+        // Each insert happens in its own frame generation so the working-set
+        // protection doesn't suppress eviction.
+        let long_a = "a".repeat(16 * 1024);
+        let long_b = "b".repeat(16 * 1024);
+        let long_c = "c".repeat(16 * 1024);
+        let long_d = "d".repeat(16 * 1024);
+        layouter.insert_cached_result(cache_test_params(&long_a), cache_test_result(&long_a));
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&long_b), cache_test_result(&long_b));
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&long_c), cache_test_result(&long_c));
+        layouter.advance_cache_generation();
+
+        // A cache hit must not re-layout (which would require loading fonts)
+        // and must refresh the entry's LRU position.
+        let hit = layouter.get_or_layout(cache_test_params(&long_a));
+        assert!(Rc::ptr_eq(
+            &hit,
+            &layouter
+                .cached_results
+                .get(&cache_test_params(&long_a))
+                .unwrap()
+                .result
         ));
 
-        let multiline = (0..LAYOUT_CACHE_MULTILINE_LINE_COUNT)
-            .map(|index| format!("line {index}: {}", "metric ".repeat(8)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(multiline.len() > LAYOUT_CACHE_MULTILINE_TEXT_LEN);
-        assert!(!Layouter::should_cache_text(&multiline));
+        // The cache is full, so inserting a fourth entry (in a later frame)
+        // evicts the least recently used one, which is now `long_b` rather
+        // than `long_a`.
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&long_d), cache_test_result(&long_d));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&long_a)));
+        assert!(!layouter
+            .cached_results
+            .contains_key(&cache_test_params(&long_b)));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&long_c)));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&long_d)));
+        assert_eq!(
+            layouter.cached_results.len(),
+            layouter.cache_lru_order.len()
+        );
+    }
+
+    #[test]
+    fn layout_cache_evicts_to_byte_budget() {
+        let mut layouter = Layouter::new(Settings::default());
+
+        // Three entries of ~40% of the budget each, inserted in separate frame
+        // generations: the third insert must push the total over the budget and
+        // evict the oldest entry.
+        let weight = LAYOUT_CACHE_MAX_BYTES * 2 / 5;
+        let text_a = "a".repeat(weight);
+        let text_b = "b".repeat(weight);
+        let text_c = "c".repeat(weight);
+        layouter.insert_cached_result(cache_test_params(&text_a), cache_test_result(&text_a));
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&text_b), cache_test_result(&text_b));
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&text_c), cache_test_result(&text_c));
+
+        assert!(!layouter
+            .cached_results
+            .contains_key(&cache_test_params(&text_a)));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&text_b)));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&text_c)));
+        assert!(layouter.cache_bytes <= LAYOUT_CACHE_MAX_BYTES);
+
+        // An entry heavier than the whole budget is still kept (as the sole
+        // survivor), so oversized texts don't re-layout on every draw.
+        let huge = "h".repeat(LAYOUT_CACHE_MAX_BYTES + 1);
+        layouter.advance_cache_generation();
+        layouter.insert_cached_result(cache_test_params(&huge), cache_test_result(&huge));
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&huge)));
+        assert_eq!(layouter.cached_results.len(), 1);
+    }
+
+    #[test]
+    fn layout_cache_protects_current_frame_working_set() {
+        let mut layouter = Layouter::new(Settings::default());
+
+        // A single frame whose visible texts collectively exceed the budget must
+        // keep them all cached; evicting them would make each one a guaranteed
+        // miss on every subsequent frame.
+        let weight = LAYOUT_CACHE_MAX_BYTES * 2 / 5;
+        let texts: Vec<String> = (0..4)
+            .map(|i| char::from(b'a' + i as u8).to_string().repeat(weight))
+            .collect();
+        for text in &texts {
+            layouter.insert_cached_result(cache_test_params(text), cache_test_result(text));
+        }
+        for text in &texts {
+            assert!(layouter.cached_results.contains_key(&cache_test_params(text)));
+        }
+
+        // Once a new frame starts without touching them, they become evictable
+        // and the budget is enforced again.
+        layouter.advance_cache_generation();
+        let fresh = "z".repeat(weight);
+        layouter.insert_cached_result(cache_test_params(&fresh), cache_test_result(&fresh));
+        assert!(layouter.cache_bytes <= LAYOUT_CACHE_MAX_BYTES);
+        assert!(layouter
+            .cached_results
+            .contains_key(&cache_test_params(&fresh)));
+    }
+
+    #[test]
+    fn layout_cache_reclaims_over_budget_memory_at_frame_boundaries() {
+        let mut layouter = Layouter::new(Settings::default());
+
+        // A frame draws texts that collectively exceed the budget; they are all
+        // kept for that frame.
+        let weight = LAYOUT_CACHE_MAX_BYTES * 2 / 5;
+        let texts: Vec<String> = (0..4)
+            .map(|i| char::from(b'a' + i as u8).to_string().repeat(weight))
+            .collect();
+        for text in &texts {
+            layouter.insert_cached_result(cache_test_params(text), cache_test_result(text));
+        }
+        assert!(layouter.cache_bytes > LAYOUT_CACHE_MAX_BYTES);
+
+        // The frame boundary right after that frame still protects its entries.
+        layouter.advance_cache_generation();
+        assert!(layouter.cache_bytes > LAYOUT_CACHE_MAX_BYTES);
+
+        // The boundary after the first frame that no longer draws them reclaims
+        // the excess without waiting for a new insert.
+        layouter.advance_cache_generation();
+        assert!(layouter.cache_bytes <= LAYOUT_CACHE_MAX_BYTES);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiline ellipsis: `max_rows: Some(n)` + `ellipsis: true` + `wrap` must
+    // wrap normally up to row n, fill row n to the width limit, and end it in
+    // "…" — the contract a two-line card caption stands on. These tests load
+    // the bundled fonts (as loader::tests does) because truncation decisions
+    // depend on real glyph advances.
+    // -----------------------------------------------------------------------
+
+    use super::BorrowedLayoutParams;
+    use crate::makepad_platform::SharedBytes;
+    use crate::text::font::FontId;
+    use crate::text::loader::{FontDefinition, FontFamilyDefinition};
+    use std::path::PathBuf;
+
+    const LATIN_FAMILY: u64 = 0xE111_00FA;
+    const CJK_FAMILY: u64 = 0xE111_00FB;
+
+    fn real_font_layouter() -> Layouter {
+        let mut layouter = Layouter::new(Settings::default());
+        let resources =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../widgets/resources");
+        for (family_id, font_id, file) in [
+            (LATIN_FAMILY, 0xE111_0001_u64, "IBMPlexSans-Text.ttf"),
+            (CJK_FAMILY, 0xE111_0002_u64, "LXGWWenKaiRegular.ttf"),
+        ] {
+            let data = SharedBytes::from_file_mmap_or_read(resources.join(file))
+                .expect("bundled font bytes should load");
+            let font_id: FontId = font_id.into();
+            layouter.define_font(
+                font_id,
+                FontDefinition {
+                    data,
+                    index: 0,
+                    ascender_fudge_in_ems: 0.0,
+                    descender_fudge_in_ems: 0.0,
+                    weight: None,
+                    variations: Vec::new(),
+                },
+            );
+            layouter.define_font_family(
+                family_id.into(),
+                FontFamilyDefinition {
+                    font_ids: vec![font_id],
+                    expected_member_count: 1,
+                },
+            );
+        }
+        layouter
+    }
+
+    fn wrapped_layout(
+        layouter: &mut Layouter,
+        family: u64,
+        text: &str,
+        max_width: f32,
+        max_rows: Option<usize>,
+        ellipsis: bool,
+    ) -> Rc<LaidoutText> {
+        layouter.get_or_layout(BorrowedLayoutParams {
+            text,
+            style: super::Style {
+                font_family_id: family.into(),
+                font_size_in_pts: 12.0,
+                color: None,
+            },
+            options: LayoutOptions {
+                max_width_in_lpxs: Some(max_width),
+                wrap: true,
+                max_rows,
+                ellipsis,
+                ..LayoutOptions::default()
+            },
+        })
+    }
+
+    /// The appended ellipsis glyphs are stamped with `cluster == text.len()`,
+    /// past every real grapheme — the one place a row can point beyond its
+    /// own text.
+    fn ends_with_ellipsis(text: &LaidoutText) -> bool {
+        let last_row = text.rows.last().expect("layout always yields a row");
+        last_row
+            .glyphs
+            .last()
+            .is_some_and(|glyph| glyph.cluster >= last_row.text.len())
+    }
+
+    #[test]
+    fn multiline_ellipsis_truncates_at_last_allowed_row() {
+        let mut layouter = real_font_layouter();
+        let text = "The quick brown fox jumps over the lazy dog and keeps running far beyond the fence";
+        let max_width = 120.0;
+
+        // Sanity: unrestricted, this text wraps past two rows at this width.
+        let free = wrapped_layout(&mut layouter, LATIN_FAMILY, text, max_width, None, false);
+        assert!(free.rows.len() > 2, "test text must overflow two rows");
+        assert!(!free.is_truncated);
+        assert!(!ends_with_ellipsis(&free));
+
+        let capped = wrapped_layout(&mut layouter, LATIN_FAMILY, text, max_width, Some(2), true);
+        assert_eq!(capped.rows.len(), 2, "exactly the allowed rows remain");
+        assert!(capped.is_truncated);
+        assert!(ends_with_ellipsis(&capped));
+        // The ellipsis row obeys the width limit it truncated for.
+        let last = capped.rows.last().unwrap();
+        assert!(
+            last.width_in_lpxs <= max_width + 0.01,
+            "last row ({}) must fit the bound ({})",
+            last.width_in_lpxs,
+            max_width
+        );
+        // The first row is untouched by truncation: identical to the free layout.
+        assert_eq!(capped.rows[0].text, free.rows[0].text);
+    }
+
+    #[test]
+    fn multiline_ellipsis_leaves_fitting_text_alone() {
+        let mut layouter = real_font_layouter();
+        let text = "Two short lines";
+        let laidout = wrapped_layout(&mut layouter, LATIN_FAMILY, text, 120.0, Some(2), true);
+        assert!(laidout.rows.len() <= 2);
+        assert!(!laidout.is_truncated, "text that fits must not be marked truncated");
+        assert!(!ends_with_ellipsis(&laidout), "no ellipsis on untruncated text");
+    }
+
+    #[test]
+    fn multiline_ellipsis_one_row_over_gets_ellipsis() {
+        let mut layouter = real_font_layouter();
+        // Find a prefix of words that lays out to exactly three rows, then cap
+        // at two: the minimal "one row over" case, measured in real advances
+        // instead of guessed.
+        let words: Vec<&str> =
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+                .split(' ')
+                .collect();
+        let max_width = 90.0;
+        let mut three_row_text = None;
+        for take in 1..=words.len() {
+            let candidate = words[..take].join(" ");
+            let free =
+                wrapped_layout(&mut layouter, LATIN_FAMILY, &candidate, max_width, None, false);
+            if free.rows.len() == 3 {
+                three_row_text = Some(candidate);
+                break;
+            }
+        }
+        let text = three_row_text.expect("some prefix must lay out to three rows");
+        let capped =
+            wrapped_layout(&mut layouter, LATIN_FAMILY, &text, max_width, Some(2), true);
+        assert_eq!(capped.rows.len(), 2);
+        assert!(capped.is_truncated);
+        assert!(ends_with_ellipsis(&capped));
+    }
+
+    #[test]
+    fn multiline_ellipsis_fills_last_row_by_grapheme() {
+        let mut layouter = real_font_layouter();
+        // The word that overflows row 2 is far wider than the row: word-wrap
+        // would carry it wholly to a (forbidden) third row and leave row 2
+        // ellipsized at a fraction of the width. The layouter instead fills
+        // the last allowed row grapheme-by-grapheme before truncating.
+        let text = "on and on Supercalifragilisticexpialidocious Supercalifragilisticexpialidocious";
+        let max_width = 110.0;
+        let capped = wrapped_layout(&mut layouter, LATIN_FAMILY, text, max_width, Some(2), true);
+        assert_eq!(capped.rows.len(), 2);
+        assert!(ends_with_ellipsis(&capped));
+        let last = capped.rows.last().unwrap();
+        assert!(
+            last.width_in_lpxs > max_width * 0.7,
+            "grapheme fill must use the row ({} of {})",
+            last.width_in_lpxs,
+            max_width
+        );
+        assert!(last.width_in_lpxs <= max_width + 0.01);
+    }
+
+    #[test]
+    fn multiline_ellipsis_truncates_cjk_on_grapheme_boundaries() {
+        let mut layouter = real_font_layouter();
+        // Unspaced CJK exercises the grapheme wrapping path end to end.
+        let text = "这是一个很长的中文标题它会先换到第二行然后在第二行的结尾处出现省略号而不是被裁掉";
+        let max_width = 140.0;
+        let capped = wrapped_layout(&mut layouter, CJK_FAMILY, text, max_width, Some(2), true);
+        assert_eq!(capped.rows.len(), 2);
+        assert!(capped.is_truncated);
+        assert!(ends_with_ellipsis(&capped));
+        // Every surviving glyph must still start on a char boundary of its
+        // row's text: truncation pops whole glyphs, never bytes.
+        for row in capped.rows.iter() {
+            for glyph in row.glyphs.iter().filter(|g| g.cluster < row.text.len()) {
+                assert!(
+                    row.text.is_char_boundary(glyph.cluster),
+                    "glyph cluster {} must be a char boundary",
+                    glyph.cluster
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_line_ellipsis_under_wrapping_flow() {
+        // `max_lines: 1` on a wrapping Label — the list-row configuration.
+        let mut layouter = real_font_layouter();
+        let text = "A single line that is much too long for the row it must fit into";
+        let capped = wrapped_layout(&mut layouter, LATIN_FAMILY, text, 100.0, Some(1), true);
+        assert_eq!(capped.rows.len(), 1);
+        assert!(capped.is_truncated);
+        assert!(ends_with_ellipsis(&capped));
+        assert!(capped.rows[0].width_in_lpxs <= 100.0 + 0.01);
+    }
+
+    #[test]
+    fn multiline_ellipsis_counts_explicit_newlines() {
+        let mut layouter = real_font_layouter();
+        let capped =
+            wrapped_layout(&mut layouter, LATIN_FAMILY, "one\ntwo\nthree", 200.0, Some(2), true);
+        assert_eq!(capped.rows.len(), 2);
+        assert!(capped.is_truncated, "a discarded third line is a truncation");
+        assert!(ends_with_ellipsis(&capped));
     }
 }
