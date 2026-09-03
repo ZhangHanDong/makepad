@@ -65,6 +65,20 @@ enum ScrollState {
         /// continues naturally through pagination.
         parked: bool,
     },
+    /// Synthetic momentum for a precision touchpad whose platform delivers raw,
+    /// phase-less axis deltas (Linux Wayland/X11): the OS sends no `Momentum`
+    /// stream, so the list decays the measured velocity itself once the fingers
+    /// stop. macOS keeps its native stream (`MomentumStream`), and a discrete
+    /// mouse wheel never enters this state.
+    WheelMomentum {
+        /// Smoothed velocity along the scroll axis, px/s.
+        velocity: f64,
+        /// Time of the last axis delta; momentum only takes over after
+        /// `wheel_scroll_idle_delay` without one.
+        last_input_time: f64,
+        last_frame_time: f64,
+        next_frame: NextFrame,
+    },
     Pulldown {
         next_frame: NextFrame,
         /// Overscroll offset when the bounce began.
@@ -430,6 +444,16 @@ pub struct PortalList {
     /// Per-ms velocity decay of a touch-drag flick; lower stops sooner (see `scroll_motion`).
     #[live(FLING_DECEL_RATE_PER_MS)]
     fling_decel: f64,
+    /// Per-60-Hz-frame velocity retention after a precision touchpad gesture ends on
+    /// a platform with no native momentum stream (see `ScrollState::WheelMomentum`).
+    #[live(0.94)]
+    wheel_scroll_friction: f64,
+    /// Seconds without a new axis event before synthetic touchpad momentum takes over.
+    #[live(0.045)]
+    wheel_scroll_idle_delay: f64,
+    /// Synthetic touchpad momentum stops below this speed (px/s).
+    #[live(5.0)]
+    wheel_scroll_minimum_velocity: f64,
     /// Where the OS trackpad momentum stream stands for this list (see `scroll_motion`).
     /// While it is `Live`, deltas move the list even though `scroll_state` stays `Stopped`.
     #[rust] momentum: MomentumStream,
@@ -898,7 +922,10 @@ impl PortalList {
                 // re-evaluates cleanly once the gesture settles.
                 let animation_owns_scroll = matches!(
                     self.scroll_state,
-                    ScrollState::Flick { .. } | ScrollState::Pulldown { .. } | ScrollState::Drag { .. }
+                    ScrollState::Flick { .. }
+                        | ScrollState::WheelMomentum { .. }
+                        | ScrollState::Pulldown { .. }
+                        | ScrollState::Drag { .. }
                 );
 
                 // When tail_range is true and we're not already at the end, we need to scroll
@@ -1579,6 +1606,7 @@ impl PortalList {
         matches!(
             self.scroll_state,
             ScrollState::Flick { parked: false, .. }
+                | ScrollState::WheelMomentum { .. }
                 | ScrollState::Pulldown { .. }
                 | ScrollState::ScrollingTo { .. }
                 | ScrollState::Tailing { .. }
@@ -2319,6 +2347,7 @@ impl Widget for PortalList {
             let animation_owns_scroll = matches!(
                 self.scroll_state,
                 ScrollState::Flick { parked: false, .. }
+                    | ScrollState::WheelMomentum { .. }
                     | ScrollState::Pulldown { .. }
                     | ScrollState::ScrollingTo { .. }
                     | ScrollState::Tailing { .. }
@@ -2392,6 +2421,7 @@ impl Widget for PortalList {
         let is_scroll_animating = matches!(
             self.scroll_state,
             ScrollState::Flick { parked: false, .. }
+                | ScrollState::WheelMomentum { .. }
                 | ScrollState::ScrollingTo { .. }
                 | ScrollState::Tailing { .. }
         ) || coasting_now;
@@ -2653,6 +2683,37 @@ impl Widget for PortalList {
                     }
                 }
             }
+            ScrollState::WheelMomentum {
+                velocity,
+                last_input_time,
+                last_frame_time,
+                next_frame,
+            } => {
+                if let Some(ne) = next_frame.is_event(event) {
+                    let frame_dt = (ne.time - *last_frame_time).clamp(1.0 / 240.0, 1.0 / 30.0);
+                    *last_frame_time = ne.time;
+                    *next_frame = cx.new_next_frame();
+                    if ne.time - *last_input_time >= self.wheel_scroll_idle_delay {
+                        *velocity *= self.wheel_scroll_friction.powf(frame_dt * 60.0);
+                        if velocity.abs() > self.wheel_scroll_minimum_velocity {
+                            let delta = *velocity * frame_dt;
+                            let before = (self.first_id, self.first_scroll);
+                            // Clips at the edges like the wheel deltas it continues.
+                            self.delta_top_scroll(cx, delta, true, false, 0.0, false, false);
+                            if (self.first_id, self.first_scroll) != before {
+                                self.area.redraw(cx);
+                            } else {
+                                // Pinned at an edge: nothing left to coast into.
+                                self.was_scrolling = false;
+                                self.scroll_state = ScrollState::Stopped;
+                            }
+                        } else {
+                            self.was_scrolling = false;
+                            self.scroll_state = ScrollState::Stopped;
+                        }
+                    }
+                }
+            }
             ScrollState::Pulldown { next_frame, x0, v0, clock, at_start, touch } => {
                 if let Some(ne) = next_frame.is_event(event) {
                     // The rubber-band bounce, seeded with the velocity that remained
@@ -2905,14 +2966,44 @@ impl Widget for PortalList {
                             self.delta_top_scroll(cx, delta, false, false, 0.0, false, true);
                             self.area.redraw(cx);
                         }
-                        // `None` (wheels) applies the delta directly and clips at the edges.
+                        // `None` (wheels, X11/Wayland touchpads, Windows) applies the delta
+                        // directly and clips at the edges. A Linux precision touchpad gets
+                        // synthetic momentum on top: Wayland/X11 send raw axis deltas with no
+                        // OS momentum stream, so once the fingers stop, the measured velocity
+                        // decays in `ScrollState::WheelMomentum`. macOS has its native stream
+                        // above, and a discrete mouse wheel never coasts.
                         _ => {
                             self.tail_range = false;
                             self.detect_tail_in_draw = true;
-                            self.was_scrolling = false;
                             self.momentum = MomentumStream::Idle;
                             self.bounce_overshoot = 0.0;
-                            self.scroll_state = ScrollState::Stopped;
+                            let use_touchpad_momentum =
+                                cfg!(target_os = "linux") && !e.is_mouse && delta != 0.0;
+                            self.was_scrolling = use_touchpad_momentum;
+                            if use_touchpad_momentum {
+                                match &mut self.scroll_state {
+                                    ScrollState::WheelMomentum {
+                                        velocity,
+                                        last_input_time,
+                                        ..
+                                    } => {
+                                        let dt = (e.time - *last_input_time).clamp(1.0 / 240.0, 0.05);
+                                        let measured = delta / dt;
+                                        *velocity = *velocity * 0.65 + measured * 0.35;
+                                        *last_input_time = e.time;
+                                    }
+                                    _ => {
+                                        self.scroll_state = ScrollState::WheelMomentum {
+                                            velocity: 0.0,
+                                            last_input_time: e.time,
+                                            last_frame_time: e.time,
+                                            next_frame: cx.new_next_frame(),
+                                        };
+                                    }
+                                }
+                            } else {
+                                self.scroll_state = ScrollState::Stopped;
+                            }
                             // Clip to the top and don't transition to pulldown; overscroll bounce
                             // is only for touch drag/flick.
                             self.delta_top_scroll(cx, delta, true, false, 0.0, false, true);
@@ -3050,12 +3141,23 @@ impl Widget for PortalList {
                         self.caught_fling = (!parked).then_some((fling.velocity, fe.time));
                         self.scroll_state = ScrollState::Stopped;
                     }
-
-                    // Handle selection when selectable, but not if clicking on interactive items
+                    if matches!(self.scroll_state, ScrollState::WheelMomentum { .. }) {
+                        // A synthetic touchpad coast is caught like a fling; nothing to
+                        // carry into a re-flick, the next gesture re-measures its speed.
+                        self.was_scrolling = false;
+                        self.scroll_state = ScrollState::Stopped;
+                    }
+                    // Handle selection when selectable, but not if clicking on interactive items.
+                    // A selectable list must still be draggable when the pointer does not hit
+                    // selectable text. Previously the outer `if` consumed every non-interactive
+                    // down event, even when `hit_test_selection` returned `None`, so blank-space
+                    // drags could never enter `ScrollState::Drag`.
                     let on_interactive = self.point_hits_interactive_item(cx, fe.abs);
+                    let mut started_selection = false;
                     if self.selectable && fe.is_primary_hit() && !on_interactive {
                         let hit = self.hit_test_selection(cx, fe.abs);
                         if let Some((item_id, char_idx)) = hit {
+                            started_selection = true;
                             cx.set_key_focus(self.area);
                             if fe.device.is_touch() {
                                 cx.hide_clipboard_actions();
@@ -3069,10 +3171,14 @@ impl Widget for PortalList {
                             });
                             self.update_item_selections(cx);
                         }
-                    } else if self.drag_scrolling
-                        && fe.is_primary_hit()
-                        && cx.is_scrolling_allowed_within(&self.area)
-                    {
+                    }
+                    let scrolling_allowed = cx.is_scrolling_allowed_within(&self.area);
+                    if should_begin_drag_scroll(
+                        started_selection,
+                        self.drag_scrolling,
+                        fe.is_primary_hit(),
+                        scrolling_allowed,
+                    ) {
                         // Always enter drag state to enable drag-to-scroll even over
                         // interactive widgets (buttons, links, etc.). The drag threshold
                         // prevents micro-scrolling during taps/clicks, and child widgets
@@ -3299,6 +3405,37 @@ impl Widget for PortalList {
     }
 }
 
+fn should_begin_drag_scroll(
+    started_selection: bool,
+    drag_scrolling: bool,
+    is_primary_hit: bool,
+    scrolling_allowed: bool,
+) -> bool {
+    !started_selection && drag_scrolling && is_primary_hit && scrolling_allowed
+}
+
+#[cfg(test)]
+mod drag_scroll_tests {
+    use super::should_begin_drag_scroll;
+
+    #[test]
+    fn selectable_blank_space_can_begin_drag_scroll() {
+        assert!(should_begin_drag_scroll(false, true, true, true));
+    }
+
+    #[test]
+    fn active_text_selection_keeps_ownership_of_the_gesture() {
+        assert!(!should_begin_drag_scroll(true, true, true, true));
+    }
+
+    #[test]
+    fn drag_scroll_respects_disabled_and_blocked_states() {
+        assert!(!should_begin_drag_scroll(false, false, true, true));
+        assert!(!should_begin_drag_scroll(false, true, false, true));
+        assert!(!should_begin_drag_scroll(false, true, true, false));
+    }
+}
+
 impl PortalListRef {
     /// Sets the first item to be shown and its scroll offset.
     pub fn set_first_id_and_scroll(&self, id: usize, s: f64) {
@@ -3433,6 +3570,10 @@ impl PortalListRef {
             ScrollState::Flick { fling, .. } => {
                 state = "Flick";
                 delta = fling.velocity;
+            }
+            ScrollState::WheelMomentum { velocity: pending, .. } => {
+                state = "WheelMomentum";
+                delta = *pending;
             }
             ScrollState::Pulldown { .. } => {
                 state = "Pulldown";

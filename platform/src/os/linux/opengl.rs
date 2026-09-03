@@ -46,20 +46,28 @@ impl DrawVars {
         if let Some(io_self) = value.as_object() {
             {
                 let cx = vm.host.cx();
-                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&io_self) {
+                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&(vm.bx.heap.heap_key(), io_self)) {
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
             }
 
-            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self);
+            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self)
+                // Scope the function-hash dedup to the owning heap: two objects in
+                // DIFFERENT heaps can share identical fns (a Splash isolate's stock
+                // Button vs the app's themed one) while collecting different io, so a
+                // cross-heap hit reuses a shader whose instance mapping doesn't match
+                // this object -- fills and text then read from the wrong slots and
+                // render invisibly. Within one heap the fn hash implies the same
+                // prototype chain, so the dedup stays valid there.
+                .bytes_append(&vm.bx.heap.heap_key().to_le_bytes());
             {
                 let cx = vm.host.cx();
                 if let Some(&shader_id) = cx.draw_shaders.cache_functions_to_shader.get(&fnhash) {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
@@ -181,7 +189,7 @@ impl DrawVars {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     cx.draw_shaders
                         .cache_functions_to_shader
                         .insert(fnhash, shader_id);
@@ -263,7 +271,7 @@ impl DrawVars {
             let shader_id = DrawShaderId { index };
             cx.draw_shaders
                 .cache_object_id_to_shader
-                .insert(io_self, shader_id);
+                .insert((vm.bx.heap.heap_key(), io_self), shader_id);
             cx.draw_shaders
                 .cache_functions_to_shader
                 .insert(fnhash, shader_id);

@@ -44,6 +44,25 @@ pub struct DrawVars {
     pub draw_shader_id: Option<DrawShaderId>,
     #[rust]
     pub geometry_id: Option<GeometryId>,
+    /// Identity of the script heap whose objects this DrawVars was first
+    /// applied from (0 = not yet applied). A widget's shader objects live in
+    /// exactly one heap — the main VM's, or one Splash isolate's — and every
+    /// apply resolves fields against the ACTIVE vm's heap. Tree-wide walks
+    /// (`Apply::ScriptReapply`, dock/item template re-applies) run on the main
+    /// VM but descend into isolate-minted subtrees; without this guard such a
+    /// walk assigns the DrawVars a shader compiled from whatever unrelated
+    /// main-heap object the raw indices happen to hit, and subsequent instance
+    /// fills read through the wrong mapping — the widget then draws with
+    /// zeroed colors, i.e. renders blank. Kept BEFORE `dyn_uniforms`: the
+    /// `as_slice` layout hack requires nothing between `dyn_instances` and the
+    /// struct's trailing live instance fields.
+    #[rust]
+    pub owner_heap: usize,
+    /// Padding so `owner_heap` keeps embedding structs (e.g. `DrawText`) at
+    /// their 16-byte-aligned sizes; see the `draw_text_size_stays_16_byte_aligned`
+    /// test in makepad-draw.
+    #[rust]
+    pub owner_heap_pad: usize,
     #[rust([0f32; DRAW_CALL_DYN_UNIFORMS])]
     pub dyn_uniforms: [f32; DRAW_CALL_DYN_UNIFORMS],
     #[rust]
@@ -63,6 +82,21 @@ impl ScriptHook for DrawVars {
         value: ScriptValue,
     ) {
         DrawVars::prune_stale_object_shader_cache(vm);
+
+        // Cross-heap firewall: only the heap that minted this DrawVars'
+        // objects may apply to it (see `owner_heap`). The first real apply
+        // claims ownership; later applies from OTHER vms (e.g. a main-VM
+        // ScriptReapply walking into a Splash isolate's widgets) are skipped
+        // wholesale — their field lookups would resolve against the wrong
+        // heap and clobber the shader binding and instance data.
+        let hk = vm.bx.heap.heap_key();
+        if self.owner_heap == 0 {
+            if !apply.is_default() {
+                self.owner_heap = hk;
+            }
+        } else if self.owner_heap != hk {
+            return;
+        }
 
         if !apply.is_default() && !apply.is_animate() {
             self.compile_shader(vm, apply, value);
@@ -970,25 +1004,39 @@ impl DrawVars {
         if let Some(io_self) = value.as_object() {
             {
                 let cx = vm.host.cx();
-                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&io_self) {
+                if let Some(&shader_id) = cx.draw_shaders.cache_object_id_to_shader.get(&(vm.bx.heap.heap_key(), io_self)) {
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
             }
 
-            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self);
+            let fnhash = DrawVars::compute_shader_functions_hash(&vm.bx.heap, io_self)
+                // Scope the function-hash dedup to the owning heap: two objects in
+                // DIFFERENT heaps can share identical fns (a Splash isolate's stock
+                // Button vs the app's themed one) while collecting different io, so a
+                // cross-heap hit reuses a shader whose instance mapping doesn't match
+                // this object -- fills and text then read from the wrong slots and
+                // render invisibly. Within one heap the fn hash implies the same
+                // prototype chain, so the dedup stays valid there.
+                .bytes_append(&vm.bx.heap.heap_key().to_le_bytes());
             {
                 let cx = vm.host.cx();
                 if let Some(&shader_id) = cx.draw_shaders.cache_functions_to_shader.get(&fnhash) {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     self.finalize_cached_shader(vm, shader_id);
                     return;
                 }
             }
 
+            log!(
+                "[SHDBG] compiling shader io_self={:?} heap={:#x} fnhash={:?}",
+                io_self,
+                vm.bx.heap.heap_key(),
+                fnhash
+            );
             let mut output = ShaderOutput::default();
             output.backend = ShaderBackend::Glsl;
             output.use_vulkan = false;
@@ -1054,7 +1102,7 @@ impl DrawVars {
                     let cx = vm.host.cx_mut();
                     cx.draw_shaders
                         .cache_object_id_to_shader
-                        .insert(io_self, shader_id);
+                        .insert((vm.bx.heap.heap_key(), io_self), shader_id);
                     cx.draw_shaders
                         .cache_functions_to_shader
                         .insert(fnhash, shader_id);
@@ -1104,7 +1152,7 @@ impl DrawVars {
             let shader_id = DrawShaderId { index };
             cx.draw_shaders
                 .cache_object_id_to_shader
-                .insert(io_self, shader_id);
+                .insert((vm.bx.heap.heap_key(), io_self), shader_id);
             cx.draw_shaders
                 .cache_functions_to_shader
                 .insert(fnhash, shader_id);
@@ -1121,14 +1169,21 @@ impl DrawVars {
     pub fn compute_shader_functions_hash(heap: &ScriptHeap, obj: ScriptObject) -> LiveId {
         let mut hash = LiveId(LiveId::SEED);
 
-        // Walk the prototype chain to collect all functions
+        // Walk the prototype chain to collect all functions AND the io
+        // signature. Functions alone are NOT a safe dedup key: two widgets can
+        // share identical fn ASTs while declaring different io (a stateless
+        // Label's draw_text vs a Button's draw_text with hover/down/disabled
+        // instances — the fns are inherited unchanged from the DrawText base).
+        // Deduping on fns alone binds one widget to the other's shader, whose
+        // instance MAPPING doesn't match this object — instance fills then
+        // error/miss and the widget draws with zeroed colors.
         let mut current = Some(obj);
         while let Some(cur_obj) = current {
             // Iterate through the object's map entries
             for (key, value) in heap.map_ref(cur_obj).iter() {
-                // Check if the value is a function object
-                if let Some(fn_obj) = value.value.as_object() {
-                    if let Some(fn_ptr) = heap.as_fn(fn_obj) {
+                if let Some(value_obj) = value.value.as_object() {
+                    // Function member: hash name + code pointer
+                    if let Some(fn_ptr) = heap.as_fn(value_obj) {
                         // Hash the key (method name)
                         if let Some(key_id) = key.as_id() {
                             hash = hash.id_append(key_id);
@@ -1142,6 +1197,14 @@ impl DrawVars {
                             }
                             _ => (),
                         }
+                    }
+                    // Shader io declaration (instance/uniform/varying/...):
+                    // hash name + io kind so differing io sets never collide.
+                    else if let Some(io_type) = heap.as_shader_io(value_obj) {
+                        if let Some(key_id) = key.as_id() {
+                            hash = hash.id_append(key_id);
+                        }
+                        hash = hash.bytes_append(&io_type.to_u32().to_le_bytes());
                     }
                 }
             }

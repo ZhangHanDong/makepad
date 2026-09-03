@@ -871,6 +871,8 @@ pub struct FingerScrollEvent {
     pub digit_id: DigitId,
     pub abs: Vec2d,
     pub scroll: Vec2d,
+    /// True for a discrete mouse wheel, false for a precision touchpad axis.
+    pub is_mouse: bool,
     pub device: DigitDevice,
     pub modifiers: KeyModifiers,
     pub time: f64,
@@ -1099,6 +1101,7 @@ impl Event {
                         time: e.time,
                         scroll: e.scroll,
                         phase: e.phase,
+                        is_mouse: e.is_mouse,
                     });
                 }
             }

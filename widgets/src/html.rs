@@ -630,6 +630,18 @@ impl Html {
 }
 
 impl Widget for Html {
+    /// `Html` is a text container, not a click target.
+    ///
+    /// Without this it inherits `Widget::is_interactive`'s `true`, which makes a
+    /// selectable `PortalList` treat the whole body as something that owns the
+    /// press and refuse to begin a drag-selection over it. `Markdown` — the
+    /// other `TextFlow` wrapper — already returns `false`, as does `TextFlow`
+    /// itself; this brings `Html` in line with both. Links inside still report
+    /// interactive in their own right.
+    fn is_interactive(&self) -> bool {
+        false
+    }
+
     fn handle_event(&mut self, cx: &mut Cx, event: &Event, scope: &mut Scope) {
         // Route clicks on the summary line to the matching FoldButton so the
         // whole summary toggles, not just the triangle. Hit-test on the

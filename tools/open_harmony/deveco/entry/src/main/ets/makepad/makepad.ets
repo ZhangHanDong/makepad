@@ -34,13 +34,14 @@ export class NativeLabelState {
 }
 
 export interface NativeTextInputHost {
-  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean): void;
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean, glass: boolean): void;
   updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void;
   detachNativeTextInput(inputId: string): void;
   setNativeTextInputText(inputId: string, text: string, programmatic: boolean): void;
   setNativeTextInputPlaceholder(inputId: string, placeholder: string): void;
   setNativeTextInputEditable(inputId: string, editable: boolean): void;
   setNativeTextInputSecure(inputId: string, secure: boolean): void;
+  setNativeTextInputGlass(inputId: string, glass: boolean): void;
   focusNativeTextInput(inputId: string): void;
   blurNativeTextInput(inputId: string): void;
   selectAllNativeTextInput(inputId: string): void;
@@ -66,6 +67,7 @@ export class NativeTextInputState {
   placeholder: string = '';
   editable: boolean = true;
   secure: boolean = false;
+  glass: boolean = false;
   left: number = 0;
   top: number = 0;
   width: number = 1;
@@ -161,8 +163,8 @@ export class ArkGlue{
     this.hideTextInput();
   }
 
-  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean): void {
-    this.nativeTextInputHost?.createNativeTextInput(inputId, text, placeholder, editable, secure);
+  createNativeTextInput(inputId: string, text: string, placeholder: string, editable: boolean, secure: boolean, glass: boolean): void {
+    this.nativeTextInputHost?.createNativeTextInput(inputId, text, placeholder, editable, secure, glass);
   }
 
   updateNativeTextInput(inputId: string, left: number, top: number, width: number, height: number, visible: boolean): void {
@@ -187,6 +189,10 @@ export class ArkGlue{
 
   setNativeTextInputSecure(inputId: string, secure: boolean): void {
     this.nativeTextInputHost?.setNativeTextInputSecure(inputId, secure);
+  }
+
+  setNativeTextInputGlass(inputId: string, glass: boolean): void {
+    this.nativeTextInputHost?.setNativeTextInputGlass(inputId, glass);
   }
 
   focusNativeTextInput(inputId: string): void {

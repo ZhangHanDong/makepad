@@ -1977,6 +1977,7 @@ impl Cx {
                             placeholder,
                             editable,
                             secure,
+                            glass: _,
                         },
                     ) => {
                         self.os.native_hosts.entry(id).or_insert_with(|| {
@@ -2059,6 +2060,7 @@ impl Cx {
                             input.set_secure(secure);
                         }
                     }
+                    NativeHostPropUpdate::TextInputGlass { .. } => {}
                     NativeHostPropUpdate::LabelText { text } => {
                         if let Some(label) =
                             self.os.native_hosts.get_mut(&id).and_then(|host| {

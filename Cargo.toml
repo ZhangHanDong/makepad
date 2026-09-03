@@ -49,6 +49,7 @@ workspace.members = [
     "examples/splash",
     "examples/slides",
     "examples/isolate",
+    "examples/isolate-portal",
     "examples/uizoo",
     "examples/video_player",
     "examples/video_codec_test",

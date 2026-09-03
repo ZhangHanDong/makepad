@@ -90,7 +90,11 @@ pub struct CxDrawShaders {
     pub const_table_mode: Option<bool>,
 
     pub cache_object_reuse_epoch_seen: u64,
-    pub cache_object_id_to_shader: HashMap<ScriptObject, DrawShaderId>,
+    /// Keyed by (owning heap identity, object) — a raw `ScriptObject` is just an
+    /// arena index, and each Splash isolate VM numbers its own heap from zero,
+    /// so an isolate's draw object can collide with an unrelated main-heap
+    /// entry and silently reuse a shader with a different instance layout.
+    pub cache_object_id_to_shader: HashMap<(usize, ScriptObject), DrawShaderId>,
     pub cache_functions_to_shader: LiveIdMap<LiveId, DrawShaderId>,
     pub cache_code_to_shader: HashMap<CxDrawShaderCode, DrawShaderId>,
     //pub ptr_to_item: HashMap<DrawShaderPtr, CxDrawShaderItem>,
