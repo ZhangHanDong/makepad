@@ -59,7 +59,6 @@ workspace.members = [
     "examples/modal_footprint",
     "examples/vector",
     "examples/aichat",
-    "examples/aichat-agent2app",
     "examples/pdf",
     "examples/shader",
     "examples/raytrace",
@@ -135,7 +134,6 @@ workspace.members = [
     "tools/cargo_makepad",
     # === fork-local (ZhangHanDong/makepad) ===
     "tools/canvas",
-    "libs/makepad_ai",
     # === OSM PBF -> tile archive + nav artifact bake passes (CLI + in-app) ===
     "libs/map_build",
     "tools/map_tiles",
@@ -262,13 +260,6 @@ workspace.resolver = "2"
 bitflags = { path = "libs/bitflags" }
 smallvec = { path = "libs/smallvec" }
 windows-link = { path = "libs/windows/windows-link" }
-
-[patch."https://github.com/ZhangHanDong/makepad.git"]
-# External kits can depend on the fork's git `dev` branch, while this
-# workspace still builds against its local Makepad crates. Without this patch,
-# Cargo pulls a second makepad-widgets/makepad-script graph and widget types no
-# longer match the local app.
-makepad-widgets = { path = "widgets" }
 
 [profile.small]
 inherits = "release"

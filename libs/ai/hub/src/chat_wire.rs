@@ -89,6 +89,10 @@ pub enum ProviderKind {
     CodexCli,
     /// The `grok` CLI on the broker host ([`crate::providers::grok_cli`]).
     GrokCli,
+    /// An octos agent host on the LAN, reached over HTTP (`POST /chat`, SSE
+    /// reply; [`crate::providers::octos`]). The host owns the conversation
+    /// and fronts its own model (e.g. Moonshot); the app is a thin client.
+    Octos,
 }
 
 /// Where the model actually runs. `Local` = our own ai-hub fleet on the
@@ -114,13 +118,14 @@ impl Locality {
 impl ProviderKind {
     /// Every kind the broker can be asked for, in the order the providers
     /// route lists them.
-    pub const ALL: [ProviderKind; 6] = [
+    pub const ALL: [ProviderKind; 7] = [
         ProviderKind::FleetQwen,
         ProviderKind::OpenAi,
         ProviderKind::Grok,
         ProviderKind::ClaudeCli,
         ProviderKind::CodexCli,
         ProviderKind::GrokCli,
+        ProviderKind::Octos,
     ];
 
     pub fn slug(&self) -> &'static str {
@@ -131,6 +136,7 @@ impl ProviderKind {
             ProviderKind::ClaudeCli => "claude-cli",
             ProviderKind::CodexCli => "codex-cli",
             ProviderKind::GrokCli => "grok-cli",
+            ProviderKind::Octos => "octos",
         }
     }
 
@@ -142,13 +148,14 @@ impl ProviderKind {
             "claude-cli" => Some(ProviderKind::ClaudeCli),
             "codex-cli" => Some(ProviderKind::CodexCli),
             "grok-cli" => Some(ProviderKind::GrokCli),
+            "octos" => Some(ProviderKind::Octos),
             _ => None,
         }
     }
 
     pub fn locality(self) -> Locality {
         match self {
-            ProviderKind::FleetQwen => Locality::Local,
+            ProviderKind::FleetQwen | ProviderKind::Octos => Locality::Local,
             _ => Locality::Cloud,
         }
     }
