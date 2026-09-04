@@ -8,7 +8,7 @@ use {
     std::any::Any,
     std::cell::RefCell,
     std::collections::{HashMap, VecDeque},
-    std::sync::atomic::{AtomicU64, Ordering},
+    std::sync::atomic::{AtomicU64, AtomicU8, Ordering},
 };
 
 static SCRIPT_ASYNC_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -31,6 +31,30 @@ impl ScriptAsyncId {
 pub struct SplashVmId(pub u64);
 
 pub const MAIN_SPLASH_VM_ID: SplashVmId = SplashVmId(0);
+
+/// The widget theme a Splash isolate boots with. A host picks its own theme
+/// after `theme_mod`, which an isolate's prelude never sees, so it says here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum SplashTheme {
+    #[default]
+    Dark,
+    Light,
+    Skeleton,
+}
+
+static SPLASH_THEME: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_splash_theme(theme: SplashTheme) {
+    SPLASH_THEME.store(theme as u8, Ordering::Relaxed);
+}
+
+fn splash_theme() -> SplashTheme {
+    match SPLASH_THEME.load(Ordering::Relaxed) {
+        1 => SplashTheme::Light,
+        2 => SplashTheme::Skeleton,
+        _ => SplashTheme::Dark,
+    }
+}
 
 thread_local! {
     /// Splash isolate VMs whose owning `Splash` widget has been dropped, awaiting
@@ -238,13 +262,6 @@ struct CxWidgetAsync {
     /// dropped instead of misrouted. Keys are only added once their isolate is
     /// gone and removed again if a later heap is allocated at the same address.
     dead_heaps: std::collections::HashSet<usize>,
-    /// Theme id (under `mod.themes.*`) that newly-allocated Splash isolate VMs
-    /// select before their widgets module is built. `LiveId(0)` = leave the
-    /// stock default (desktop dark). A light-themed host app MUST set this
-    /// (`Cx::set_splash_isolate_theme(id!(light))`): the isolate's stock dark
-    /// palette renders near-white text on the host's light surfaces, so
-    /// splash content looks blank while actually drawing white-on-white.
-    splash_isolate_theme: LiveId,
 }
 
 #[derive(Default)]
@@ -366,22 +383,11 @@ pub trait CxSplashVmExt {
     /// down while widgets it minted were still in the tree. Such a call must be
     /// dropped, never redirected — see the note on the impl.
     fn script_ref_vm_id(&mut self, script_ref: &ScriptObjectRef) -> Option<SplashVmId>;
-    /// Select the theme (`id!(light)` / `id!(dark)` / `id!(skeleton)`) that
-    /// FUTURE Splash isolate VMs build their widgets with. Call once at app
-    /// startup, before any Splash content evaluates; already-allocated
-    /// isolates keep the theme they were built with. Light-themed apps must
-    /// call this or isolate content renders in the stock dark palette —
-    /// near-white text that is invisible on light surfaces.
-    fn set_splash_isolate_theme(&mut self, theme: LiveId);
 }
 
 impl CxSplashVmExt for Cx {
     fn alloc_splash_vm(&mut self) -> SplashVmId {
         self.alloc_splash_vm_with_network(false)
-    }
-
-    fn set_splash_isolate_theme(&mut self, theme: LiveId) {
-        self.global::<CxWidgetAsync>().splash_isolate_theme = theme;
     }
 
     fn alloc_splash_vm_with_network(&mut self, network_enabled: bool) -> SplashVmId {
@@ -390,7 +396,6 @@ impl CxSplashVmExt for Cx {
         // tracks the number of live Splash widgets rather than accumulating.
         gc_dead_splash_isolates(self);
 
-        let splash_theme = self.global::<CxWidgetAsync>().splash_isolate_theme;
         let id = {
             let state = self.global::<CxWidgetAsync>();
             if state.isolated_vms.next_id == 0 {
@@ -413,26 +418,15 @@ impl CxSplashVmExt for Cx {
                 bx: Box::new(ScriptVmBase::new()),
             };
             crate::makepad_draw::makepad_platform::script::script_mod(&mut vm);
-            // Same modules `crate::script_mod` registers, but with a seam
-            // between the theme registry and the widgets module: the widgets
-            // prelude snapshots `mod.theme` when it is built, so a host that
-            // wants light-themed Splash content must select the theme HERE —
-            // evaluating `mod.theme = ...` later silently re-binds nothing.
             crate::theme_mod(&mut vm);
-            {
-                use crate::makepad_script::script;
-                match splash_theme {
-                    t if t == live_id!(light) => {
-                        vm.eval(script! { mod.theme = mod.themes.light });
-                    }
-                    t if t == live_id!(dark) => {
-                        vm.eval(script! { mod.theme = mod.themes.dark });
-                    }
-                    t if t == live_id!(skeleton) => {
-                        vm.eval(script! { mod.theme = mod.themes.skeleton });
-                    }
-                    _ => {} // LiveId(0): keep the stock default
+            match splash_theme() {
+                SplashTheme::Light => {
+                    vm.eval(crate::makepad_script::script! { mod.theme = mod.themes.light });
                 }
+                SplashTheme::Skeleton => {
+                    vm.eval(crate::makepad_script::script! { mod.theme = mod.themes.skeleton });
+                }
+                SplashTheme::Dark => {}
             }
             crate::widgets_mod(&mut vm);
             crate::splash::register_agent_module(&mut vm);
