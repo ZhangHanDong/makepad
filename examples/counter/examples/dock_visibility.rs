@@ -9,6 +9,10 @@ script_mod! {
     use mod.widgets.*
 
     let Panel = View{
+        // Retain each tab's draw list as Robrix's cached room panes do.
+        // Without this, a redraw invalidates inactive Areas and cannot exercise
+        // the overlapping positive-geometry regression.
+        new_batch: true
         width: Fill height: Fill flow: Down spacing: 8
         padding: Inset{left: 20 top: 20}
         send := Button{text: "Send" width: 100 height: 40}
