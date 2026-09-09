@@ -2716,6 +2716,134 @@ mod tests {
     }
     impl Widget for FindDockRefs {}
 
+    #[derive(Script, ScriptHook, Widget)]
+    struct BorrowedDockWrapper {
+        #[wrap]
+        #[live]
+        dock: WidgetRef,
+    }
+    impl Widget for BorrowedDockWrapper {}
+
+    fn assert_borrowed_projection(tree: &WidgetTree, cx: &Cx, snapshot: bool, sends: usize) {
+        if snapshot {
+            let rows = tree.snapshot(cx);
+            assert_eq!(rows.iter().filter(|row| row.id == "send").count(), sends,
+                "the indexed descendants must remain inspectable during the borrow");
+            assert!(rows.iter().all(|row| !row.visible), "unavailable policy must fail closed");
+            assert!(rows.iter().any(|row| !row.enabled && row.width == 0 && row.height == 0
+                && row.text.is_none()), "unavailable metadata must retain a disabled inspection row");
+        } else {
+            assert!(tree.query_rects(cx, "").is_empty(), "unavailable policy must expose no actionable rectangles");
+        }
+    }
+
+    fn borrowed_body_projection(snapshot: bool) {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let body = dock.items[id!(tab_a)].1.clone();
+        let (_root, tree) = indexed_dock(dock);
+        let before = tree.snapshot(&cx);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+        let borrowed = body.borrow_mut::<AreaWidget>().unwrap();
+        assert_borrowed_projection(&tree, &cx, snapshot, 2);
+        drop(borrowed);
+        assert_eq!(tree.snapshot(&cx).len(), before.len());
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[0].widget_uid().0.to_string()]);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
+    #[test]
+    fn interaction_visibility_borrowed_projection_body_snapshot() { borrowed_body_projection(true); }
+    #[test]
+    fn interaction_visibility_borrowed_projection_body_query_rects() { borrowed_body_projection(false); }
+
+    fn borrowed_wrapper_projection(snapshot: bool, find: bool) {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (left, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let left = WidgetRef::new_with_inner(Box::new(left));
+        let root = if find {
+            let (right, _) = retained_tabs(&mut cx, &owner, &[id!(tab_c), id!(tab_d)]);
+            WidgetRef::new_with_inner(Box::new(FindDockRefs {
+                uid: WidgetUid::new(), left: left.clone(),
+                right: WidgetRef::new_with_inner(Box::new(right)),
+            }))
+        } else {
+            WidgetRef::new_with_inner(Box::new(BorrowedDockWrapper { dock: left.clone() }))
+        };
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(wrapped), root.clone(), None);
+        let before = tree.snapshot(&cx);
+        let visible_before = visible_send_uids(&tree, &cx);
+        assert_eq!(visible_before.len(), if find { 2 } else { 1 });
+        let borrowed = left.borrow_mut::<Dock>().unwrap();
+        assert_borrowed_projection(&tree, &cx, snapshot, if find { 4 } else { 2 });
+        drop(borrowed);
+        assert_eq!(tree.snapshot(&cx).len(), before.len());
+        assert_eq!(visible_send_uids(&tree, &cx), visible_before);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), visible_before.len());
+    }
+
+    #[test]
+    fn interaction_visibility_borrowed_projection_wrap_snapshot() { borrowed_wrapper_projection(true, false); }
+    #[test]
+    fn interaction_visibility_borrowed_projection_wrap_query_rects() { borrowed_wrapper_projection(false, false); }
+    #[test]
+    fn interaction_visibility_borrowed_projection_find_snapshot() { borrowed_wrapper_projection(true, true); }
+    #[test]
+    fn interaction_visibility_borrowed_projection_find_query_rects() { borrowed_wrapper_projection(false, true); }
+
+    fn borrowed_header_projection(snapshot: bool) {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let headers = retained_headers(&mut dock, &mut cx, &owner, id!(root), &[id!(tab_a), id!(tab_b)]);
+        let (_root, tree) = indexed_dock(dock);
+        let before = tree.snapshot(&cx);
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 2);
+        let borrowed = headers[1].borrow_mut::<AreaWidget>().unwrap();
+        assert_borrowed_projection(&tree, &cx, snapshot, 2);
+        drop(borrowed);
+        assert_eq!(tree.snapshot(&cx).len(), before.len());
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 2);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
+    #[test]
+    fn interaction_visibility_borrowed_projection_header_snapshot() { borrowed_header_projection(true); }
+    #[test]
+    fn interaction_visibility_borrowed_projection_header_query_rects() { borrowed_header_projection(false); }
+
+    #[test]
+    fn interaction_visibility_borrowed_projection_header_metadata() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let headers = retained_headers(&mut dock, &mut cx, &owner, id!(root), &[id!(tab_a), id!(tab_b)]);
+        let borrowed = headers[1].borrow_mut::<AreaWidget>().unwrap();
+        let bar = &dock.tab_bars[id!(root)].tab_bar;
+        assert!(bar.interaction_tab_rect(&cx, id!(tab_b)).is_none());
+        assert!(bar.tab_rect(&cx, id!(tab_b)).is_none());
+        assert_eq!(dock.compact_dump(&cx).tab_headers.len(), 1);
+        assert_eq!(dock.interaction_dump(&cx).tab_headers.len(), 1);
+        drop(borrowed);
+        assert_eq!(dock.compact_dump(&cx).tab_headers.len(), 2);
+        assert_eq!(dock.interaction_dump(&cx).tab_headers.len(), 2);
+    }
+
+    #[test]
+    fn interaction_visibility_borrowed_projection_shared_metadata() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (_root, tree) = indexed_dock(dock);
+        let before = visible_send_uids(&tree, &cx);
+        let _borrowed = sends[0].borrow::<AreaWidget>().unwrap();
+        assert_eq!(visible_send_uids(&tree, &cx), before, "metadata reads need no exclusive borrow");
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
     #[test]
     fn interaction_visibility_find_refs_propagate_unavailable() {
         let mut cx = init_cx();

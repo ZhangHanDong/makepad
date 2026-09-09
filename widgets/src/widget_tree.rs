@@ -102,6 +102,13 @@ pub struct WidgetTree {
     inner: RefCell<WidgetTreeInner>,
 }
 
+struct InteractionVisibility {
+    // Metadata may delegate through a WidgetRef whose policy was unavailable.
+    // This is separate from visibility: ordinary hidden nodes remain readable.
+    available: Vec<bool>,
+    visible: Vec<bool>,
+}
+
 #[derive(Default)]
 struct WidgetTreeInner {
     // Hot path (dense query index)
@@ -2129,12 +2136,12 @@ impl WidgetTree {
         self.inner.borrow().root_uid
     }
 
-    fn interaction_edge_visibility(inner: &WidgetTreeInner) -> Vec<bool> {
+    fn interaction_edge_visibility(inner: &WidgetTreeInner) -> (Vec<bool>, Vec<bool>) {
         let mut allowed = vec![true; inner.nodes.len()];
-        let mut unavailable = HashSet::new();
+        let mut available = vec![true; inner.nodes.len()];
         for (parent, node) in inner.nodes.iter().enumerate() {
             let Some(widget) = node.widget.upgrade() else {
-                unavailable.insert(parent as u32);
+                available[parent] = false;
                 continue;
             };
             if !widget.try_interaction_child_visibility(&mut |uid, visible| {
@@ -2145,25 +2152,27 @@ impl WidgetTree {
                     }
                 }
             }) {
-                unavailable.insert(parent as u32);
+                available[parent] = false;
             }
         }
         for (index, node) in inner.nodes.iter().enumerate() {
-            if unavailable.contains(&node.parent) {
+            if node.parent != NONE && !available[node.parent as usize] {
                 allowed[index] = false;
             }
         }
-        allowed
+        (allowed, available)
     }
 
-    fn interaction_visibility(inner: &WidgetTreeInner) -> Vec<bool> {
+    fn interaction_visibility(inner: &WidgetTreeInner) -> InteractionVisibility {
         // Container selection changes without structural dirtiness. Sample the
         // policies on every interaction query, keeping the retained graph intact.
-        let edge_visible = Self::interaction_edge_visibility(inner);
-        let own_visible: Vec<bool> = inner.nodes.iter()
-            .map(|node| node.widget.upgrade().is_some_and(|widget| widget.visible()))
+        let (edge_visible, available) = Self::interaction_edge_visibility(inner);
+        let own_visible: Vec<bool> = inner.nodes.iter().enumerate()
+            .map(|(index, node)| available[index] && node.widget.upgrade().is_some_and(|widget| {
+                widget.try_borrow_for_inspection().is_some_and(|widget| widget.visible())
+            }))
             .collect();
-        (0..inner.nodes.len()).map(|mut index| loop {
+        let visible = (0..inner.nodes.len()).map(|mut index| loop {
             if !own_visible[index] {
                 return false;
             }
@@ -2175,13 +2184,14 @@ impl WidgetTree {
                 return false;
             }
             index = parent as usize;
-        }).collect()
+        }).collect();
+        InteractionVisibility { available, visible }
     }
 
     pub fn query_rects(&self, cx: &Cx, query: &str) -> Vec<String> {
         self.sync_dirty();
         let inner = self.inner.borrow();
-        let effective_visible = Self::interaction_visibility(&inner);
+        let interaction = Self::interaction_visibility(&inner);
 
         let query = query.trim();
         let (mode, needle) = if let Some(v) = query.strip_prefix("id:") {
@@ -2235,6 +2245,10 @@ impl WidgetTree {
 
             let id_token = live_id_token(id);
             let ty_token = live_id_token(ty);
+            let Some(widget) = interaction.available[index]
+                .then(|| widget.try_borrow_for_inspection()).flatten() else {
+                continue;
+            };
             let area = widget.area();
             if area.is_valid(cx) {
                 if let Some(rect) = widget_screen_rect(&area, cx) {
@@ -2242,7 +2256,7 @@ impl WidgetTree {
                     let y = rect.pos.y.round() as i64;
                     let w = rect.size.x.round() as i64;
                     let h = rect.size.y.round() as i64;
-                    if effective_visible[index] && w > 0 && h > 0 && matches_query(mode, needle, &id_token, &ty_token) {
+                    if interaction.visible[index] && w > 0 && h > 0 && matches_query(mode, needle, &id_token, &ty_token) {
                         rects.push(format!(
                             "{} {} {} {} {} {} {}",
                             dump_index, id_token, ty_token, x, y, w, h
@@ -2255,10 +2269,10 @@ impl WidgetTree {
                 dump_index += 1;
             }
 
-            let dock_dump = widget.borrow::<Dock>().map(|dock| dock.interaction_dump(cx));
+            let dock_dump = widget.downcast_ref::<Dock>().map(|dock| dock.interaction_dump(cx));
             if let Some(dock_dump) = dock_dump {
                 for (tabs, rect, eligible) in dock_dump.tabs {
-                    if !effective_visible[index] || !eligible { continue; }
+                    if !interaction.visible[index] || !eligible { continue; }
                     let Some(rect) = rect else { continue; };
                     let x = rect.pos.x.round() as i64;
                     let y = rect.pos.y.round() as i64;
@@ -2283,7 +2297,7 @@ impl WidgetTree {
                     break;
                 }
                 for (tab, rect, eligible) in dock_dump.tab_headers {
-                    if !effective_visible[index] || !eligible { continue; }
+                    if !interaction.visible[index] || !eligible { continue; }
                     let Some(rect) = rect else { continue; };
                     let x = rect.pos.x.round() as i64;
                     let y = rect.pos.y.round() as i64;
@@ -2316,6 +2330,7 @@ impl WidgetTree {
         self.sync_dirty();
         let inner = self.inner.borrow();
         let widget_type_names = widget_type_names(cx);
+        let interaction = Self::interaction_visibility(&inner);
 
         #[derive(Clone)]
         struct WindowContext {
@@ -2329,7 +2344,11 @@ impl WidgetTree {
             let Some(widget) = node.widget.upgrade() else {
                 continue;
             };
-            let Some(context) = widget.borrow::<Window>().map(|window| WindowContext {
+            let Some(widget) = interaction.available[index]
+                .then(|| widget.try_borrow_for_inspection()).flatten() else {
+                continue;
+            };
+            let Some(context) = widget.downcast_ref::<Window>().map(|window| WindowContext {
                 id: live_id_token(inner.names[index]),
                 index: window.window_index(),
                 position: window.position(cx),
@@ -2351,8 +2370,6 @@ impl WidgetTree {
             None
         };
 
-        let effective_visible = Self::interaction_visibility(&inner);
-
         let mut widgets = Vec::new();
         for (index, node) in inner.nodes.iter().enumerate() {
             let Some(widget) = node.widget.upgrade() else {
@@ -2365,6 +2382,23 @@ impl WidgetTree {
                 .map(live_id_token)
                 .unwrap_or_else(|| "-".to_string());
             let window_context = resolve_window_context(index);
+            let Some(widget) = interaction.available[index]
+                .then(|| widget.try_borrow_for_inspection()).flatten() else {
+                // Keep the indexed row without calling accessors that might
+                // delegate to the borrowed field. A later sample restores its
+                // metadata; the retained graph is never changed here.
+                widgets.push(WidgetSnapshot {
+                    id,
+                    widget_type,
+                    window_id: window_context.as_ref().map(|context| context.id.clone()).unwrap_or_default(),
+                    window_index: window_context.as_ref().map(|context| context.index).unwrap_or_default(),
+                    visible: false,
+                    enabled: false,
+                    x: 0, y: 0, width: 0, height: 0,
+                    text: None, value: None, checked: None, selected: None,
+                });
+                continue;
+            };
             let (mut x, mut y, width, height) = {
                 // Clipped geometry only — a row a `PortalList` drew past its
                 // viewport edge reports nothing rather than a full-size rect
@@ -2387,21 +2421,21 @@ impl WidgetTree {
             // visible, whatever its own flag says. A recycled PortalList row
             // whose area went stale kept reporting visible=true at
             // [0,0,0,0] — one big wheel left 100 of those in the snapshot.
-            let node_visible = effective_visible[index] && width > 0 && height > 0;
+            let node_visible = interaction.visible[index] && width > 0 && height > 0;
 
-            let is_button = widget.borrow::<Button>().is_some();
-            let button_enabled = widget.borrow::<Button>().map(|button| button.enabled());
+            let is_button = widget.downcast_ref::<Button>().is_some();
+            let button_enabled = widget.downcast_ref::<Button>().map(|button| button.enabled());
             let check_box_active = widget
-                .borrow::<CheckBox>()
+                .downcast_ref::<CheckBox>()
                 .map(|check_box| check_box.active(cx));
             let radio_active = widget
-                .borrow::<RadioButton>()
+                .downcast_ref::<RadioButton>()
                 .map(|radio_button| radio_button.active(cx));
             let dropdown_selected = widget
-                .borrow::<DropDown>()
+                .downcast_ref::<DropDown>()
                 .map(|drop_down| drop_down.selected_item_label());
-            let is_text_input = widget.borrow::<TextInput>().is_some()
-                || widget.borrow::<NativeTextInput>().is_some();
+            let is_text_input = widget.downcast_ref::<TextInput>().is_some()
+                || widget.downcast_ref::<NativeTextInput>().is_some();
 
             let mut text = None;
             let mut value = None;
@@ -2466,7 +2500,7 @@ impl WidgetTree {
                 });
             }
 
-            let dock_dump = widget.borrow::<Dock>().map(|dock| dock.interaction_dump(cx));
+            let dock_dump = widget.downcast_ref::<Dock>().map(|dock| dock.interaction_dump(cx));
             if let Some(dock_dump) = dock_dump {
                 let window_id = window_context
                     .as_ref()
@@ -2497,7 +2531,7 @@ impl WidgetTree {
                         widget_type: "DockTabs".to_string(),
                         window_id: window_id.clone(),
                         window_index,
-                        visible: effective_visible[index] && eligible && width > 0 && height > 0,
+                        visible: interaction.visible[index] && eligible && width > 0 && height > 0,
                         enabled: true,
                         x: rect.pos.x.round() as i64 + offset_x,
                         y: rect.pos.y.round() as i64 + offset_y,
@@ -2526,7 +2560,7 @@ impl WidgetTree {
                         widget_type: "DockTab".to_string(),
                         window_id: window_id.clone(),
                         window_index,
-                        visible: effective_visible[index] && eligible && width > 0 && height > 0,
+                        visible: interaction.visible[index] && eligible && width > 0 && height > 0,
                         enabled: true,
                         x: rect.pos.x.round() as i64 + offset_x,
                         y: rect.pos.y.round() as i64 + offset_y,
@@ -3027,7 +3061,7 @@ pub(crate) mod interaction_visibility_test_support {
         Area::Rect(RectArea { draw_list_id, rect_id, redraw_id: 1 })
     }
 
-    struct AreaWidget {
+    pub(crate) struct AreaWidget {
         uid: WidgetUid,
         area: Area,
         own_visible: Rc<Cell<bool>>,
@@ -3173,9 +3207,17 @@ mod tests {
         assert!(!parent.try_interaction_child_visibility(&mut |_, _| panic!("borrowed policy called")));
         let inner = tree.inner.borrow();
         let child_index = inner.uid_map[&child.widget_uid()] as usize;
-        assert!(!WidgetTree::interaction_edge_visibility(&inner)[child_index]);
+        assert!(!WidgetTree::interaction_edge_visibility(&inner).0[child_index]);
+        drop(inner);
+        let rows = tree.snapshot(&cx);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| !row.visible));
+        assert!(tree.query_rects(&cx, "").is_empty());
         drop(borrowed);
-        assert!(WidgetTree::interaction_edge_visibility(&inner)[child_index]);
+        let inner = tree.inner.borrow();
+        assert!(WidgetTree::interaction_edge_visibility(&inner).0[child_index]);
+        drop(inner);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
         assert!(WidgetRef::default().try_interaction_child_visibility(&mut |_, _| panic!("empty policy called")));
     }
 

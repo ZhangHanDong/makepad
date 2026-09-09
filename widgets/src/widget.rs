@@ -31,8 +31,9 @@ pub trait WidgetNode: ScriptApply {
     fn children(&self, _visit: &mut dyn FnMut(LiveId, WidgetRef)) {}
     /// Restrict interaction visibility of retained direct children without
     /// removing them from lookup or inspection. Unreported edges stay visible;
-    /// repeated reports are ANDed. False means the policy is unavailable, so
-    /// the tree must hide this parent's indexed children for this sample.
+    /// repeated reports are ANDed. False means the policy is unavailable: the
+    /// tree must hide this node and its descendants for this sample, and avoid
+    /// metadata accessors that may delegate through the unavailable field.
     fn interaction_child_visibility(&self, _visit: &mut dyn FnMut(WidgetUid, bool)) -> bool {
         true
     }
@@ -875,6 +876,15 @@ impl WidgetRef {
             return false;
         };
         inner.as_ref().is_none_or(|inner| inner.widget.interaction_child_visibility(visit))
+    }
+
+    /// Read inspection metadata without requiring an exclusive borrow. Callers
+    /// must also check policy availability before invoking delegated accessors
+    /// (a wrapper can be readable while one of its WidgetRef fields is not).
+    pub(crate) fn try_borrow_for_inspection(&self) -> Option<std::cell::Ref<'_, dyn Widget + 'static>> {
+        std::cell::Ref::filter_map(self.0.try_borrow().ok()?, |inner| {
+            inner.as_ref().map(|inner| inner.widget.as_ref())
+        }).ok()
     }
 
     pub fn layer_areas(&self) -> Vec<(&'static str, Area)> {

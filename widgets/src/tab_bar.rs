@@ -715,7 +715,11 @@ impl TabBar {
     }
 
     pub fn tab_rect(&self, cx: &Cx, tab_id: LiveId) -> Option<Rect> {
-        self.tabs.get(&tab_id).map(|(tab, _)| tab.area().rect(cx))
+        let tab = &self.tabs.get(&tab_id)?.0;
+        if !tab.try_interaction_child_visibility(&mut |_, _| {}) {
+            return None;
+        }
+        Some(tab.try_borrow_for_inspection()?.area().rect(cx))
     }
 
     pub fn bar_rect(&self, cx: &Cx) -> Rect {
@@ -724,6 +728,10 @@ impl TabBar {
 
     pub(crate) fn interaction_tab_rect(&self, cx: &Cx, tab_id: LiveId) -> Option<Rect> {
         let tab = &self.tabs.get(&tab_id)?.0;
+        if !tab.try_interaction_child_visibility(&mut |_, _| {}) {
+            return None;
+        }
+        let tab = tab.try_borrow_for_inspection()?;
         if !tab.visible() {
             return None;
         }
