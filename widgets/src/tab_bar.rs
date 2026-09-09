@@ -630,6 +630,25 @@ impl TabBar {
             .map(|(id, (tab, _))| (Self::tab_node_name(*id), tab.clone()))
     }
 
+    pub(crate) fn raw_tab_refs(&self) -> impl Iterator<Item = (LiveId, WidgetRef)> + '_ {
+        self.tabs.iter().map(|(id, (tab, _))| (*id, tab.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interaction_visibility_fixture(
+        cx: &mut Cx,
+        area: Area,
+        headers: Vec<(LiveId, WidgetRef)>,
+    ) -> Self {
+        let mut bar = cx.with_vm(Self::script_new);
+        bar.scroll_bars.set_area(area);
+        bar.view_area = area;
+        for (id, header) in headers {
+            bar.tabs.insert(id, (header, LiveId(0)));
+        }
+        bar
+    }
+
     /// Creates a new Tab from the same template as the given tab, with the same active state.
     /// Returns `None` if the tab_id isn't found.
     pub fn create_ghost_tab(&self, cx: &mut Cx, tab_id: LiveId) -> Option<Tab> {
@@ -701,6 +720,26 @@ impl TabBar {
 
     pub fn bar_rect(&self, cx: &Cx) -> Rect {
         self.scroll_bars.area().rect(cx)
+    }
+
+    pub(crate) fn interaction_tab_rect(&self, cx: &Cx, tab_id: LiveId) -> Option<Rect> {
+        let tab = &self.tabs.get(&tab_id)?.0;
+        if !tab.visible() {
+            return None;
+        }
+        Self::interaction_rect(cx, tab.area())
+    }
+
+    pub(crate) fn interaction_bar_rect(&self, cx: &Cx) -> Option<Rect> {
+        Self::interaction_rect(cx, self.scroll_bars.area())
+    }
+
+    fn interaction_rect(cx: &Cx, area: Area) -> Option<Rect> {
+        if !area.is_valid(cx) {
+            return None;
+        }
+        let rect = area.clipped_rect(cx);
+        (rect.size.x > 0.0 && rect.size.y > 0.0).then_some(rect)
     }
 
     pub fn is_over_tab_bar(&self, cx: &Cx, abs: Vec2d) -> Option<Rect> {

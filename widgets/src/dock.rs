@@ -8,7 +8,7 @@ use crate::{
     widget::*,
     widget_tree::CxWidgetExt,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 script_mod! {
     use mod.prelude.widgets_internal.*
@@ -363,6 +363,32 @@ impl WidgetNode for Dock {
         }
     }
 
+    fn interaction_child_visibility(&self, visit: &mut dyn FnMut(WidgetUid, bool)) -> bool {
+        let layout = self.interaction_layout();
+        let mut available = true;
+        let mut restrict = |widget: &WidgetRef, visible| {
+            if let Some(uid) = widget.try_widget_uid() {
+                visit(uid, visible);
+            } else if !widget.is_empty() {
+                // An actively borrowed child has no readable UID. Do not let
+                // the default-allowed edge turn it into an actionable tab.
+                available = false;
+            }
+        };
+        for (id, (_, body)) in self.items.iter() {
+            restrict(body, layout.content.contains(id));
+        }
+        for (bar_id, bar) in self.tab_bars.iter() {
+            for (tab_id, header) in bar.tab_bar.raw_tab_refs() {
+                let current = matches!(self.dock_items.get(bar_id),
+                    Some(DockItem::Tabs { tabs, .. }) if tabs.contains(&tab_id));
+                let is_tab = matches!(self.dock_items.get(&tab_id), Some(DockItem::Tab { .. }));
+                restrict(&header, layout.bars.contains(bar_id) && current && is_tab);
+            }
+        }
+        available
+    }
+
     fn redraw(&mut self, cx: &mut Cx) {
         self.area.redraw(cx);
         // A redraw of the dock is a redraw of everything it shows. Each
@@ -633,6 +659,18 @@ pub struct DockCompactDump {
     pub tab_headers: Vec<DockCompactTabInfo>,
 }
 
+#[derive(Default)]
+struct DockInteractionLayout {
+    content: HashSet<LiveId>,
+    bars: HashSet<LiveId>,
+}
+
+pub(crate) struct DockInteractionDump {
+    // Retained inspection metadata, clipped geometry, and layout eligibility.
+    pub tabs: Vec<(DockCompactTabsInfo, Option<Rect>, bool)>,
+    pub tab_headers: Vec<(DockCompactTabInfo, Option<Rect>, bool)>,
+}
+
 #[derive(Clone, Debug)]
 pub struct DockCompactTabsInfo {
     pub tabs_id: LiveId,
@@ -726,6 +764,56 @@ impl Dock {
         }
 
         DockCompactDump { tabs, tab_headers }
+    }
+
+    fn interaction_layout(&self) -> DockInteractionLayout {
+        let mut layout = DockInteractionLayout::default();
+        let mut seen = HashSet::new();
+        let mut pending = vec![id!(root)];
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match self.dock_items.get(&id) {
+                Some(DockItem::Splitter { a, b, .. }) => {
+                    pending.push(*b);
+                    pending.push(*a);
+                }
+                Some(DockItem::Tabs { tabs, selected, hide_tab_bar, .. }) => {
+                    if !hide_tab_bar {
+                        layout.bars.insert(id);
+                    }
+                    if let Some(tab) = tabs.get(*selected) {
+                        if matches!(self.dock_items.get(tab), Some(DockItem::Tab { .. })) {
+                            pending.push(*tab);
+                        }
+                    }
+                }
+                Some(DockItem::Tab { .. }) => { layout.content.insert(id); }
+                None => {}
+            }
+        }
+        layout
+    }
+
+    pub(crate) fn interaction_dump(&self, cx: &Cx) -> DockInteractionDump {
+        let layout = self.interaction_layout();
+        let dump = self.compact_dump(cx);
+        DockInteractionDump {
+            tabs: dump.tabs.into_iter().map(|tabs| {
+                let rect = self.tab_bars.get(&tabs.tabs_id)
+                    .and_then(|bar| bar.tab_bar.interaction_bar_rect(cx));
+                let eligible = layout.bars.contains(&tabs.tabs_id);
+                (tabs, rect, eligible)
+            }).collect(),
+            tab_headers: dump.tab_headers.into_iter().map(|tab| {
+                let rect = self.tab_bars.get(&tab.tabs_id)
+                    .and_then(|bar| bar.tab_bar.interaction_tab_rect(cx, tab.tab_id));
+                let eligible = layout.bars.contains(&tab.tabs_id)
+                    && matches!(self.dock_items.get(&tab.tab_id), Some(DockItem::Tab { .. }));
+                (tab, rect, eligible)
+            }).collect(),
+        }
     }
 
     fn create_all_items(&mut self, cx: &mut Cx) {
@@ -2240,6 +2328,473 @@ impl DockRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widget_tree::{interaction_visibility_test_support::*, WidgetTree};
+    use std::{cell::Cell, rc::Rc};
+
+    fn retained_tabs(cx: &mut Cx, owner: &DrawList, ids: &[LiveId]) -> (Dock, Vec<WidgetRef>) {
+        let mut dock = cx.with_vm(Dock::script_new);
+        let mut sends = Vec::new();
+        let rect = Rect { pos: dvec2(20.0, 30.0), size: dvec2(100.0, 40.0) };
+        for id in ids {
+            let area = retained_rect(cx, owner, rect);
+            assert!(area.is_valid(cx));
+            assert_eq!(area.clipped_rect(cx), rect);
+            let send = area_widget(area, Rc::new(Cell::new(true)), vec![]);
+            let body = area_widget(Area::Empty, Rc::new(Cell::new(true)), vec![(id!(send), send.clone())]);
+            dock.dock_items.insert(*id, DockItem::tab(id.0.to_string(), id!(Panel), id!(PermanentTab)));
+            dock.items.insert(*id, (id!(Panel), body));
+            sends.push(send);
+        }
+        dock.dock_items.insert(id!(root), DockItem::tabs(ids.to_vec(), 0, false));
+        (dock, sends)
+    }
+
+    fn indexed_dock(dock: Dock) -> (WidgetRef, WidgetTree) {
+        let root = WidgetRef::new_with_inner(Box::new(dock));
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(dock), root.clone(), None);
+        (root, tree)
+    }
+
+    fn visible_send_uids(tree: &WidgetTree, cx: &Cx) -> Vec<String> {
+        let mut uids: Vec<_> = tree.snapshot(cx).into_iter()
+            .filter(|row| row.id == "send" && row.visible)
+            .map(|row| row.text.unwrap()).collect();
+        uids.sort();
+        uids
+    }
+
+    #[test]
+    fn interaction_visibility_retained_two_tabs() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (root, tree) = indexed_dock(dock);
+        assert_eq!(tree.snapshot(&cx).iter().filter(|row| row.id == "send").count(), 2);
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[0].widget_uid().0.to_string()]);
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_b));
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[1].widget_uid().0.to_string()]);
+        assert_eq!(tree.find_within(root.widget_uid(), &[id!(tab_a), id!(send)]).widget_uid(), sends[0].widget_uid());
+        assert_eq!(tree.find_within(root.widget_uid(), &[id!(tab_b), id!(send)]).widget_uid(), sends[1].widget_uid());
+        assert_eq!(tree.flat_tree(&cx).iter().filter(|row| row.name == "send").count(), 2);
+        assert_eq!(tree.compact_dump(&cx).matches("send").count(), 2);
+    }
+
+    #[test]
+    fn interaction_visibility_retained_query_rects() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (root, tree) = indexed_dock(dock);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_b));
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
+    #[derive(Script, ScriptHook, Widget)]
+    struct WrappedDock {
+        #[wrap]
+        #[live]
+        dock: Dock,
+    }
+    impl Widget for WrappedDock {}
+
+    #[derive(Script, ScriptHook, Widget)]
+    struct DerefDock {
+        #[deref]
+        dock: Dock,
+    }
+    impl Widget for DerefDock {}
+
+    #[derive(Script, ScriptHook, Widget)]
+    struct FindDocks {
+        #[uid]
+        uid: WidgetUid,
+        #[find]
+        #[redraw]
+        #[live]
+        left: Dock,
+        #[find]
+        #[live]
+        right: Dock,
+    }
+    impl Widget for FindDocks {}
+
+    fn assert_wrapped_selection(cx: &Cx, root: WidgetRef, mut expected: Vec<String>) {
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(wrapped), root.clone(), None);
+        expected.sort();
+        assert_eq!(visible_send_uids(&tree, cx), expected);
+        assert_eq!(tree.query_rects(cx, "id:send").len(), expected.len());
+    }
+
+    #[test]
+    fn interaction_visibility_derive_wrap() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let root = WidgetRef::new_with_inner(Box::new(WrappedDock { dock }));
+        assert_wrapped_selection(&cx, root, vec![sends[0].widget_uid().0.to_string()]);
+    }
+
+    #[test]
+    fn interaction_visibility_derive_deref() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let root = WidgetRef::new_with_inner(Box::new(DerefDock { dock }));
+        assert_wrapped_selection(&cx, root, vec![sends[0].widget_uid().0.to_string()]);
+    }
+
+    #[test]
+    fn interaction_visibility_derive_all_find_fields() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (left, a) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (right, b) = retained_tabs(&mut cx, &owner, &[id!(tab_c), id!(tab_d)]);
+        let root = WidgetRef::new_with_inner(Box::new(FindDocks { uid: WidgetUid::new(), left, right }));
+        assert_wrapped_selection(&cx, root, vec![a[0].widget_uid().0.to_string(), b[0].widget_uid().0.to_string()]);
+    }
+
+    #[test]
+    fn interaction_visibility_six_retained_controls() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let ids = [id!(tab_a), id!(tab_b), id!(tab_c), id!(tab_d), id!(tab_e), id!(tab_f)];
+        let (dock, sends) = retained_tabs(&mut cx, &owner, &ids);
+        let (root, tree) = indexed_dock(dock);
+        for (index, id) in ids.iter().enumerate() {
+            root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, *id);
+            assert_eq!(tree.snapshot(&cx).iter().filter(|row| row.id == "send").count(), 6);
+            assert_eq!(visible_send_uids(&tree, &cx), vec![sends[index].widget_uid().0.to_string()]);
+            assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+            for (index, id) in ids.iter().enumerate() {
+                assert_eq!(tree.find_within(root.widget_uid(), &[*id, id!(send)]).widget_uid(), sends[index].widget_uid());
+            }
+        }
+    }
+
+    #[test]
+    fn interaction_visibility_split_and_nested_splitters() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, sends) = retained_tabs(&mut cx, &owner, &[id!(a), id!(b), id!(c), id!(d), id!(e), id!(f)]);
+        dock.dock_items.insert(id!(root), DockItem::Splitter { axis: SplitterAxis::Horizontal, align: SplitterAlign::Weighted(0.5), a: id!(left), b: id!(right) });
+        dock.dock_items.insert(id!(left), DockItem::tabs(vec![id!(a), id!(b)], 1, false));
+        dock.dock_items.insert(id!(right), DockItem::tabs(vec![id!(c), id!(d)], 0, false));
+        let (root, tree) = indexed_dock(dock);
+        let mut expected = vec![sends[1].widget_uid().0.to_string(), sends[2].widget_uid().0.to_string()];
+        expected.sort();
+        assert_eq!(visible_send_uids(&tree, &cx), expected);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 2);
+        {
+            let mut dock = root.borrow_mut::<Dock>().unwrap();
+            dock.dock_items.insert(id!(right), DockItem::Splitter { axis: SplitterAxis::Vertical, align: SplitterAlign::Weighted(0.5), a: id!(top), b: id!(bottom) });
+            dock.dock_items.insert(id!(top), DockItem::tabs(vec![id!(c), id!(d)], 0, false));
+            dock.dock_items.insert(id!(bottom), DockItem::tabs(vec![id!(e), id!(f)], 1, false));
+        }
+        expected.push(sends[5].widget_uid().0.to_string());
+        expected.sort();
+        assert_eq!(visible_send_uids(&tree, &cx), expected);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 3);
+    }
+
+    #[test]
+    fn interaction_visibility_nested_dock_parent_selection() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut outer, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (inner, inner_sends) = retained_tabs(&mut cx, &owner, &[id!(inner_a), id!(inner_b)]);
+        let inner = WidgetRef::new_with_inner(Box::new(inner));
+        outer.items.insert(id!(tab_a), (id!(Panel), inner.clone()));
+        let (root, tree) = indexed_dock(outer);
+        assert_eq!(visible_send_uids(&tree, &cx), vec![inner_sends[0].widget_uid().0.to_string()]);
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_b));
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[1].widget_uid().0.to_string()]);
+        inner.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(inner_b));
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[1].widget_uid().0.to_string()]);
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_a));
+        assert_eq!(visible_send_uids(&tree, &cx), vec![inner_sends[1].widget_uid().0.to_string()]);
+        assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
+    fn retained_headers(dock: &mut Dock, cx: &mut Cx, owner: &DrawList, bar_id: LiveId, ids: &[LiveId]) -> Vec<WidgetRef> {
+        let rect = Rect { pos: dvec2(20.0, 30.0), size: dvec2(100.0, 40.0) };
+        let bar_area = retained_rect(cx, owner, rect);
+        let headers: Vec<_> = ids.iter().map(|id| {
+            let area = retained_rect(cx, owner, rect);
+            (*id, area_widget(area, Rc::new(Cell::new(true)), vec![]))
+        }).collect();
+        let widgets = headers.iter().map(|(_, header)| header.clone()).collect();
+        let tab_bar = TabBar::interaction_visibility_fixture(cx, bar_area, headers);
+        dock.tab_bars.insert(bar_id, TabBarWrap {
+            tab_bar,
+            contents_draw_list: cx.with_vm(DrawList2d::script_new),
+            contents_rect: rect,
+        });
+        widgets
+    }
+
+    #[test]
+    fn interaction_visibility_current_unselected_headers() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        retained_headers(&mut dock, &mut cx, &owner, id!(root), &[id!(tab_a), id!(tab_b)]);
+        let (_root, tree) = indexed_dock(dock);
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[0].widget_uid().0.to_string()]);
+        let rows = tree.snapshot(&cx);
+        for id in ["tab_a_tab", "tab_b_tab"] {
+            assert!(rows.iter().find(|row| row.id == id).unwrap().visible);
+            assert_eq!(tree.query_rects(&cx, &format!("id:{id}")).len(), 1);
+        }
+        assert_eq!(rows.iter().filter(|row| row.widget_type == "DockTab" && row.visible).count(), 2);
+        assert_eq!(tree.query_rects(&cx, "type:DockTabs").len(), 1);
+    }
+
+    #[test]
+    fn interaction_visibility_retained_removed_and_hidden_headers() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b), id!(tab_c)]);
+        retained_headers(&mut dock, &mut cx, &owner, id!(root), &[id!(tab_a), id!(tab_b)]);
+        dock.dock_items.insert(id!(unused), DockItem::tabs(vec![id!(tab_c)], 0, false));
+        retained_headers(&mut dock, &mut cx, &owner, id!(unused), &[id!(tab_c)]);
+        dock.dock_items.insert(id!(root), DockItem::tabs(vec![id!(tab_a)], 0, false));
+        let (root, tree) = indexed_dock(dock);
+        let rows = tree.snapshot(&cx);
+        assert!(!rows.iter().find(|row| row.id == "tab_b_tab").unwrap().visible);
+        assert!(!rows.iter().find(|row| row.id == "tab_c_tab").unwrap().visible);
+        assert!(!rows.iter().find(|row| row.id == "unused" && row.widget_type == "DockTabs").unwrap().visible);
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 1);
+        root.borrow_mut::<Dock>().unwrap().dock_items.insert(id!(root), DockItem::Tabs {
+            tabs: vec![id!(tab_a)], selected: 0, closable: false, hide_tab_bar: true,
+        });
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[0].widget_uid().0.to_string()]);
+        assert!(tree.query_rects(&cx, "type:DockTabs").is_empty());
+        assert!(tree.query_rects(&cx, "type:DockTab").is_empty());
+        assert!(!tree.snapshot(&cx).iter().find(|row| row.id == "tab_a_tab").unwrap().visible);
+        assert!(tree.compact_dump(&cx).contains("D3 "));
+    }
+
+    #[test]
+    fn interaction_visibility_nested_synthetic_headers() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut outer, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (mut inner, _) = retained_tabs(&mut cx, &owner, &[id!(inner_a), id!(inner_b)]);
+        retained_headers(&mut inner, &mut cx, &owner, id!(root), &[id!(inner_a), id!(inner_b)]);
+        outer.items.insert(id!(tab_a), (id!(Panel), WidgetRef::new_with_inner(Box::new(inner))));
+        let (root, tree) = indexed_dock(outer);
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 2);
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_b));
+        let rows = tree.snapshot(&cx);
+        let synthetic: Vec<_> = rows.iter().filter(|row| matches!(row.widget_type.as_str(), "DockTab" | "DockTabs")).collect();
+        assert_eq!(synthetic.len(), 3);
+        assert!(synthetic.iter().all(|row| !row.visible));
+        assert!(!rows.iter().find(|row| row.id == "inner_a_tab").unwrap().visible);
+        assert!(!rows.iter().find(|row| row.id == "inner_b_tab").unwrap().visible);
+        assert!(tree.query_rects(&cx, "type:DockTab").is_empty());
+        root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_a));
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 2);
+    }
+
+    #[test]
+    fn interaction_visibility_clipped_synthetic_headers() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let headers = retained_headers(&mut dock, &mut cx, &owner, id!(root), &[id!(tab_a), id!(tab_b)]);
+        let Area::Rect(a) = headers[0].area() else { panic!("expected retained rect") };
+        cx.draw_lists[a.draw_list_id].rect_areas[a.rect_id].draw_clip = (dvec2(0.0, 0.0), dvec2(1.0, 1.0));
+        let (root, tree) = indexed_dock(dock);
+        let rows = tree.snapshot(&cx);
+        assert!(!rows.iter().find(|row| row.id == "tab_a" && row.widget_type == "DockTab").unwrap().visible);
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 1);
+        assert_eq!(root.borrow::<Dock>().unwrap().compact_dump(&cx).tab_headers.len(), 2);
+    }
+
+    #[test]
+    fn interaction_visibility_header_own_hidden() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a)]);
+        let rect = Rect { pos: dvec2(20.0, 30.0), size: dvec2(100.0, 40.0) };
+        let bar_area = retained_rect(&mut cx, &owner, rect);
+        let area = retained_rect(&mut cx, &owner, rect);
+        let visible = Rc::new(Cell::new(true));
+        let header = area_widget(area, visible.clone(), vec![]);
+        let bar = TabBar::interaction_visibility_fixture(&mut cx, bar_area, vec![(id!(tab_a), header)]);
+        dock.tab_bars.insert(id!(root), TabBarWrap { tab_bar: bar, contents_draw_list: cx.with_vm(DrawList2d::script_new), contents_rect: rect });
+        let (_root, tree) = indexed_dock(dock);
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 1);
+        visible.set(false);
+        assert!(!tree.snapshot(&cx).iter().find(|row| row.id == "tab_a_tab").unwrap().visible);
+        assert!(tree.query_rects(&cx, "type:DockTab").is_empty());
+        assert!(!tree.snapshot(&cx).iter().find(|row| row.id == "tab_a" && row.widget_type == "DockTab").unwrap().visible);
+    }
+
+    #[test]
+    fn interaction_visibility_clipped_bar_and_stale_header() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let rect = Rect { pos: dvec2(20.0, 30.0), size: dvec2(100.0, 40.0) };
+        let bar_area = retained_rect(&mut cx, &owner, rect);
+        let Area::Rect(bar_slot) = bar_area else { panic!("expected rect area") };
+        cx.draw_lists[bar_slot.draw_list_id].rect_areas[bar_slot.rect_id].draw_clip = (dvec2(0.0, 0.0), dvec2(1.0, 1.0));
+        let mut stale = retained_rect(&mut cx, &owner, rect);
+        if let Area::Rect(area) = &mut stale { area.redraw_id = 0; }
+        assert!(!stale.is_valid(&cx));
+        let current = retained_rect(&mut cx, &owner, rect);
+        let bar = TabBar::interaction_visibility_fixture(&mut cx, bar_area, vec![
+            (id!(tab_a), area_widget(stale, Rc::new(Cell::new(true)), vec![])),
+            (id!(tab_b), area_widget(current, Rc::new(Cell::new(true)), vec![])),
+        ]);
+        dock.tab_bars.insert(id!(root), TabBarWrap { tab_bar: bar, contents_draw_list: cx.with_vm(DrawList2d::script_new), contents_rect: rect });
+        let (root, tree) = indexed_dock(dock);
+        assert!(tree.query_rects(&cx, "type:DockTabs").is_empty());
+        let rows = tree.snapshot(&cx);
+        assert!(!rows.iter().find(|row| row.widget_type == "DockTabs").unwrap().visible);
+        assert!(!rows.iter().any(|row| row.id == "tab_a" && row.widget_type == "DockTab" && row.visible));
+        assert_eq!(tree.query_rects(&cx, "type:DockTab").len(), 1);
+        assert_eq!(root.borrow::<Dock>().unwrap().compact_dump(&cx).tabs[0].rect, rect);
+    }
+
+    #[test]
+    fn interaction_visibility_layout_missing_invalid_and_cycles() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let expected: HashSet<_> = dock.visible_items().map(|(id, _)| id).collect();
+        assert_eq!(dock.interaction_layout().content, expected);
+        for tabs in [vec![], vec![id!(missing)], vec![id!(tab_a)]] {
+            dock.dock_items.insert(id!(root), DockItem::tabs(tabs, 9, false));
+            assert!(dock.interaction_layout().content.is_empty());
+        }
+        dock.dock_items.insert(id!(root), DockItem::tabs(vec![id!(missing)], 0, false));
+        assert!(dock.interaction_layout().content.is_empty());
+        dock.dock_items.remove(&id!(root));
+        assert!(dock.interaction_layout().bars.is_empty());
+        assert!(dock.interaction_layout().content.is_empty());
+        dock.dock_items.insert(id!(root), DockItem::Splitter { axis: SplitterAxis::Horizontal, align: SplitterAlign::Weighted(0.5), a: id!(root), b: id!(missing) });
+        assert!(dock.interaction_layout().content.is_empty());
+        assert!(dock.interaction_layout().bars.is_empty());
+    }
+
+    #[derive(Script, ScriptHook, Widget)]
+    struct FindWithDeref {
+        #[deref]
+        base: Dock,
+        #[find]
+        #[live]
+        contents: Dock,
+    }
+    impl Widget for FindWithDeref {}
+
+    #[test]
+    fn interaction_visibility_find_precedes_deref() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (base, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (contents, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_c), id!(tab_d)]);
+        let root = WidgetRef::new_with_inner(Box::new(FindWithDeref { base, contents }));
+        assert_wrapped_selection(&cx, root, vec![sends[0].widget_uid().0.to_string()]);
+    }
+
+    #[derive(Script, ScriptHook, Widget)]
+    struct FindDockRefs {
+        #[uid]
+        uid: WidgetUid,
+        #[find]
+        #[redraw]
+        #[live]
+        left: WidgetRef,
+        #[find]
+        #[live]
+        right: WidgetRef,
+    }
+    impl Widget for FindDockRefs {}
+
+    #[test]
+    fn interaction_visibility_find_refs_propagate_unavailable() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (left, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (right, _) = retained_tabs(&mut cx, &owner, &[id!(tab_c), id!(tab_d)]);
+        let left = WidgetRef::new_with_inner(Box::new(left));
+        let right = WidgetRef::new_with_inner(Box::new(right));
+        let wrapper = FindDockRefs { uid: WidgetUid::new(), left: left.clone(), right };
+        let borrowed = left.borrow_mut::<Dock>().unwrap();
+        let mut reports = Vec::new();
+        assert!(!wrapper.interaction_child_visibility(&mut |uid, visible| reports.push((uid, visible))));
+        assert_eq!(reports.len(), 2, "later find fields must still report after an unavailable field");
+        drop(borrowed);
+        assert!(wrapper.interaction_child_visibility(&mut |_, _| {}));
+    }
+
+    #[test]
+    fn interaction_visibility_selected_child_own_hidden() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, sends) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let visible = Rc::new(Cell::new(false));
+        let body = area_widget(Area::Empty, visible.clone(), vec![(id!(send), sends[0].clone())]);
+        dock.items.insert(id!(tab_a), (id!(Panel), body));
+        let (_root, tree) = indexed_dock(dock);
+        assert!(visible_send_uids(&tree, &cx).is_empty());
+        assert!(tree.query_rects(&cx, "id:send").is_empty());
+        visible.set(true);
+        assert_eq!(visible_send_uids(&tree, &cx), vec![sends[0].widget_uid().0.to_string()]);
+    }
+
+    #[test]
+    fn interaction_visibility_unavailable_retained_body() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut outer, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let (inner, _) = retained_tabs(&mut cx, &owner, &[id!(inner_a), id!(inner_b)]);
+        let inner = WidgetRef::new_with_inner(Box::new(inner));
+        outer.items.insert(id!(tab_a), (id!(Panel), inner.clone()));
+        outer.items.insert(id!(empty), (id!(Panel), WidgetRef::empty()));
+        assert!(outer.interaction_child_visibility(&mut |_, _| {}));
+        let borrowed = inner.borrow_mut::<Dock>().unwrap();
+        assert!(!outer.interaction_child_visibility(&mut |_, _| {}));
+        drop(borrowed);
+        assert!(outer.interaction_child_visibility(&mut |_, _| {}));
+    }
+
+    struct StartupCounter { uid: WidgetUid, count: Rc<Cell<usize>> }
+    impl ScriptApply for StartupCounter {}
+    impl WidgetNode for StartupCounter {
+        fn widget_uid(&self) -> WidgetUid { self.uid }
+        fn area(&self) -> Area { Area::Empty }
+        fn walk(&mut self, _cx: &mut Cx) -> Walk { Walk::default() }
+        fn redraw(&mut self, _cx: &mut Cx) {}
+    }
+    impl Widget for StartupCounter {
+        fn handle_event(&mut self, _cx: &mut Cx, event: &Event, _scope: &mut Scope) {
+            if matches!(event, Event::Startup) { self.count.set(self.count.get() + 1); }
+        }
+    }
+
+    #[test]
+    fn interaction_visibility_retains_nonvisible_events() {
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let (mut dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
+        let a = Rc::new(Cell::new(0));
+        let b = Rc::new(Cell::new(0));
+        for (id, count) in [(id!(tab_a), a.clone()), (id!(tab_b), b.clone())] {
+            dock.items.insert(id, (id!(Panel), WidgetRef::new_with_inner(Box::new(StartupCounter { uid: WidgetUid::new(), count }))));
+        }
+        assert!(!Event::Startup.requires_visibility());
+        dock.handle_event(&mut cx, &Event::Startup, &mut Scope::empty());
+        assert_eq!((a.get(), b.get()), (1, 1));
+        dock.select_tab(&mut cx, id!(tab_b));
+        dock.handle_event(&mut cx, &Event::Startup, &mut Scope::empty());
+        assert_eq!((a.get(), b.get()), (2, 2));
+    }
 
     #[test]
     fn preserving_layout_keeps_absent_and_matching_tab_bodies() {
