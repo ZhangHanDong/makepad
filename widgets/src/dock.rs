@@ -2387,8 +2387,12 @@ mod tests {
         let (dock, _) = retained_tabs(&mut cx, &owner, &[id!(tab_a), id!(tab_b)]);
         let (root, tree) = indexed_dock(dock);
         assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+        assert_eq!(tree.query_rects(&cx, "path:tab_a/send").len(), 1);
+        assert!(tree.query_rects(&cx, "path:tab_b/send").is_empty());
         root.borrow_mut::<Dock>().unwrap().select_tab(&mut cx, id!(tab_b));
         assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+        assert!(tree.query_rects(&cx, "path:tab_a/send").is_empty());
+        assert_eq!(tree.query_rects(&cx, "path:tab_b/send").len(), 1);
     }
 
     #[derive(Script, ScriptHook, Widget)]
