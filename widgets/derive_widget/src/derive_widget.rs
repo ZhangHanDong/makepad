@@ -183,6 +183,9 @@ pub fn derive_widget_node_impl(input: TokenStream) -> TokenStream {
                 .ident(wrap_field)
                 .add(".children(visit)");
             tb.add("   }");
+            tb.add("   fn interaction_child_visibility(&self, visit:&mut dyn FnMut(WidgetUid, bool))->bool{ self.")
+                .ident(wrap_field)
+                .add(".interaction_child_visibility(visit) }");
             tb.add("   fn skip_widget_tree_search(&self)->bool{");
             tb.add("       self.")
                 .ident(wrap_field)
@@ -290,6 +293,13 @@ pub fn derive_widget_node_impl(input: TokenStream) -> TokenStream {
                         .add(".children(visit);");
                 }
                 tb.add("    }");
+                tb.add("    fn interaction_child_visibility(&self, visit:&mut dyn FnMut(WidgetUid, bool))->bool{ let mut available = true;");
+                for find_field in &find_fields {
+                    tb.add("    available = self.")
+                        .ident(find_field)
+                        .add(".interaction_child_visibility(visit) && available;");
+                }
+                tb.add("    available }");
                 tb.add("    fn find_widgets_from_point(&self, cx:&Cx, point:DVec2, found:&mut dyn FnMut(&WidgetRef)){");
                 for find_field in &find_fields {
                     tb.add("    self.")
@@ -358,6 +368,9 @@ pub fn derive_widget_node_impl(input: TokenStream) -> TokenStream {
                     .ident(deref_field)
                     .add(".children(visit)");
                 tb.add("   }");
+                tb.add("   fn interaction_child_visibility(&self, visit:&mut dyn FnMut(WidgetUid, bool))->bool{ self.")
+                    .ident(deref_field)
+                    .add(".interaction_child_visibility(visit) }");
                 tb.add("   fn skip_widget_tree_search(&self)->bool{");
                 tb.add("       self.")
                     .ident(deref_field)
