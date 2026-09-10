@@ -2194,7 +2194,29 @@ impl WidgetTree {
         let interaction = Self::interaction_visibility(&inner);
 
         let query = query.trim();
-        let (mode, needle) = if let Some(v) = query.strip_prefix("id:") {
+        let path = query.strip_prefix("path:").and_then(|value| {
+            if value.len() > 4096 {
+                return None;
+            }
+            let segments: Vec<_> = value.split('/').collect();
+            (2..=32).contains(&segments.len()).then_some(segments).filter(|segments| {
+                segments.iter().all(|segment| {
+                    !segment.is_empty()
+                        && segment.len() <= 128
+                        && *segment != "-"
+                        && segment.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                || matches!(byte, b'_' | b'-' | b'.')
+                        })
+                })
+            })
+        });
+        if query.starts_with("path:") && path.is_none() {
+            return Vec::new();
+        }
+        let (mode, needle) = if path.is_some() {
+            ("path", "")
+        } else if let Some(v) = query.strip_prefix("id:") {
             ("id", v.trim())
         } else if let Some(v) = query.strip_prefix("type:") {
             ("type", v.trim())
@@ -2206,7 +2228,38 @@ impl WidgetTree {
             match mode {
                 "id" => id == needle,
                 "type" => ty == needle,
+                "path" => true,
                 _ => needle.is_empty() || id.contains(needle) || ty.contains(needle),
+            }
+        }
+
+        fn matches_path(inner: &WidgetTreeInner, mut index: usize, path: &[&str]) -> bool {
+            let leaf_matches = inner.names[index]
+                .as_string(|name| name == Some(path[path.len() - 1]));
+            if !leaf_matches {
+                return false;
+            }
+            let mut wanted = path.len() - 1;
+            if wanted == 0 {
+                return true;
+            }
+            loop {
+                let parent = inner.nodes[index].parent;
+                if parent == NONE {
+                    return false;
+                }
+                index = parent as usize;
+                let id = inner.names[index];
+                if id != LiveId(0) {
+                    let matches = id.as_string(|name| name == Some(path[wanted - 1]));
+                    if !matches {
+                        return false;
+                    }
+                    wanted -= 1;
+                    if wanted == 0 {
+                        return true;
+                    }
+                }
             }
         }
 
@@ -2256,7 +2309,8 @@ impl WidgetTree {
                     let y = rect.pos.y.round() as i64;
                     let w = rect.size.x.round() as i64;
                     let h = rect.size.y.round() as i64;
-                    if interaction.visible[index] && w > 0 && h > 0 && matches_query(mode, needle, &id_token, &ty_token) {
+                    let path_matches = path.as_ref().is_none_or(|path| matches_path(&inner, index, path));
+                    if interaction.visible[index] && w > 0 && h > 0 && path_matches && matches_query(mode, needle, &id_token, &ty_token) {
                         rects.push(format!(
                             "{} {} {} {} {} {} {}",
                             dump_index, id_token, ty_token, x, y, w, h
@@ -2269,7 +2323,7 @@ impl WidgetTree {
                 dump_index += 1;
             }
 
-            let dock_dump = widget.downcast_ref::<Dock>().map(|dock| dock.interaction_dump(cx));
+            let dock_dump = (path.is_none()).then(|| widget.downcast_ref::<Dock>()).flatten().map(|dock| dock.interaction_dump(cx));
             if let Some(dock_dump) = dock_dump {
                 for (tabs, rect, eligible) in dock_dump.tabs {
                     if !interaction.visible[index] || !eligible { continue; }
@@ -3037,7 +3091,7 @@ pub(crate) mod interaction_visibility_test_support {
 
     pub(crate) fn init_cx() -> Cx {
         // Tests construct widgets directly, without DSL names populating the LUT.
-        for name in ["send", "dock", "wrapped", "root", "unused", "tab_a", "tab_b", "tab_c", "tab_d", "tab_e", "tab_f", "inner_a", "inner_b"] {
+        for name in ["send", "dock", "wrapped", "root", "unused", "tab_a", "tab_b", "tab_c", "tab_d", "tab_e", "tab_f", "inner_a", "inner_b", "info_button", "inner_button", "other_button"] {
             LiveId::from_str_with_lut(name).unwrap();
         }
         let mut cx = Cx::new(Box::new(|_, _| {}));
@@ -3144,6 +3198,120 @@ mod tests {
         tree.insert_child(parent.widget_uid(), id!(send), child.clone());
         assert!(tree.snapshot(&cx).iter().find(|row| row.id == "send").unwrap().visible);
         assert_eq!(tree.query_rects(&cx, "id:send").len(), 1);
+    }
+
+    #[test]
+    fn path_query_binds_ancestry_and_effective_visibility() {
+        use super::interaction_visibility_test_support::*;
+        use std::{cell::Cell, rc::Rc};
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let area = retained_rect(&mut cx, &owner, Rect {
+            pos: dvec2(20.0, 30.0),
+            size: dvec2(40.0, 40.0),
+        });
+        let hidden = Rc::new(Cell::new(false));
+        let hidden_leaf = area_widget(area, Rc::new(Cell::new(true)), vec![]);
+        let hidden_wrapper = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(inner_button), hidden_leaf)],
+        );
+        let hidden_branch = area_widget(
+            Area::Empty,
+            hidden,
+            vec![(LiveId(0), hidden_wrapper)],
+        );
+        let visible_leaf = area_widget(area, Rc::new(Cell::new(true)), vec![]);
+        let visible_wrapper = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(inner_button), visible_leaf)],
+        );
+        let visible_branch = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(LiveId(0), visible_wrapper)],
+        );
+        let root = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(info_button), hidden_branch), (id!(other_button), visible_branch)],
+        );
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(root), root.clone(), None);
+        assert!(tree.query_rects(&cx, "path:info_button/inner_button").is_empty());
+        assert_eq!(tree.query_rects(&cx, "path:other_button/inner_button").len(), 1);
+        assert_eq!(tree.query_rects(&cx, "id:inner_button").len(), 1);
+    }
+
+    #[test]
+    fn path_query_preserves_visible_ambiguity_and_rejects_malformed_paths() {
+        use super::interaction_visibility_test_support::*;
+        use std::{cell::Cell, rc::Rc};
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let area = retained_rect(&mut cx, &owner, Rect {
+            pos: dvec2(20.0, 30.0),
+            size: dvec2(40.0, 40.0),
+        });
+        let make_branch = || {
+            let leaf = area_widget(area, Rc::new(Cell::new(true)), vec![]);
+            area_widget(
+                Area::Empty,
+                Rc::new(Cell::new(true)),
+                vec![(id!(inner_button), leaf)],
+            )
+        };
+        let root = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(info_button), make_branch()), (id!(info_button), make_branch())],
+        );
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(root), root.clone(), None);
+
+        assert_eq!(tree.query_rects(&cx, "path:info_button/inner_button").len(), 2);
+        for malformed in ["path:", "path:info_button", "path:/inner_button", "path:info_button/-", "path:info button/inner_button"] {
+            assert!(tree.query_rects(&cx, malformed).is_empty(), "{malformed}");
+        }
+    }
+
+    #[test]
+    fn path_query_requires_a_named_leaf_and_exact_named_intermediaries() {
+        use super::interaction_visibility_test_support::*;
+        use std::{cell::Cell, rc::Rc};
+        let mut cx = init_cx();
+        let owner = DrawList::new(&mut cx);
+        let area = retained_rect(&mut cx, &owner, Rect {
+            pos: dvec2(20.0, 30.0),
+            size: dvec2(40.0, 40.0),
+        });
+        let unnamed_leaf = area_widget(area, Rc::new(Cell::new(true)), vec![]);
+        let named_endpoint = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(LiveId(0), unnamed_leaf)],
+        );
+        let unexpected = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(inner_button), area_widget(area, Rc::new(Cell::new(true)), vec![]))],
+        );
+        let branch = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(inner_button), named_endpoint), (id!(wrapped), unexpected)],
+        );
+        let root = area_widget(
+            Area::Empty,
+            Rc::new(Cell::new(true)),
+            vec![(id!(info_button), branch)],
+        );
+        let tree = WidgetTree::default();
+        tree.observe_node(root.widget_uid(), id!(root), root.clone(), None);
+
+        assert!(tree.query_rects(&cx, "path:info_button/inner_button").is_empty());
     }
 
     #[test]

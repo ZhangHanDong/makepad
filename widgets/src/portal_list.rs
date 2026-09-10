@@ -1847,6 +1847,8 @@ impl PortalList {
     /// `top_offset` pixels below the viewport's top edge. A value of `0.0` places the
     /// item flush with the viewport top; `20.0` leaves a 20 px margin. Negative values
     /// are clamped to `0.0`.
+    /// Targeting the final item instead scrolls to the bottom of the list, including
+    /// when that item is taller than the viewport.
     pub fn smooth_scroll_to(
         &mut self,
         cx: &mut Cx,
@@ -1895,7 +1897,11 @@ impl PortalList {
         // relative to the viewport, not from index comparison alone.
         // When first_scroll is very negative, items with target_id > first_id
         // can still be above the viewport.
-        let scroll_direction: f64 = if let Some(item_top) = item_top {
+        let scroll_direction: f64 = if target_id + 1 >= self.range_end {
+            // The final item's top may already be above the viewport while
+            // its bottom is still below it. Continue toward the bottom.
+            -1.0
+        } else if let Some(item_top) = item_top {
             if item_top < 0.0 {
                 1.0
             } else {
@@ -1916,7 +1922,7 @@ impl PortalList {
                 .then_some(target_id.saturating_sub(max_items_to_show));
         } else {
             starting_id = ((self.first_id.saturating_sub(target_id)) > max_items_to_show)
-                .then_some(target_id + max_items_to_show);
+                .then(|| target_id + max_items_to_show);
         }
 
         if let Some(start) = starting_id {
@@ -2574,7 +2580,11 @@ impl Widget for PortalList {
                     let item_top = self.item_top_from_height_tree(target_id);
                     let mut target_reached = false;
 
-                    if let Some(item_top) = item_top {
+                    if target_id + 1 >= self.range_end {
+                        // Reaching the final item's top is not sufficient for
+                        // a tall row. The draw pass determines its bottom edge.
+                        target_reached = self.at_end;
+                    } else if let Some(item_top) = item_top {
                         // Clamp: the item must at least reach the viewport (top >= 0).
                         let effective_target = top_offset.max(0.0);
                         if scrolling_down {
@@ -3412,6 +3422,302 @@ fn should_begin_drag_scroll(
     scrolling_allowed: bool,
 ) -> bool {
     !started_selection && drag_scrolling && is_primary_hit && scrolling_allowed
+}
+
+#[cfg(test)]
+mod smooth_scroll_tests {
+    use super::*;
+    use crate::event::ScrollEvent;
+
+    struct ListFixture {
+        cx: Cx,
+        list: PortalList,
+        pass: DrawPass,
+        draw_list: DrawList2d,
+        heights: Vec<f64>,
+        row_areas: Vec<Area>,
+        frame: u64,
+    }
+
+    impl ListFixture {
+        fn new(heights: &[f64]) -> Self {
+            let mut cx = crate::widget_tree::interaction_visibility_test_support::init_cx();
+            let mut list = cx.with_vm(|vm| PortalList::script_new(vm));
+            list.vec_index = Vec2Index::Y;
+            list.layout = Layout::flow_down();
+            list.keep_invisible = true;
+            list.set_item_range(&mut cx, 0, heights.len());
+            for (index, height) in heights.iter().enumerate() {
+                list.height_tree.as_mut().unwrap().update(index, *height);
+                list.items.insert(index, WidgetItem::default());
+            }
+            let pass = DrawPass::new(&mut cx);
+            pass.set_size(&mut cx, dvec2(400.0, 600.0));
+            let draw_list = DrawList2d::new(&mut cx);
+            let mut fixture = Self {
+                cx, list, pass, draw_list, heights: heights.to_vec(),
+                row_areas: vec![Area::Empty; heights.len()], frame: 0,
+            };
+            fixture.draw();
+            fixture
+        }
+
+        fn draw(&mut self) {
+            let event = DrawEvent { redraw_all: true, ..Default::default() };
+            let mut cx_draw = CxDraw::new(&mut self.cx, &event);
+            cx_draw.begin_pass(&self.pass, None);
+            let mut cx = Cx2d::new(&mut cx_draw);
+            self.draw_list.begin_always(&mut cx);
+            cx.begin_root_turtle(dvec2(400.0, 600.0), Layout::flow_down());
+            let walk = Walk::fixed(400.0, 600.0);
+            assert!(self.list.draw_walk(&mut cx, &mut Scope::empty(), walk).is_step());
+            while let Some(index) = self.list.next_visible_item(&mut cx) {
+                if let Some(height) = self.heights.get(index) {
+                    // Real layout/Areas exercise PortalList's draw-time edge and
+                    // height bookkeeping without needing a GPU or text renderer.
+                    cx.walk_turtle_with_area(&mut self.row_areas[index], Walk::fixed(400.0, *height));
+                }
+            }
+            assert!(self.list.draw_walk(&mut cx, &mut Scope::empty(), walk).is_done());
+            cx.end_pass_sized_turtle();
+            self.draw_list.end(&mut cx);
+            cx.end_pass(&self.pass);
+            assert!(self.list.area.clipped_rect(&cx).contains(dvec2(100.0, 100.0)),
+                "list area {:?}, clipped {:?}", self.list.area.rect(&cx), self.list.area.clipped_rect(&cx));
+        }
+
+        fn next_frame(&mut self) -> ActionsBuf {
+            let next_frame = match self.list.scroll_state {
+                ScrollState::ScrollingTo { next_frame, .. }
+                    | ScrollState::Flick { next_frame, .. }
+                    | ScrollState::Pulldown { next_frame, .. } => next_frame,
+                _ => panic!("scroll animation stopped before its expected frame"),
+            };
+            self.frame += 1;
+            let event = Event::NextFrame(NextFrameEvent {
+                frame: self.frame,
+                time: self.frame as f64 / 60.0,
+                set: [next_frame].into(),
+            });
+            self.event(event)
+        }
+
+        fn event(&mut self, event: Event) -> ActionsBuf {
+            let actions = self.cx.capture_actions(|cx| {
+                self.list.handle_event(cx, &event, &mut Scope::empty());
+            });
+            self.draw();
+            actions
+        }
+
+        fn completed(&self, actions: &Actions) -> bool {
+            actions.filter_widget_actions(self.list.widget_uid())
+                .any(|action| matches!(action.cast(), PortalListAction::SmoothScrollReached))
+        }
+
+        fn bottom(&self) -> f64 {
+            let area = self.row_areas.last().unwrap();
+            assert!(area.is_valid(&self.cx), "the final row must actually have been drawn");
+            let rect = area.rect(&self.cx);
+            rect.pos.y + rect.size.y
+        }
+
+        fn finish_scroll(&mut self) {
+            for _ in 0..40 {
+                let completing_frame = match self.list.scroll_state {
+                    ScrollState::ScrollingTo { next_frame, .. } => next_frame,
+                    _ => panic!("expected programmatic scroll before completion"),
+                };
+                let actions = self.next_frame();
+                if self.completed(&actions) {
+                    assert_eq!(actions.filter_widget_actions(self.list.widget_uid())
+                        .filter(|action| matches!(action.cast(), PortalListAction::SmoothScrollReached))
+                        .count(), 1);
+                    assert!(self.list.is_at_end());
+                    assert!((self.bottom() - 600.0).abs() < 1.0);
+                    assert!(matches!(self.list.scroll_state, ScrollState::Stopped));
+                    let settled = (self.list.first_id, self.list.first_scroll);
+                    let repeated = self.event(Event::NextFrame(NextFrameEvent {
+                        frame: self.frame + 1,
+                        time: (self.frame + 1) as f64 / 60.0,
+                        set: [completing_frame].into(),
+                    }));
+                    assert!(!self.completed(&repeated));
+                    assert_eq!((self.list.first_id, self.list.first_scroll), settled);
+                    return;
+                }
+            }
+            panic!("smooth scroll did not complete within the bounded frame budget");
+        }
+    }
+
+    #[test]
+    fn scroll_to_end_continues_when_last_item_top_enters_viewport() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        assert!(!fixture.list.is_at_end());
+        fixture.list.auto_tail = true;
+        fixture.list.smooth_scroll_to_end(&mut fixture.cx, 90.0, None);
+        let first = fixture.next_frame();
+        assert!(!fixture.completed(&first));
+        assert_eq!(fixture.list.first_scroll, -90.0);
+        let second = fixture.next_frame();
+        assert!(!fixture.completed(&second), "the last item's bottom is still below the viewport");
+        assert_eq!(fixture.list.first_scroll, -180.0);
+        fixture.finish_scroll();
+        assert!(fixture.list.tail_range);
+    }
+
+    #[test]
+    fn scroll_to_end_reaches_bottom_of_one_tall_item() {
+        let mut fixture = ListFixture::new(&[1600.0]);
+        fixture.list.smooth_scroll_to_end(&mut fixture.cx, 90.0, None);
+        let first = fixture.next_frame();
+        assert!(!fixture.completed(&first));
+        assert_eq!(fixture.list.first_scroll, -90.0);
+        let second = fixture.next_frame();
+        assert!(!fixture.completed(&second));
+        assert_eq!(fixture.list.first_scroll, -180.0);
+        fixture.finish_scroll();
+    }
+
+    #[test]
+    fn scroll_to_end_moves_down_when_final_item_top_is_above_viewport() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.set_first_id_and_scroll(1, -200.0);
+        fixture.draw();
+        assert!(!fixture.list.is_at_end());
+        assert_eq!(fixture.bottom(), 800.0);
+        fixture.list.smooth_scroll_to_end(&mut fixture.cx, 90.0, None);
+        let first = fixture.next_frame();
+        assert!(!fixture.completed(&first));
+        assert_eq!(fixture.bottom(), 710.0, "go to the bottom, not back to the final item's top");
+        fixture.finish_scroll();
+    }
+
+    #[test]
+    fn explicit_final_item_target_moves_down_with_a_finite_window() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.set_first_id_and_scroll(1, -200.0);
+        fixture.draw();
+        // A finite window isolates direction from the unbounded-window
+        // arithmetic exercised by smooth_scroll_to_end above.
+        fixture.list.smooth_scroll_to(&mut fixture.cx, 1, 90.0, Some(20), 0.0);
+        let first = fixture.next_frame();
+        assert!(!fixture.completed(&first));
+        assert_eq!(fixture.bottom(), 710.0);
+        fixture.finish_scroll();
+    }
+
+    #[test]
+    fn already_at_end_completes_without_movement_and_rearms_tail() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.set_first_id_and_scroll(1, -400.0);
+        fixture.list.auto_tail = true;
+        fixture.draw();
+        assert!(fixture.list.is_at_end());
+        let before = (fixture.list.first_id, fixture.list.first_scroll);
+        let actions = fixture.cx.capture_actions(|cx| {
+            fixture.list.smooth_scroll_to_end(cx, 90.0, None);
+        });
+        assert!(fixture.completed(&actions));
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Stopped));
+        fixture.draw();
+        assert_eq!((fixture.list.first_id, fixture.list.first_scroll), before);
+        assert!(fixture.list.tail_range);
+    }
+
+    #[test]
+    fn nonfinal_item_navigation_retains_visible_boundary_completion() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0, 1000.0]);
+        fixture.list.smooth_scroll_to(&mut fixture.cx, 1, 90.0, None, 0.0);
+        let first = fixture.next_frame();
+        assert!(!fixture.completed(&first));
+        let second = fixture.next_frame();
+        assert!(fixture.completed(&second));
+        assert_eq!(fixture.list.item_top_from_height_tree(1), Some(530.0));
+        assert!(!fixture.list.is_at_end());
+    }
+
+    #[test]
+    fn manual_wheel_interrupts_programmatic_scroll_without_resuming() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.smooth_scroll_to_end(&mut fixture.cx, 90.0, None);
+        fixture.next_frame();
+        let pending = match fixture.list.scroll_state {
+            ScrollState::ScrollingTo { next_frame, .. } => next_frame,
+            _ => panic!("expected pending animation"),
+        };
+        let actions = fixture.event(Event::Scroll(ScrollEvent {
+            window_id: WindowId(0, 0),
+            scroll: dvec2(0.0, 30.0),
+            abs: dvec2(100.0, 100.0),
+            modifiers: Default::default(),
+            handled_x: Default::default(),
+            handled_y: Default::default(),
+            is_mouse: true,
+            time: 1.0,
+            phase: ScrollPhase::None,
+        }));
+        assert!(!fixture.completed(&actions));
+        assert_eq!(fixture.list.first_scroll, -120.0);
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Stopped));
+        let actions = fixture.event(Event::NextFrame(NextFrameEvent {
+            frame: 2, time: 2.0, set: [pending].into(),
+        }));
+        assert!(!fixture.completed(&actions));
+        assert_eq!(fixture.list.first_scroll, -120.0);
+    }
+
+    #[test]
+    fn pointer_drag_takes_ownership_from_programmatic_scroll() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.smooth_scroll_to_end(&mut fixture.cx, 90.0, None);
+        fixture.next_frame();
+        // The platform records the pressed button before widget dispatch.
+        fixture.cx.fingers.first_mouse_button = Some((MouseButton::PRIMARY, WindowId(0, 0)));
+        fixture.event(Event::MouseDown(MouseDownEvent {
+            abs: dvec2(100.0, 200.0),
+            button: MouseButton::PRIMARY,
+            window_id: WindowId(0, 0),
+            modifiers: Default::default(),
+            handled: Default::default(),
+            time: 1.0,
+        }));
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Drag { .. }));
+        fixture.event(Event::MouseMove(MouseMoveEvent {
+            abs: dvec2(100.0, 170.0),
+            lock_delta: dvec2(0.0, 0.0),
+            window_id: WindowId(0, 0),
+            modifiers: Default::default(),
+            handled: Default::default(),
+            time: 1.1,
+        }));
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Drag { .. }));
+        assert_eq!(fixture.list.first_scroll, -120.0);
+    }
+
+    #[test]
+    fn end_fling_still_enters_and_settles_bottom_bounce() {
+        let mut fixture = ListFixture::new(&[620.0, 1000.0]);
+        fixture.list.set_first_id_and_scroll(1, -400.0);
+        fixture.draw();
+        assert!(fixture.list.is_at_end());
+        fixture.list.scroll_state = ScrollState::Flick {
+            fling: Fling::new(-600.0, FLING_DECEL_RATE_PER_MS),
+            next_frame: fixture.cx.new_next_frame(),
+            parked: false,
+        };
+        fixture.next_frame();
+        fixture.next_frame();
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Pulldown { at_start: false, .. }));
+        for _ in 0..120 {
+            if matches!(fixture.list.scroll_state, ScrollState::Stopped) { break; }
+            fixture.next_frame();
+        }
+        assert!(matches!(fixture.list.scroll_state, ScrollState::Stopped));
+        assert_eq!(fixture.list.bounce_overshoot, 0.0);
+        assert!((fixture.bottom() - 600.0).abs() < 1.0);
+    }
 }
 
 #[cfg(test)]
