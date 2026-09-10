@@ -422,6 +422,7 @@ pub struct DropDown {
     #[rust]
     popup_global: PopupMenuGlobal,
 
+    #[imperative]
     #[live]
     selected_item: usize,
 
