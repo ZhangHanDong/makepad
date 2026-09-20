@@ -2,6 +2,8 @@
 pub mod apple_util;
 pub mod apple_sys;
 pub mod metal;
+#[cfg(target_os = "macos")]
+pub mod pty_spawn;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -32,10 +34,6 @@ pub mod apple_native_text_input;
 pub mod apple_video_playback;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_video_player;
-#[cfg(target_os = "macos")]
-pub mod video_file_decoder;
-#[cfg(target_os = "macos")]
-pub mod video_file_encoder;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple_webview;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -45,6 +43,10 @@ pub mod audio_tap;
 pub mod audio_unit;
 pub mod av_capture;
 pub mod core_midi;
+#[cfg(target_os = "macos")]
+pub mod video_file_decoder;
+#[cfg(target_os = "macos")]
+pub mod video_file_encoder;
 
 #[cfg(target_os = "ios")]
 pub(crate) use self::ios::*;

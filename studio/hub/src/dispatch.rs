@@ -3366,7 +3366,11 @@ impl HubCore {
             | AppToStudio::TweakHits(_)
             | AppToStudio::BeforeStartup
             | AppToStudio::RequestAnimationFrame
-            | AppToStudio::SetClipboard(_) => {}
+            | AppToStudio::SetClipboard(_)
+            // Added upstream after the hub left the upstream tree; this hub
+            // neither hosts GPU surfaces nor paces ticks on TickDone.
+            | AppToStudio::Gpu(_)
+            | AppToStudio::TickDone => {}
         }
     }
 

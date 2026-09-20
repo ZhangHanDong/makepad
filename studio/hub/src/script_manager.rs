@@ -41,6 +41,8 @@ struct RegisteredRunItem {
     item: ScriptObjectRef,
 }
 
+type VmHost = ScriptVmHost<ScriptHost, ScriptStd>;
+
 struct ScriptHost {
     script_id: ScriptId,
     mount: String,
@@ -449,6 +451,7 @@ fn install_hub_script_stdio(vm: &mut ScriptVm) {
             let what = script_value!(vm, args.what);
             let line = script_value_to_string(vm, what);
             vm.host
+                .as_any_mut()
                 .downcast_mut::<ScriptHost>()
                 .unwrap()
                 .emit_output(line, false);
@@ -464,6 +467,7 @@ fn install_hub_script_stdio(vm: &mut ScriptVm) {
             let what = script_value!(vm, args.what);
             let line = script_value_to_string(vm, what);
             vm.host
+                .as_any_mut()
                 .downcast_mut::<ScriptHost>()
                 .unwrap()
                 .emit_output(line, false);
@@ -479,6 +483,7 @@ fn install_hub_script_stdio(vm: &mut ScriptVm) {
             let what = script_value!(vm, args.what);
             let line = script_value_to_string(vm, what);
             vm.host
+                .as_any_mut()
                 .downcast_mut::<ScriptHost>()
                 .unwrap()
                 .emit_output(line, false);
@@ -491,6 +496,7 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
     let hub = vm.new_module(id!(hub));
     let studio_ip = vm
         .host
+        .as_any()
         .downcast_ref::<ScriptHost>()
         .and_then(|host| host.studio_local_addr.clone())
         .unwrap_or_default();
@@ -510,12 +516,14 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
                 Ok(Some(build_id)) => Some(build_id),
                 Ok(None) => vm
                     .host
+                    .as_any()
                     .downcast_ref::<ScriptHost>()
                     .and_then(|host| host.current_child_build_id),
                 Err(err) => return err,
             };
             let url = vm
                 .host
+                .as_any()
                 .downcast_ref::<ScriptHost>()
                 .map(|host| studio_url_for_app(host.studio_local_addr.as_deref(), build_id))
                 .unwrap_or_default();
@@ -530,6 +538,7 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
         |vm, _args| {
             let host = vm
                 .host
+                .as_any()
                 .downcast_ref::<ScriptHost>()
                 .map(|host| normalize_studio_host(host.studio_local_addr.as_deref()))
                 .unwrap_or_default();
@@ -547,12 +556,14 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
                 Ok(Some(build_id)) => Some(build_id),
                 Ok(None) => vm
                     .host
+                    .as_any()
                     .downcast_ref::<ScriptHost>()
                     .and_then(|host| host.current_child_build_id),
                 Err(err) => return err,
             };
             let url = vm
                 .host
+                .as_any()
                 .downcast_ref::<ScriptHost>()
                 .map(|host| studio_url_for_app(host.studio_ext_addr.as_deref(), build_id))
                 .unwrap_or_default();
@@ -567,6 +578,7 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
         |vm, _args| {
             let host = vm
                 .host
+                .as_any()
                 .downcast_ref::<ScriptHost>()
                 .map(|host| normalize_studio_host(host.studio_ext_addr.as_deref()))
                 .unwrap_or_default();
@@ -600,6 +612,7 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
             };
 
             vm.host
+                .as_any_mut()
                 .downcast_mut::<ScriptHost>()
                 .unwrap()
                 .emit_run_request(program, args, env);
@@ -640,7 +653,7 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
                 registered.push(item);
             }
 
-            let host = vm.host.downcast_mut::<ScriptHost>().unwrap();
+            let host = vm.host.as_any_mut().downcast_mut::<ScriptHost>().unwrap();
             host.run_items.clear();
             let mut infos = Vec::with_capacity(registered.len());
             for item in registered {
@@ -653,13 +666,9 @@ fn install_hub_script_module(vm: &mut ScriptVm) {
     );
 }
 
-fn run_pending_script_commands(
-    host: &mut ScriptHost,
-    std: &mut ScriptStd,
-    script_vm: &mut Option<Box<ScriptVmBase>>,
-) {
+fn run_pending_script_commands(vm_host: &mut VmHost) {
     loop {
-        let Ok(command) = host.command_rx.try_recv() else {
+        let Ok(command) = vm_host.host.command_rx.try_recv() else {
             break;
         };
         match command {
@@ -667,34 +676,34 @@ fn run_pending_script_commands(
                 name,
                 child_build_id,
             } => {
-                let Some(item) = host.run_items.get(&name).map(|item| item.item.clone()) else {
-                    host.emit_output(format!("unknown run item {:?}", name), true);
+                let Some(item) = vm_host.host.run_items.get(&name).map(|item| item.item.clone()) else {
+                    vm_host.host.emit_output(format!("unknown run item {:?}", name), true);
                     continue;
                 };
                 let item_object = item.as_object();
-                let on_run = with_vm_and_async(host, std, script_vm, |vm| {
+                let on_run = with_vm_and_async(vm_host, |vm| {
                     vm.bx.heap.value(item_object, id!(on_run).into(), vm.trap())
                 });
                 let Some(on_run_object) = on_run.as_object() else {
-                    host.emit_output(
+                    vm_host.host.emit_output(
                         format!("run item {:?} is missing an on_run function", name),
                         true,
                     );
                     continue;
                 };
-                host.current_run_item_name = Some(name.clone());
-                host.current_child_build_id = Some(child_build_id);
+                vm_host.host.current_run_item_name = Some(name.clone());
+                vm_host.host.current_child_build_id = Some(child_build_id);
                 let build_id_arg = (child_build_id.0 as f64).into();
-                let result = with_vm_and_async(host, std, script_vm, |vm| {
+                let result = with_vm_and_async(vm_host, |vm| {
                     vm.call_with_self(on_run_object.into(), &[build_id_arg], item_object.into())
                 });
-                host.current_run_item_name = None;
-                host.current_child_build_id = None;
+                vm_host.host.current_run_item_name = None;
+                vm_host.host.current_child_build_id = None;
                 if result.is_err() {
-                    let err = with_vm_and_async(host, std, script_vm, |vm| {
+                    let err = with_vm_and_async(vm_host, |vm| {
                         script_value_to_string(vm, result)
                     });
-                    host.emit_output(format!("run item {:?} failed: {}", name, err), true);
+                    vm_host.host.emit_output(format!("run item {:?} failed: {}", name, err), true);
                 }
             }
         }
@@ -766,7 +775,7 @@ fn run_script_build(
     };
     let code = normalize_script_source(&source);
 
-    let mut host = ScriptHost {
+    let host = ScriptHost {
         script_id,
         mount,
         cwd: cwd.to_path_buf(),
@@ -780,8 +789,8 @@ fn run_script_build(
         current_child_build_id: None,
     };
     let runtime = Arc::new(NetworkRuntime::new(NetworkConfig::default()));
-    let mut std = ScriptStd::with_network_runtime(runtime);
-    let mut script_vm = Some(Box::new(ScriptVmBase::new()));
+    let mut vm_host = VmHost::new(host, ScriptStd::with_network_runtime(runtime));
+    vm_host.script_vm = Some(Box::new(ScriptVmBase::new()));
     let script_mod = ScriptMod {
         cargo_manifest_path: cwd.to_string_lossy().to_string(),
         module_path: MAKEPAD_SPLASH_RUNNABLE.to_string(),
@@ -792,7 +801,7 @@ fn run_script_build(
         values: Vec::new(),
     };
 
-    let result = with_vm_and_async(&mut host, &mut std, &mut script_vm, |vm| {
+    let result = with_vm_and_async(&mut vm_host, |vm| {
         script_std_mod(vm);
         install_hub_script_stdio(vm);
         install_hub_script_module(vm);
@@ -800,10 +809,10 @@ fn run_script_build(
     });
 
     if result.is_err() {
-        let err = with_vm_and_async(&mut host, &mut std, &mut script_vm, |vm| {
+        let err = with_vm_and_async(&mut vm_host, |vm| {
             script_value_to_string(vm, result)
         });
-        host.emit_output(
+        vm_host.host.emit_output(
             format!(
                 "script failed while evaluating {}: {}",
                 splash_path.to_string_lossy(),
@@ -811,22 +820,22 @@ fn run_script_build(
             ),
             true,
         );
-        host.emit_exit(Some(1));
+        vm_host.host.emit_exit(Some(1));
         return;
     }
 
     loop {
-        if host.stopped() {
-            host.emit_exit(None);
+        if vm_host.host.stopped() {
+            vm_host.host.emit_exit(None);
             return;
         }
 
-        run_pending_script_commands(&mut host, &mut std, &mut script_vm);
-        pump(&mut host, &mut std, &mut script_vm);
-        let _ = pump_network_runtime(&mut host, &mut std, &mut script_vm);
+        run_pending_script_commands(&mut vm_host);
+        pump(&mut vm_host);
+        let _ = pump_network_runtime(&mut vm_host);
 
-        if !has_pending_script_work(&host, &std) {
-            host.emit_exit(Some(0));
+        if !has_pending_script_work(&vm_host.host, &vm_host.std) {
+            vm_host.host.emit_exit(Some(0));
             return;
         }
 

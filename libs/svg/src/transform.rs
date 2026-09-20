@@ -73,8 +73,7 @@ pub fn parse_transform(s: &str) -> Transform2d {
                 if nargs >= 3 {
                     let cx = args[1];
                     let cy = args[2];
-                    // rotate(a, cx, cy): first translate to origin, rotate, translate back
-                    // a.then(b) = b*a, so this yields T(cx,cy)*R(a)*T(-cx,-cy)
+                    // rotate(a, cx, cy) = translate(cx,cy) rotate(a) translate(-cx,-cy)
                     Transform2d::translate(-cx, -cy)
                         .then(&Transform2d::rotate(angle))
                         .then(&Transform2d::translate(cx, cy))
@@ -108,4 +107,20 @@ fn parse_args(s: &str) -> ([f32; 6], usize) {
         }
     }
     (args, count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_keeps_its_pivot_and_composes_with_parent_translation() {
+        let rotation = parse_transform("rotate(90 32 32)");
+        let (x, y) = rotation.apply(32.0, 32.0);
+        assert!((x - 32.0).abs() < 0.0001 && (y - 32.0).abs() < 0.0001);
+        let (x, y) = rotation.apply(32.0, 21.0);
+        assert!((x - 43.0).abs() < 0.0001 && (y - 32.0).abs() < 0.0001);
+        let (x, y) = parse_transform("translate(8 4) rotate(90 32 32)").apply(32.0, 21.0);
+        assert!((x - 51.0).abs() < 0.0001 && (y - 36.0).abs() < 0.0001);
+    }
 }

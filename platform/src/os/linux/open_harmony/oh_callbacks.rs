@@ -14,10 +14,10 @@ use ohos_sys::xcomponent::{
     OH_NativeXComponent_GetXComponentSize, OH_NativeXComponent_RegisterCallback,
     OH_NativeXComponent_TouchEvent, OH_NativeXComponent_TouchEventType,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::mem::MaybeUninit;
 use std::os::raw::c_void;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 
 use super::raw_file::RawFileMgr;
 
@@ -28,33 +28,20 @@ struct VSyncParams {
     pub tx: mpsc::Sender<FromOhosMessage>,
 }
 
-thread_local! {
-    static OHOS_MSG_TX: RefCell<Option<mpsc::Sender<FromOhosMessage>>> = RefCell::new(None);
-}
-
-// Senders for threads that never ran init_globals (e.g. the network backend
-// calling from an arbitrary caller thread). The thread_local above stays the
-// fast path; on a miss the sender is cloned from here and cached.
-static OHOS_MSG_TX_GLOBAL: std::sync::Mutex<Option<mpsc::Sender<FromOhosMessage>>> =
-    std::sync::Mutex::new(None);
+static OHOS_MSG_TX: Mutex<Option<mpsc::Sender<FromOhosMessage>>> = Mutex::new(None);
 
 pub fn send_from_ohos_message(message: FromOhosMessage) {
-    OHOS_MSG_TX.with(|tx| {
-        let mut tx = tx.borrow_mut();
-        if tx.is_none() {
-            *tx = OHOS_MSG_TX_GLOBAL
-                .lock()
-                .ok()
-                .and_then(|global| global.as_ref().cloned());
-        }
-        let Some(tx) = tx.as_mut() else {
-            crate::error!("send_from_ohos_message before init_globals; message dropped");
-            return;
-        };
-        if tx.send(message).is_err() {
-            crate::error!("send_from_ohos_message receiver gone; message dropped");
-        }
-    });
+    let Ok(tx) = OHOS_MSG_TX.lock() else {
+        crate::error!("send_from_ohos_message sender lock poisoned; message dropped");
+        return;
+    };
+    let Some(tx) = tx.as_ref() else {
+        crate::error!("send_from_ohos_message before init_globals; message dropped");
+        return;
+    };
+    if tx.send(message).is_err() {
+        crate::error!("send_from_ohos_message receiver gone; message dropped");
+    }
 }
 
 #[napi]
@@ -235,10 +222,7 @@ extern "C" fn on_frame_cb(
 }
 
 pub fn init_globals(from_ohos_tx: mpsc::Sender<FromOhosMessage>) {
-    if let Ok(mut global) = OHOS_MSG_TX_GLOBAL.lock() {
-        *global = Some(from_ohos_tx.clone());
-    }
-    OHOS_MSG_TX.with(move |messages_tx| *messages_tx.borrow_mut() = Some(from_ohos_tx));
+    *OHOS_MSG_TX.lock().unwrap() = Some(from_ohos_tx);
 }
 
 pub fn register_xcomponent_callbacks(env: &Env, xcomponent: &JsObject) {

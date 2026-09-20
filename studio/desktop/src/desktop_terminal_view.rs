@@ -733,6 +733,8 @@ impl DesktopTerminalView {
                     let decoded = Self::decode_percent_escapes(path);
                     payload_parts.push(Self::shell_quote_path(&decoded));
                 }
+                // In-memory files have no path a shell could use.
+                DragItem::VirtualFile(_) => {}
             }
         }
         if payload_parts.is_empty() {
